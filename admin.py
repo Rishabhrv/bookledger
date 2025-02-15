@@ -139,7 +139,6 @@ def insert_book_author_link(conn, book_id, author_id):
             st.error(f"Error linking book and author: {e}")
             return False
 
-
 # --- Main App ---
 conn = connect_db()
 
