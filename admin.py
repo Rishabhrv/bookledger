@@ -16,7 +16,7 @@ def connect_db():
 def book_details_section():
     st.markdown("<h5>Book Details", unsafe_allow_html=True)
     col1, col2 = st.columns(2)
-    book_title = col1.text_input("Book Title")
+    book_title = col1.text_input("Book Title", placeholder="Enter Book Title..")
     book_date = col2.date_input("Date", value=date.today())
     return {
         "title": book_title,
@@ -33,19 +33,24 @@ def author_details_section(conn):
     def remove_author(index):
         del st.session_state.authors[index]
 
-    def get_author_suggestions(conn, search_term): # Changed parameter name to search_term
+    def get_author_suggestions(conn, search_term):
         if not search_term:
             return []
         with conn.session as s:
-            authors = s.execute(text("""
-                SELECT author_id, name, email, phone
-                FROM authors
-                WHERE name LIKE :prefix || '%' OR email LIKE :prefix || '%' OR phone LIKE :prefix || '%' # Added OR conditions for email and phone
-                LIMIT 5
-            """), params={"prefix": search_term}).fetchall() # Using search_term as prefix
-            if not authors: # Handle no authors found case
-                return ["No authors found"] # Return special string
-            return authors
+            try:
+                query = text("""
+                    SELECT author_id, name, email, phone
+                    FROM authors
+                    WHERE name LIKE CONCAT(:prefix, '%')
+                    LIMIT 5
+                """)
+                authors = s.execute(query, params={"prefix": search_term}).fetchall()
+                if not authors:
+                    return ["No authors found"]
+                return authors
+            except Exception as e:
+                st.write(f"**Debug:** Error in get_author_suggestions: {e}") # Debug st.write
+                return ["No authors found"]
 
 
     with st.container(border=True): # Container for Author Details - will be moved later, but keep it for now for individual testing
@@ -59,18 +64,20 @@ def author_details_section(conn):
 
                 suggestions = get_author_suggestions(conn, author_name) # Pass author_name for suggestions
 
-                suggestion_names = [] # Initialize outside if-else
                 suggestion_options = []
-                disabled_suggestion = False # Flag to disable suggestion box
+                disabled_suggestion = False
+                suggestion_placeholder = "Type to search authors..." # Default placeholder
 
-                if suggestions and suggestions[0] != "No authors found": # Check if suggestions are valid authors and not "No authors found"
+                if suggestions and suggestions[0] != "No authors found":
                     suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
-                    suggestion_options = [""] + suggestion_names # Add empty string for no selection
-                elif suggestions and suggestions[0] == "No authors found": # Handle "No authors found" case
+                    suggestion_options = [""] + suggestion_names
+                    suggestion_placeholder = "Suggested authors found..." # Placeholder when suggestions exist
+                elif suggestions and suggestions[0] == "No authors found":
                     suggestion_options = ["No authors found"]
-                    disabled_suggestion = True # Disable selectbox when no authors found
-                else: # No suggestions at all (empty list from get_author_suggestions when search_term is empty initially)
-                    suggestion_options = [""] # Keep it empty
+                    disabled_suggestion = True
+                    suggestion_placeholder = "No authors found" # Placeholder when no authors found
+                else:
+                    suggestion_options = [""]
 
                 selected_suggestion = col2.selectbox(
                     f"Suggestions {i+1}",
@@ -78,7 +85,8 @@ def author_details_section(conn):
                     index=0,
                     key=f"author_suggestion_{i}",
                     label_visibility="hidden",
-                    disabled=disabled_suggestion # Disable suggestion box if no authors found
+                    disabled=disabled_suggestion,
+                    placeholder=suggestion_placeholder # Set the placeholder text
                 )
 
                 if selected_suggestion and selected_suggestion != "No authors found": # Check if a suggestion is selected and not "No authors found"
@@ -105,15 +113,6 @@ def author_details_section(conn):
             st.rerun()
     return st.session_state.authors
 
-# --- Database Interaction Functions ---
-def get_author_by_name(conn, name):
-    with conn.session as s:
-        result = s.execute(text("""
-            SELECT author_id, name, email, phone
-            FROM authors
-            WHERE name = :name
-        """), params={"name": name}).fetchone()
-        return result
 
 def insert_author(conn, name, email, phone):
     with conn.session as s:
@@ -146,12 +145,13 @@ conn = connect_db()
 # --- Combined Container ---
 with st.container(): # Main container to wrap both sections
     book_data = book_details_section()
+    st.markdown(" ")
     author_data = author_details_section(conn)
 # --- End Combined Container ---
 
 
 # --- Save Functionality ---
-if st.button("💾 Save Book"):
+if st.button("Save Book"):
     if not book_data["title"] or not book_data["date"]:
         st.warning("Please fill in all book details (Title and Date).")
     else:

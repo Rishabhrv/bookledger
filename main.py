@@ -15,7 +15,6 @@ st.set_page_config(
 
 try:
     conn = st.connection('mysql', type='sql')
-    st.toast("Database Connected!")
 except Exception as e:
     st.error(f"Error connecting to MySQL: {e}")
     st.stop()
