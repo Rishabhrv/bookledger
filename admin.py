@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import date
 from sqlalchemy import text
+from streamlit_extras.no_default_selectbox import selectbox
 
 
 # --- Database Connection ---
@@ -45,39 +46,36 @@ def author_details_section(conn):
                     LIMIT 5
                 """)
                 authors = s.execute(query, params={"prefix": search_term}).fetchall()
-                if not authors:
-                    return ["No authors found"]
+                if authors:
+                    st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
                 return authors
             except Exception as e:
-                st.write(f"**Debug:** Error in get_author_suggestions: {e}") # Debug st.write
-                return ["No authors found"]
+                st.write(f"**Debug:** Error in get_author_suggestions: {e}")  # Debug st.write
+                return []
 
-
-    with st.container(border=True): # Container for Author Details - will be moved later, but keep it for now for individual testing
+    with st.container(border=True):  # Container for Author Details - will be moved later, but keep it for now for individual testing
         st.markdown("<h5>Author Details", unsafe_allow_html=True)
         for i, author in enumerate(st.session_state.authors):
             with st.container():
-                col1, col2, col3, col4, col5  = st.columns([3, 2, 3, 2, 1])
+                col1, col2, col3, col4, col5, col6  = st.columns([3, 2, 2, 2, 2, 1])
 
                 author_name_input_key = f"author_name_{i}"
-                author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key)
+                author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key,placeholder='Enter Auhtor name..')
 
-                suggestions = get_author_suggestions(conn, author_name) # Pass author_name for suggestions
+                suggestions = get_author_suggestions(conn, author_name)  # Pass author_name for suggestions
 
                 suggestion_options = []
                 disabled_suggestion = False
-                suggestion_placeholder = "Type to search authors..." # Default placeholder
+                suggestion_placeholder = "Type to search authors..."  # Default placeholder
 
-                if suggestions and suggestions[0] != "No authors found":
+                if suggestions:
                     suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
                     suggestion_options = [""] + suggestion_names
-                    suggestion_placeholder = "Suggested authors found..." # Placeholder when suggestions exist
-                elif suggestions and suggestions[0] == "No authors found":
+                    suggestion_placeholder = "Suggested authors found..."  # Placeholder when suggestions exist
+                else:
                     suggestion_options = ["No authors found"]
                     disabled_suggestion = True
-                    suggestion_placeholder = "No authors found" # Placeholder when no authors found
-                else:
-                    suggestion_options = [""]
+                    suggestion_placeholder = "No authors found"  # Placeholder when no authors found
 
                 selected_suggestion = col2.selectbox(
                     f"Suggestions {i+1}",
@@ -86,11 +84,11 @@ def author_details_section(conn):
                     key=f"author_suggestion_{i}",
                     label_visibility="hidden",
                     disabled=disabled_suggestion,
-                    placeholder=suggestion_placeholder # Set the placeholder text
+                    placeholder=suggestion_placeholder  # Set the placeholder text
                 )
 
-                if selected_suggestion and selected_suggestion != "No authors found": # Check if a suggestion is selected and not "No authors found"
-                    if "(ID: " in selected_suggestion: # only process if it's not the empty "" option
+                if selected_suggestion and selected_suggestion != "No authors found":  # Check if a suggestion is selected and not "No authors found"
+                    if "(ID: " in selected_suggestion:  # only process if it's not the empty "" option
                         selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
                         selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
                         if selected_author:
@@ -101,10 +99,15 @@ def author_details_section(conn):
                 else:
                     st.session_state.authors[i]["name"] = author_name
 
-
-                st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"])
-                st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"])
-                if col5.button("❌", key=f"remove_{i}", type="tertiary"):
+                st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"], placeholder= "Enter Email..")
+                st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"], placeholder= "Enter Phone..")
+                selected_position = col5.selectbox(
+                    f"Position {i+1}",
+                    ["1st", "2nd", "3rd", "4th"],
+                    key=f"author_position_{i}"
+                )
+                st.session_state.authors[i]["author_position"] = selected_position
+                if col6.button("❌", key=f"remove_{i}", type="tertiary"):
                     remove_author(i)
                     st.rerun()
 
@@ -124,13 +127,13 @@ def insert_author(conn, name, email, phone):
         s.commit()
         return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-def insert_book_author_link(conn, book_id, author_id):
+def insert_book_author_link(conn, book_id, author_id,author_position):
     with conn.session as s:
         try:
             s.execute(text("""
-                INSERT INTO book_authors (book_id, author_id)
-                VALUES (:book_id, :author_id)
-            """), params={"book_id": book_id, "author_id": author_id})
+                INSERT INTO book_authors (book_id, author_id,author_position)
+                VALUES (:book_id, :author_id, :author_position)
+            """), params={"book_id": book_id, "author_id": author_id, "author_position": author_position})
             s.commit()
             return True
         except Exception as e:
@@ -143,11 +146,10 @@ def insert_book_author_link(conn, book_id, author_id):
 conn = connect_db()
 
 # --- Combined Container ---
-with st.container(): # Main container to wrap both sections
+with st.container():
     book_data = book_details_section()
     st.markdown(" ")
     author_data = author_details_section(conn)
-# --- End Combined Container ---
 
 
 # --- Save Functionality ---
@@ -180,7 +182,7 @@ if st.button("Save Book"):
                             st.success(f"New author '{author['name']}' added with ID: {author_id_to_link}")
 
                         if book_id and author_id_to_link:
-                            link_inserted = insert_book_author_link(conn, book_id, author_id_to_link)
+                            link_inserted = insert_book_author_link(conn, book_id, author_id_to_link,author["author_position"])
                             if link_inserted:
                                 st.success(f"Linked Book ID {book_id} with Author ID {author_id_to_link}")
                             else:
