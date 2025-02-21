@@ -24,7 +24,7 @@ def main():
         st.session_state.user = None
 
     if not st.session_state.user:
-        st.title("BookTrackr - Login")  # Only show title when login form is visible
+        st.title("BookTrackr - Login")
         
         with st.form("login_form"):
             username = st.text_input("Username")
@@ -46,7 +46,6 @@ def main():
         if st.sidebar.button("Logout"):
             logout()
 
-        # Define navigation based on role
         pages = {
             "Admin Dashboard": [st.Page("admin.py", title="Admin Dashboard")],
             "User Dashboard": [st.Page("user.py", title="User Dashboard")]

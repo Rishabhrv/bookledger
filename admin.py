@@ -1,8 +1,6 @@
 import streamlit as st
 from datetime import date
 from sqlalchemy import text
-from streamlit_extras.no_default_selectbox import selectbox
-
 
 # --- Database Connection ---
 def connect_db():
@@ -99,8 +97,8 @@ def author_details_section(conn):
                 else:
                     st.session_state.authors[i]["name"] = author_name
 
-                st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"], placeholder= "Enter Email..")
-                st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"], placeholder= "Enter Phone..")
+                st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"])
+                st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"])
                 selected_position = col5.selectbox(
                     f"Position {i+1}",
                     ["1st", "2nd", "3rd", "4th"],
@@ -141,7 +139,6 @@ def insert_book_author_link(conn, book_id, author_id,author_position):
             st.error(f"Error linking book and author: {e}")
             return False
 
-
 # --- Main App ---
 conn = connect_db()
 
@@ -150,7 +147,6 @@ with st.container():
     book_data = book_details_section()
     st.markdown(" ")
     author_data = author_details_section(conn)
-
 
 # --- Save Functionality ---
 if st.button("Save Book"):
@@ -190,7 +186,8 @@ if st.button("Save Book"):
 
                 st.success("Book and Authors Saved Successfully!")
                 st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None}]
-
+                st.cache_data.clear()
+                
             except Exception as db_error:
                 s.rollback()
                 st.error(f"Database error during save: {db_error}")
