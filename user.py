@@ -110,7 +110,7 @@ def edit_author_dialog(book_id):
                 st.markdown("</div>", unsafe_allow_html=True)
 
                 # Editable section for book_authors fields
-                with st.form(key=f"edit_form_{row['id']}"):
+                with st.form(key=f"edit_form_{row['id']}", border=False):
                     st.markdown("#### Edit Details", unsafe_allow_html=True)
                     
                     # Selectbox for author_position
@@ -121,6 +121,10 @@ def edit_author_dialog(book_id):
                         options=position_options,
                         index=position_options.index(default_position)
                     )
+
+                    # Text inputs
+                    corresponding_agent = st.text_input("Corresponding Agent", value=row['corresponding_agent'] or "")
+                    publishing_consultant = st.text_input("Publishing Consultant", value=row['publishing_consultant'] or "")
 
                     # Split checkboxes into two columns for better layout
                     col3, col4 = st.columns(2)
@@ -137,9 +141,6 @@ def edit_author_dialog(book_id):
                         plagiarism_report = st.checkbox("Plagiarism Report", value=bool(row['plagiarism_report']))
                         printing_confirmation = st.checkbox("Printing Confirmation", value=bool(row['printing_confirmation']))
 
-                    # Text inputs
-                    corresponding_agent = st.text_input("Corresponding Agent", value=row['corresponding_agent'] or "")
-                    publishing_consultant = st.text_input("Publishing Consultant", value=row['publishing_consultant'] or "")
 
                     # Submit button with styling
                     if st.form_submit_button("Save Changes", use_container_width=True):
