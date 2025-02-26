@@ -1,6 +1,9 @@
 import streamlit as st
 from datetime import date
 from sqlalchemy import text
+import time
+
+st.cache_data.clear()
 
 # --- Database Connection ---
 def connect_db():
@@ -48,10 +51,9 @@ def author_details_section(conn):
                     st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
                 return authors
             except Exception as e:
-                st.write(f"**Debug:** Error in get_author_suggestions: {e}")  # Debug st.write
                 return []
 
-    with st.container(border=True):  # Container for Author Details - will be moved later, but keep it for now for individual testing
+    with st.container(border=True): 
         st.markdown("<h5>Author Details", unsafe_allow_html=True)
         for i, author in enumerate(st.session_state.authors):
             with st.container():
@@ -85,8 +87,8 @@ def author_details_section(conn):
                     placeholder=suggestion_placeholder  # Set the placeholder text
                 )
 
-                if selected_suggestion and selected_suggestion != "No authors found":  # Check if a suggestion is selected and not "No authors found"
-                    if "(ID: " in selected_suggestion:  # only process if it's not the empty "" option
+                if selected_suggestion and selected_suggestion != "No authors found": 
+                    if "(ID: " in selected_suggestion:  
                         selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
                         selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
                         if selected_author:
@@ -105,11 +107,11 @@ def author_details_section(conn):
                     key=f"author_position_{i}"
                 )
                 st.session_state.authors[i]["author_position"] = selected_position
-                if col6.button("❌", key=f"remove_{i}", type="tertiary"):
+                if col6.button(":material/close:", key=f"remove_{i}", type="tertiary", ):
                     remove_author(i)
                     st.rerun()
 
-        if st.button("➕"):
+        if st.button(":material/add:"):
             add_author()
             st.rerun()
     return st.session_state.authors
@@ -125,20 +127,6 @@ def insert_author(conn, name, email, phone):
         s.commit()
         return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-def insert_book_author_link(conn, book_id, author_id,author_position):
-    with conn.session as s:
-        try:
-            s.execute(text("""
-                INSERT INTO book_authors (book_id, author_id,author_position)
-                VALUES (:book_id, :author_id, :author_position)
-            """), params={"book_id": book_id, "author_id": author_id, "author_position": author_position})
-            s.commit()
-            return True
-        except Exception as e:
-            s.rollback()
-            st.error(f"Error linking book and author: {e}")
-            return False
-
 # --- Main App ---
 conn = connect_db()
 
@@ -149,45 +137,31 @@ with st.container():
     author_data = author_details_section(conn)
 
 # --- Save Functionality ---
-if st.button("Save Book"):
+conn = connect_db()
+if st.button(label="Save"):
     if not book_data["title"] or not book_data["date"]:
-        st.warning("Please fill in all book details (Title and Date).")
+        st.warning("Please fill in all book details.")
     else:
         with conn.session as s:
             try:
+                # Insert book
                 s.execute(text("""
                     INSERT INTO books (title, date)
                     VALUES (:title, :date)
-                """), params={
-                    "title": book_data["title"],
-                    "date": book_data["date"],
-                })
-                s.commit()
-
+                """), params={"title": book_data["title"], "date": book_data["date"]})
                 book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
+                # Process authors and links
                 for author in author_data:
                     if author["name"] and author["email"] and author["phone"]:
-                        author_id_to_link = None
-
-                        if author["author_id"]:
-                            author_id_to_link = author["author_id"]
-                            st.success(f"Using existing author '{author['name']}' (ID: {author_id_to_link})")
-                        else:
-                            author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
-                            st.success(f"New author '{author['name']}' added with ID: {author_id_to_link}")
-
+                        author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
                         if book_id and author_id_to_link:
-                            link_inserted = insert_book_author_link(conn, book_id, author_id_to_link,author["author_position"])
-                            if link_inserted:
-                                st.success(f"Linked Book ID {book_id} with Author ID {author_id_to_link}")
-                            else:
-                                raise Exception("Failed to insert book-author link")
-
+                            s.execute(text("""
+                                INSERT INTO book_authors (book_id, author_id, author_position)
+                                VALUES (:book_id, :author_id, :author_position)
+                            """), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
+                s.commit()
                 st.success("Book and Authors Saved Successfully!")
-                st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None}]
-                st.cache_data.clear()
-                
             except Exception as db_error:
                 s.rollback()
                 st.error(f"Database error during save: {db_error}")

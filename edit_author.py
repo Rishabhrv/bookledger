@@ -1,125 +1,185 @@
 import streamlit as st
+from datetime import date
 import pandas as pd
 
-# Connect to MySQL
-conn = st.connection("mysql", type="sql")
+# --- Database Connection ---
+def connect_db():
+    try:
+        conn = st.connection('mysql', type='sql')
+        return conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
 
-# Function to fetch author details for a given book_id
-def fetch_authors_for_book(book_id):
-    query = """
-    SELECT 
-        a.author_id, a.name, a.email, a.phone,
-        ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, ba.publishing_consultant,
-        ba.photo_recive, ba.id_proof_recive, ba.author_details_sent, ba.cover_agreement_sent,
-        ba.agreement_received, ba.digital_book_sent, ba.digital_book_approved, ba.plagiarism_report,
-        ba.printing_confirmation
-    FROM authors a
-    JOIN book_authors ba ON a.author_id = ba.author_id
-    WHERE ba.book_id = :book_id
-    """
-    authors_data = conn.query(query, params={"book_id": book_id})
-    return authors_data
+# --- Author Search and Suggestions ---
+def search_authors(search_term):
+    if not search_term:
+        return []
+    conn = connect_db()
+    query = "SELECT author_id, name, email, phone FROM authors WHERE name LIKE %s LIMIT 5"
+    df = conn.query(query, params=('%' + search_term + '%',))
+    return df.to_dict('records') if not df.empty else []
 
-# Function to update author details in the database
-def update_author_details(author_id, book_id, updated_data):
-    # Update authors table
-    authors_query = """
-    UPDATE authors
-    SET name = :name, email = :email, phone = :phone
-    WHERE author_id = :author_id
-    """
-    conn.session.execute(authors_query, {
-        "author_id": author_id,
-        "name": updated_data["name"],
-        "email": updated_data["email"],
-        "phone": updated_data["phone"]
-    })
+# --- Database Operations ---
+def insert_or_update_author(author_data):
+    conn = connect_db()
+    with conn.session as cursor:
+        query = """
+        INSERT INTO authors (name, email, phone)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            email = VALUES(email),
+            phone = VALUES(phone)
+        """
+        cursor.execute(query, (author_data['name'], author_data['email'], author_data['phone']))
+        return cursor.lastrowid if cursor.lastrowid else conn.query(
+            "SELECT author_id FROM authors WHERE email = %s", 
+            params=(author_data['email'],)
+        ).iloc[0]['author_id']
 
-    # Update book_authors table
-    book_authors_query = """
-    UPDATE book_authors
-    SET author_position = :author_position, welcome_mail_sent = :welcome_mail_sent,
-        corresponding_agent = :corresponding_agent, publishing_consultant = :publishing_consultant,
-        photo_recive = :photo_recive, id_proof_recive = :id_proof_recive,
-        author_details_sent = :author_details_sent, cover_agreement_sent = :cover_agreement_sent,
-        agreement_received = :agreement_received, digital_book_sent = :digital_book_sent,
-        digital_book_approved = :digital_book_approved, plagiarism_report = :plagiarism_report,
-        printing_confirmation = :printing_confirmation
-    WHERE book_id = :book_id AND author_id = :author_id
-    """
-    conn.session.execute(book_authors_query, {
-        "book_id": book_id,
-        "author_id": author_id,
-        **updated_data
-    })
-    conn.session.commit()
+def insert_book(book_data):
+    conn = connect_db()
+    with conn.session as cursor:
+        query = "INSERT INTO books (title, date) VALUES (%s, %s)"
+        cursor.execute(query, (book_data['title'], book_data['date']))
+        return cursor.lastrowid
 
-# Edit Author Page
-def edit_author_page():
-    # Get book_id from URL or query parameter (assuming passed via URL like '/edit_author/{book_id}')
-    book_id = st.query_params.get("book_id", None)  # Adjust based on your routing method
-    if not book_id:
-        st.error("No book ID provided.")
-        return
+def link_book_authors(book_id, author_id, position):
+    conn = connect_db()
+    with conn.session as cursor:
+        query = """
+        INSERT INTO book_authors (book_id, author_id, author_position)
+        VALUES (%s, %s, %s)
+        """
+        cursor.execute(query, (book_id, author_id, position))
 
-    st.markdown(f"## Edit Author Details for Book ID: {book_id}")
+# --- UI Components ---
+def book_details_section():
+    st.markdown("<h5>Book Details</h5>", unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    book_title = col1.text_input("Book Title", placeholder="Enter Book Title..")
+    book_date = col2.date_input("Date", value=date.today())
+    return {
+        "title": book_title,
+        "date": book_date
+    }
 
-    # Fetch authors associated with the book
-    authors_data = fetch_authors_for_book(book_id)
+def author_details_section():
+    st.markdown("<h5>Author Details</h5>", unsafe_allow_html=True)
+    
+    # Initialize session state for authors
+    if 'authors' not in st.session_state:
+        st.session_state.authors = []
+    
+    # Search existing authors
+    search_term = st.text_input("Search Authors", placeholder="Type to search existing authors...")
+    suggestions = search_authors(search_term)
+    
+    if suggestions and search_term:
+        selected_author = st.selectbox(
+            "Suggested Authors",
+            options=[f"{a['name']} ({a['email']})" for a in suggestions],
+            index=None,
+            placeholder="Select an existing author or add new..."
+        )
+        if selected_author and st.button("Add Selected Author"):
+            selected = suggestions[[a['name'] + f" ({a['email']})" for a in suggestions].index(selected_author)]
+            if len(st.session_state.authors) < 4 and not any(a['email'] == selected['email'] for a in st.session_state.authors):
+                st.session_state.authors.append({
+                    'author_id': selected['author_id'],
+                    'name': selected['name'],
+                    'email': selected['email'],
+                    'phone': selected['phone'],
+                    'position': len(st.session_state.authors) + 1
+                })
 
-    if authors_data.empty:
-        st.warning("No authors found for this book.")
-        return
+    # Add new author manually
+    with st.expander("Add New Author", expanded=False):
+        new_name = st.text_input("Author Name", key="new_name")
+        new_email = st.text_input("Email", key="new_email")
+        new_phone = st.text_input("Phone", key="new_phone")
+        
+        if st.button("Add Author") and new_name and new_email:
+            if len(st.session_state.authors) < 4:
+                if not any(a['email'] == new_email for a in st.session_state.authors):
+                    st.session_state.authors.append({
+                        'author_id': None,
+                        'name': new_name,
+                        'email': new_email,
+                        'phone': new_phone,
+                        'position': len(st.session_state.authors) + 1
+                    })
+                else:
+                    st.warning("Author with this email already added!")
+            else:
+                st.warning("Maximum 4 authors allowed per book!")
 
-    # Display form for each author
-    for index, row in authors_data.iterrows():
-        st.markdown(f"### Author {index + 1} (ID: {row['author_id']})")
-        with st.form(key=f"author_form_{row['author_id']}"):
-            # Fields from authors table
-            name = st.text_input("Name", value=row["name"], key=f"name_{row['author_id']}")
-            email = st.text_input("Email", value=row["email"], key=f"email_{row['author_id']}")
-            phone = st.text_input("Phone", value=row["phone"], key=f"phone_{row['author_id']}")
+    # Display current authors
+    if st.session_state.authors:
+        st.subheader("Current Authors")
+        for i, author in enumerate(st.session_state.authors):
+            with st.container():
+                col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+                col1.write(f"{author['name']}")
+                col2.write(f"{author['email']}")
+                col3.write(f"Position: {author['position']}")
+                if col4.button("Remove", key=f"remove_{i}"):
+                    st.session_state.authors.pop(i)
+                    # Reassign positions
+                    for j, a in enumerate(st.session_state.authors):
+                        a['position'] = j + 1
+                    st.rerun()
 
-            # Fields from book_authors table
-            author_position = st.number_input("Author Position", min_value=1, max_value=4, value=row["author_position"] or 1, key=f"pos_{row['author_id']}")
-            welcome_mail_sent = st.checkbox("Welcome Mail Sent", value=bool(row["welcome_mail_sent"]), key=f"welcome_{row['author_id']}")
-            corresponding_agent = st.text_input("Corresponding Agent", value=row["corresponding_agent"] or "", key=f"agent_{row['author_id']}")
-            publishing_consultant = st.text_input("Publishing Consultant", value=row["publishing_consultant"] or "", key=f"consultant_{row['author_id']}")
-            photo_recive = st.checkbox("Photo Received", value=bool(row["photo_recive"]), key=f"photo_{row['author_id']}")
-            id_proof_recive = st.checkbox("ID Proof Received", value=bool(row["id_proof_recive"]), key=f"id_{row['author_id']}")
-            author_details_sent = st.checkbox("Author Details Sent", value=bool(row["author_details_sent"]), key=f"details_{row['author_id']}")
-            cover_agreement_sent = st.checkbox("Cover Agreement Sent", value=bool(row["cover_agreement_sent"]), key=f"cover_{row['author_id']}")
-            agreement_received = st.checkbox("Agreement Received", value=bool(row["agreement_received"]), key=f"agreement_{row['author_id']}")
-            digital_book_sent = st.checkbox("Digital Book Sent", value=bool(row["digital_book_sent"]), key=f"digital_sent_{row['author_id']}")
-            digital_book_approved = st.checkbox("Digital Book Approved", value=bool(row["digital_book_approved"]), key=f"digital_approved_{row['author_id']}")
-            plagiarism_report = st.checkbox("Plagiarism Report", value=bool(row["plagiarism_report"]), key=f"plagiarism_{row['author_id']}")
-            printing_confirmation = st.checkbox("Printing Confirmation", value=bool(row["printing_confirmation"]), key=f"printing_{row['author_id']}")
+# --- Main App ---
+def main():
+    st.title("Book Tracker")
+    
+    # Book Details
+    book_data = book_details_section()
+    
+    # Author Details
+    author_details_section()
+    
+    # Save Button
+    if st.button("Save"):
+        if not book_data['title']:
+            st.error("Please enter a book title!")
+            return
+        
+        if not st.session_state.authors:
+            st.error("Please add at least one author!")
+            return
 
-            # Submit button for this author's form
-            submit_button = st.form_submit_button(label="Save Changes")
+        conn = connect_db()
+        try:
+            with conn.session as cursor:
+                # Start transaction
+                cursor.execute("START TRANSACTION")
+                
+                # Insert book
+                book_id = insert_book(book_data)
+                
+                # Insert/update authors and link to book
+                for author in st.session_state.authors:
+                    author_id = author['author_id']
+                    if not author_id:
+                        author_id = insert_or_update_author(author)
+                    link_book_authors(book_id, author_id, author['position'])
+                
+                # Commit transaction
+                cursor.execute("COMMIT")
+                
+                st.success("Book and author details saved successfully!")
+                
+                # Clear session state and cache
+                st.session_state.authors = []
+                st.cache_data.clear()
+                st.rerun()
+                
+        except Exception as e:
+            # Rollback on error
+            conn.session.execute("ROLLBACK")
+            st.error(f"Error saving data: {e}")
 
-            if submit_button:
-                updated_data = {
-                    "name": name,
-                    "email": email,
-                    "phone": phone,
-                    "author_position": author_position,
-                    "welcome_mail_sent": 1 if welcome_mail_sent else 0,
-                    "corresponding_agent": corresponding_agent,
-                    "publishing_consultant": publishing_consultant,
-                    "photo_recive": 1 if photo_recive else 0,
-                    "id_proof_recive": 1 if id_proof_recive else 0,
-                    "author_details_sent": 1 if author_details_sent else 0,
-                    "cover_agreement_sent": 1 if cover_agreement_sent else 0,
-                    "agreement_received": 1 if agreement_received else 0,
-                    "digital_book_sent": 1 if digital_book_sent else 0,
-                    "digital_book_approved": 1 if digital_book_approved else 0,
-                    "plagiarism_report": 1 if plagiarism_report else 0,
-                    "printing_confirmation": 1 if printing_confirmation else 0
-                }
-                update_author_details(row["author_id"], book_id, updated_data)
-                st.success(f"Updated details for Author ID: {row['author_id']}")
-
-# Run the page
 if __name__ == "__main__":
-    edit_author_page()
+    main()
