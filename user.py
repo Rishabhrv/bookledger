@@ -18,12 +18,12 @@ if not pd.api.types.is_datetime64_any_dtype(books['date']):
 
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
-        return f"**:gray[{isbn}]**"  # Green for valid ISBN
+        return f"**<span style='color:#47b354;'>{isbn}</span>**"  # Gray for valid ISBN
     elif apply_isbn == 0:
-        return f"**:red[Not Applied]**"  # Red for Not Applied
+        return f"**<span style='color:#5c3c3b;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
-        return f"**:orange[Not Received]**"  # Purple for Not Received
-    return f"**:black[-]**"  # Black for default/unknown case
+        return f"**<span style='color:#6b6621;'>Not Received</span>**"  # Orange for Not Received
+    return f"**:<span style='color:#000000;'>-</span>**"  # Black for default/unknown case
 
 # Function to get status with outlined pill styling
 def get_status_pill(deliver_value):
@@ -58,10 +58,8 @@ def update_book_authors(id, updates):
     set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
     query = f"UPDATE book_authors SET {set_clause} WHERE id = :id"
     params = updates.copy()
-    params["id"] = int(id)  # Ensure id is an integer (adjust if needed)
-    #print("Query:", query)
-    #print("Params:", params)
-    with conn.session as session:  # Explicit session management
+    params["id"] = int(id) 
+    with conn.session as session:  
         result = session.execute(text(query), params)
         #print("Rows affected:", result.rowcount)
         session.commit()
@@ -118,7 +116,6 @@ def edit_author_dialog(book_id):
                     st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
                     st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
                 st.markdown("---")
-                #st.markdown("</div>", unsafe_allow_html=True)
                 
 
                 # Editable section
@@ -168,6 +165,117 @@ def edit_author_dialog(book_id):
                         st.cache_data.clear()
                         st.success(f"✅ Updated details for {row['name']} (Author ID: {row['author_id']})")
 
+    # Local state for new authors
+    if "local_authors" not in st.session_state:
+        st.session_state.local_authors = [{"name": "", "email": "", "phone": "", "author_id": None}]
+
+    def add_local_author():
+        st.session_state.local_authors.append({"name": "", "email": "", "phone": "", "author_id": None})
+
+    def remove_local_author(index):
+        del st.session_state.local_authors[index]
+
+    def get_author_suggestions(conn, search_term):
+        if not search_term:
+            return []
+        with conn.session as s:
+            try:
+                query = text("""
+                    SELECT author_id, name, email, phone
+                    FROM authors
+                    WHERE name LIKE CONCAT(:prefix, '%')
+                    LIMIT 5
+                """)
+                authors = s.execute(query, params={"prefix": search_term}).fetchall()
+                if authors:
+                    st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
+                return authors
+            except Exception as e:
+                return []
+
+    st.markdown("### Add New Author")
+
+    with st.container(border=True):
+        st.markdown("<h5>Author Details", unsafe_allow_html=True)
+        for i, author in enumerate(st.session_state.local_authors):
+            with st.container():
+                col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 2, 2, 2, 1])
+
+                author_name_input_key = f"local_author_name_{i}"
+                author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key, placeholder='Enter Author name..')
+
+                suggestions = get_author_suggestions(conn, author_name)
+
+                suggestion_options = []
+                disabled_suggestion = False
+                suggestion_placeholder = "Type to search authors..."
+
+                if suggestions:
+                    suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
+                    suggestion_options = [""] + suggestion_names
+                    suggestion_placeholder = "Suggested authors found..."
+                else:
+                    suggestion_options = ["No authors found"]
+                    disabled_suggestion = True
+                    suggestion_placeholder = "No authors found"
+
+                selected_suggestion = col2.selectbox(
+                    f"Suggestions {i+1}",
+                    suggestion_options,
+                    index=0,
+                    key=f"local_author_suggestion_{i}",
+                    label_visibility="hidden",
+                    disabled=disabled_suggestion,
+                    placeholder=suggestion_placeholder
+                )
+
+                if selected_suggestion and selected_suggestion != "No authors found":
+                    if "(ID: " in selected_suggestion:
+                        selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
+                        selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
+                        if selected_author:
+                            st.session_state.local_authors[i]["name"] = selected_author.name
+                            st.session_state.local_authors[i]["email"] = selected_author.email
+                            st.session_state.local_authors[i]["phone"] = selected_author.phone
+                            st.session_state.local_authors[i]["author_id"] = selected_author.author_id
+                else:
+                    st.session_state.local_authors[i]["name"] = author_name
+
+                st.session_state.local_authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"])
+                st.session_state.local_authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"])
+                selected_position = col5.selectbox(
+                    f"Position {i+1}",
+                    ["1st", "2nd", "3rd", "4th"],
+                    key=f"local_author_position_{i}"
+                )
+                st.session_state.local_authors[i]["author_position"] = selected_position
+                if col6.button(":material/close:", key=f"remove_local_{i}", type="tertiary"):
+                    remove_local_author(i)
+                    st.rerun() # Refresh the dialog to show the new authors.
+
+        if st.button(":material/add:"):
+            add_local_author()
+            st.rerun() # Refresh the dialog to show the new authors.
+
+    if st.button("Add New Authors to Book"):
+        for author in st.session_state.local_authors:
+            if author["name"] and author["email"] and author["phone"]:
+                author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
+                if book_id and author_id_to_link:
+                    with conn.session as s:
+                        s.execute(text("""INSERT INTO book_authors (book_id, author_id, author_position) VALUES (:book_id, :author_id, :author_position)"""), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
+                        s.commit()
+        st.cache_data.clear()
+        st.success("New Authors added successfully")
+        st.session_state.local_authors = [{"name": "", "email": "", "phone": "", "author_id": None}] #reset local author state.
+        st.rerun()
+
+def insert_author(conn, name, email, phone):
+    with conn.session as s:
+        s.execute(text("""INSERT INTO authors (name, email, phone) VALUES (:name, :email, :phone) ON DUPLICATE KEY UPDATE name=name"""), params={"name": name, "email": email, "phone": phone})
+        s.commit()
+        return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+
 
 # Separate function for ISBN dialog using @st.dialog
 @st.dialog("Manage ISBN")
@@ -216,45 +324,64 @@ author_count_query = """
 author_counts = conn.query(author_count_query)
 # Convert to dictionary for easy lookup
 author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_count']))
-
 # Display books
 st.markdown("## 📚 Book List")
+cont = st.container(border = True)
+with cont:
 
-if books.empty:
-    st.warning("No books available.")
-else:
-    for month, monthly_books in reversed_grouped_books:
-        st.markdown(f"##### {month.strftime('%B %Y')}")
-        for _, row in monthly_books.iterrows():
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 2, 2, 1, 2, 3])
-            
-            with col1:
-                st.write(row['book_id'])
-            with col2:
-                st.write(row['title'])
-            with col3:
-                st.write(row['date'].strftime('%Y-%m-%d'))
-            with col4:
-                st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
-            with col5:
-                author_count = author_count_dict.get(row['book_id'], 0)  # Ensure author_count_dict is defined
-                st.write(f"{author_count}")
-            with col6:
-                st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True)  # Ensure get_status_pill is defined
-            with col7:
-                # Reordered buttons: ISBN first, View last
-                btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
-                with btn_col1:
-                    if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
-                        manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
-                with btn_col2:
-                    if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
-                        edit_author_dialog(row['book_id'])  # Ensure edit_author_dialog is defined
-                with btn_col3:
-                    if st.button(":material/manufacturing:", key=f"edit_ops_{row['book_id']}"):
-                        st.write(f"Editing operations for book {row['book_id']} (implement edit logic here)")
-                with btn_col4:
-                    if st.button(":material/visibility:", key=f"view_{row['book_id']}"):
-                        st.write(f"Viewing book {row['book_id']} (implement view logic here)")
+    if books.empty:
+        st.warning("No books available.")
+    else:
+        # Table Header
+        with st.container():
+            header_col1, header_col2, header_col3, header_col4, header_col5, header_col6, header_col7 = st.columns([1, 3, 2, 2, 1, 2, 3])
+            with header_col1:
+                st.markdown("**ID**")
+            with header_col2:
+                st.markdown("**Title**")
+            with header_col3:
+                st.markdown("**Date**")
+            with header_col4:
+                st.markdown("**ISBN**")
+            with header_col5:
+                st.markdown("**Authors**")
+            with header_col6:
+                st.markdown("**Status**")
+            with header_col7:
+                st.markdown("**Actions**")
 
-        st.markdown("---")
+        for month, monthly_books in reversed_grouped_books:
+            st.markdown(f"##### {month.strftime('%B %Y')}")
+            for _, row in monthly_books.iterrows():
+                col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 2, 2, 1, 2, 3])
+                
+                with col1:
+                    st.write(row['book_id'])
+                with col2:
+                    st.write(row['title'])
+                with col3:
+                    st.write(row['date'].strftime('%Y-%m-%d'))
+                with col4:
+                    st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
+                with col5:
+                    author_count = author_count_dict.get(row['book_id'], 0)  
+                    st.write(f"{author_count}")
+                with col6:
+                    st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True) 
+                with col7:
+                    # Reordered buttons: ISBN first, View last
+                    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+                    with btn_col1:
+                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
+                            manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
+                    with btn_col2:
+                        if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
+                            edit_author_dialog(row['book_id']) 
+                    with btn_col3:
+                        if st.button(":material/manufacturing:", key=f"edit_ops_{row['book_id']}"):
+                            st.write(f"Editing operations for book {row['book_id']} (implement edit logic here)")
+                    with btn_col4:
+                        if st.button(":material/visibility:", key=f"view_{row['book_id']}"):
+                            st.write(f"Viewing book {row['book_id']} (implement view logic here)")
+
+            st.markdown("---")
