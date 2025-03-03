@@ -37,6 +37,13 @@ def fetch_book_details(book_id):
     query = f"SELECT book_id, title FROM books WHERE book_id = '{book_id}'"
     return conn.query(query)
 
+
+
+###################################################################################################################################
+##################################--------------- Edit Auhtor Dialog ----------------------------##################################
+###################################################################################################################################
+
+
 # Function to fetch book_author details along with author details for a given book_id
 def fetch_book_authors(book_id):
     query = f"""
@@ -45,14 +52,13 @@ def fetch_book_authors(book_id):
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, ba.digital_book_approved, ba.plagiarism_report, 
-           ba.printing_confirmation
+           ba.printing_confirmation,
+           ba.delivery_address, ba.delivery_charge, ba.number_of_books
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
     """
     return conn.query(query)
-
-from sqlalchemy import text
 
 # Function to update book_authors table
 def update_book_authors(id, updates):
@@ -61,10 +67,8 @@ def update_book_authors(id, updates):
     params = updates.copy()
     params["id"] = int(id) 
     with conn.session as session:  
-        result = session.execute(text(query), params)
-        #print("Rows affected:", result.rowcount)
+        session.execute(text(query), params)
         session.commit()
-        #print("Commit executed")
 
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large')
@@ -118,7 +122,6 @@ def edit_author_dialog(book_id):
                     st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
                 st.markdown("---")
                 
-
                 # Editable section
                 with st.form(key=f"edit_form_{row['id']}", border=False):
                     st.markdown("### ✏️ Edit Author Details", unsafe_allow_html=True)
@@ -145,6 +148,16 @@ def edit_author_dialog(book_id):
                         agreement_received = st.checkbox("✅ Agreement Received", value=bool(row['agreement_received']))
                         printing_confirmation = st.checkbox("🖨️ Printing Confirmation", value=bool(row['printing_confirmation']))
 
+                    # New delivery section
+                    st.markdown("### 🚚 Delivery Details")
+                    col7, col8, col9 = st.columns(3)
+                    with col7:
+                        delivery_address = st.text_area("Delivery Address", value=row['delivery_address'] or "", height=100)
+                    with col8:
+                        delivery_charge = st.number_input("Delivery Charge (₹)", min_value=0.0, step=0.01, value=float(row['delivery_charge'] or 0.0))
+                    with col9:
+                        number_of_books = st.number_input("Number of Books", min_value=0, step=1, value=int(row['number_of_books'] or 0))
+
                     # Submit button
                     if st.form_submit_button("💾 Save Changes", use_container_width=True):
                         updates = {
@@ -160,7 +173,10 @@ def edit_author_dialog(book_id):
                             "digital_book_sent": int(digital_book_sent),
                             "digital_book_approved": int(digital_book_approved),
                             "plagiarism_report": int(plagiarism_report),
-                            "printing_confirmation": int(printing_confirmation)
+                            "printing_confirmation": int(printing_confirmation),
+                            "delivery_address": delivery_address,
+                            "delivery_charge": delivery_charge,
+                            "number_of_books": number_of_books
                         }
                         update_book_authors(row['id'], updates)
                         st.cache_data.clear()
@@ -276,6 +292,11 @@ def insert_author(conn, name, email, phone):
         s.execute(text("""INSERT INTO authors (name, email, phone) VALUES (:name, :email, :phone) ON DUPLICATE KEY UPDATE name=name"""), params={"name": name, "email": email, "phone": phone})
         s.commit()
         return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+    
+
+###################################################################################################################################
+##################################--------------- Edit Operations Dialog ----------------------------##################################
+###################################################################################################################################
 
 @st.dialog("Edit Operation Details", width='large')
 def edit_operation_dialog(book_id):
@@ -333,11 +354,15 @@ def edit_operation_dialog(book_id):
     # Writing Tab
     with tab1:
         with st.form(key=f"writing_form_{book_id}", border=False):
+
             writing_by = st.text_input("Writing By", value=current_data.get('writing_by', ""), key=f"writing_by_{book_id}")
-            writing_start_date = st.date_input("Start Date", value=current_data.get('writing_start', None), key=f"writing_start_date_{book_id}")
-            writing_start_time = st.time_input("Start Time", value=current_data.get('writing_start', None), key=f"writing_start_time_{book_id}")
-            writing_end_date = st.date_input("End Date", value=current_data.get('writing_end', None), key=f"writing_end_date_{book_id}")
-            writing_end_time = st.time_input("End Time", value=current_data.get('writing_end', None), key=f"writing_end_time_{book_id}")
+            col1, col2 = st.columns(2)
+            with col1:
+                writing_start_date = st.date_input("Start Date", value=current_data.get('writing_start', None), key=f"writing_start_date_{book_id}")
+                writing_start_time = st.time_input("Start Time", value=current_data.get('writing_start', None), key=f"writing_start_time_{book_id}")
+            with col2:
+                writing_end_date = st.date_input("End Date", value=current_data.get('writing_end', None), key=f"writing_end_date_{book_id}")
+                writing_end_time = st.time_input("End Time", value=current_data.get('writing_end', None), key=f"writing_end_time_{book_id}")
             if st.form_submit_button("💾 Save Writing", use_container_width=True):
                 writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
                 writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
@@ -353,10 +378,14 @@ def edit_operation_dialog(book_id):
     with tab2:
         with st.form(key=f"proofreading_form_{book_id}", border=False):
             proofreading_by = st.text_input("Proofreading By", value=current_data.get('proofreading_by', ""), key=f"proofreading_by_{book_id}")
-            proofreading_start_date = st.date_input("Start Date", value=current_data.get('proofreading_start', None), key=f"proofreading_start_date_{book_id}")
-            proofreading_start_time = st.time_input("Start Time", value=current_data.get('proofreading_start', None), key=f"proofreading_start_time_{book_id}")
-            proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end', None), key=f"proofreading_end_date_{book_id}")
-            proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end', None), key=f"proofreading_end_time_{book_id}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                proofreading_start_date = st.date_input("Start Date", value=current_data.get('proofreading_start', None), key=f"proofreading_start_date_{book_id}")
+                proofreading_start_time = st.time_input("Start Time", value=current_data.get('proofreading_start', None), key=f"proofreading_start_time_{book_id}")
+            with col2:
+                proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end', None), key=f"proofreading_end_date_{book_id}")
+                proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end', None), key=f"proofreading_end_time_{book_id}")
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
                 proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
                 proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
@@ -372,10 +401,13 @@ def edit_operation_dialog(book_id):
     with tab3:
         with st.form(key=f"formatting_form_{book_id}", border=False):
             formatting_by = st.text_input("Formatting By", value=current_data.get('formatting_by', ""), key=f"formatting_by_{book_id}")
-            formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start', None), key=f"formatting_start_date_{book_id}")
-            formatting_start_time = st.time_input("Start Time", value=current_data.get('formatting_start', None), key=f"formatting_start_time_{book_id}")
-            formatting_end_date = st.date_input("End Date", value=current_data.get('formatting_end', None), key=f"formatting_end_date_{book_id}")
-            formatting_end_time = st.time_input("End Time", value=current_data.get('formatting_end', None), key=f"formatting_end_time_{book_id}")
+            col1, col2 = st.columns(2)
+            with col1:
+                formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start', None), key=f"formatting_start_date_{book_id}")
+                formatting_start_time = st.time_input("Start Time", value=current_data.get('formatting_start', None), key=f"formatting_start_time_{book_id}")
+            with col2:
+                formatting_end_date = st.date_input("End Date", value=current_data.get('formatting_end', None), key=f"formatting_end_date_{book_id}")
+                formatting_end_time = st.time_input("End Time", value=current_data.get('formatting_end', None), key=f"formatting_end_time_{book_id}")
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                 formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
@@ -394,10 +426,13 @@ def edit_operation_dialog(book_id):
             st.subheader("Front Cover")
             with st.form(key=f"front_cover_form_{book_id}", border=False):
                 front_cover_by = st.text_input("Front Cover By", value=current_data.get('front_cover_by', ""), key=f"front_cover_by_{book_id}")
-                front_cover_start_date = st.date_input("Front Start Date", value=current_data.get('front_cover_start', None), key=f"front_cover_start_date_{book_id}")
-                front_cover_start_time = st.time_input("Front Start Time", value=current_data.get('front_cover_start', None), key=f"front_cover_start_time_{book_id}")
-                front_cover_end_date = st.date_input("Front End Date", value=current_data.get('front_cover_end', None), key=f"front_cover_end_date_{book_id}")
-                front_cover_end_time = st.time_input("Front End Time", value=current_data.get('front_cover_end', None), key=f"front_cover_end_time_{book_id}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    front_cover_start_date = st.date_input("Front Start Date", value=current_data.get('front_cover_start', None), key=f"front_cover_start_date_{book_id}")
+                    front_cover_start_time = st.time_input("Front Start Time", value=current_data.get('front_cover_start', None), key=f"front_cover_start_time_{book_id}")
+                with col2:
+                    front_cover_end_date = st.date_input("Front End Date", value=current_data.get('front_cover_end', None), key=f"front_cover_end_date_{book_id}")
+                    front_cover_end_time = st.time_input("Front End Time", value=current_data.get('front_cover_end', None), key=f"front_cover_end_time_{book_id}")
                 front_submit = st.form_submit_button("💾 Save Front Cover", use_container_width=True)
 
         with st.expander("📚 Back Cover Details", expanded=False):
@@ -405,10 +440,13 @@ def edit_operation_dialog(book_id):
             st.subheader("Back Cover")
             with st.form(key=f"back_cover_form_{book_id}", border=False):
                 back_cover_by = st.text_input("Back Cover By", value=current_data.get('back_cover_by', ""), key=f"back_cover_by_{book_id}")
-                back_cover_start_date = st.date_input("Back Start Date", value=current_data.get('back_cover_start', None), key=f"back_cover_start_date_{book_id}")
-                back_cover_start_time = st.time_input("Back Start Time", value=current_data.get('back_cover_start', None), key=f"back_cover_start_time_{book_id}")
-                back_cover_end_date = st.date_input("Back End Date", value=current_data.get('back_cover_end', None), key=f"back_cover_end_date_{book_id}")
-                back_cover_end_time = st.time_input("Back End Time", value=current_data.get('back_cover_end', None), key=f"back_cover_end_time_{book_id}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    back_cover_start_date = st.date_input("Back Start Date", value=current_data.get('back_cover_start', None), key=f"back_cover_start_date_{book_id}")
+                    back_cover_start_time = st.time_input("Back Start Time", value=current_data.get('back_cover_start', None), key=f"back_cover_start_time_{book_id}")
+                with col2:
+                    back_cover_end_date = st.date_input("Back End Date", value=current_data.get('back_cover_end', None), key=f"back_cover_end_date_{book_id}")
+                    back_cover_end_time = st.time_input("Back End Time", value=current_data.get('back_cover_end', None), key=f"back_cover_end_time_{book_id}")
                 back_submit = st.form_submit_button("💾 Save Back Cover", use_container_width=True)
 
         # Handle form submissions
@@ -444,6 +482,10 @@ def update_operation_details(book_id, updates):
     with conn.session as session:
         session.execute(text(query), params)
         session.commit()
+
+###################################################################################################################################
+##################################--------------- Edit Inventory Dialog ----------------------------##################################
+###################################################################################################################################
 
 
 @st.dialog("Edit Inventory & Delivery Details", width='large')
@@ -577,13 +619,15 @@ def edit_inventory_delivery_dialog(book_id):
                                 key=f"deliver_{book_id}")
             
             if deliver:
+
+                deliver_date = st.date_input("Delivery Date", 
+                                            value=current_data.get('deliver_date', None), 
+                                            key=f"deliver_date_{book_id}")
                 # Create two columns for the input fields
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    deliver_date = st.date_input("Delivery Date", 
-                                            value=current_data.get('deliver_date', None), 
-                                            key=f"deliver_date_{book_id}")
+                    
                     tracking_id = st.text_input("Tracking ID", 
                                             value=current_data.get('tracking_id', ""), 
                                             key=f"tracking_id_{book_id}")
@@ -638,7 +682,9 @@ def update_inventory_delivery_details(book_id, updates):
         session.commit()
     st.cache_data.clear()
 
-
+###################################################################################################################################
+##################################--------------- Edit ISBN Dialog ----------------------------##################################
+###################################################################################################################################
 
 # Separate function for ISBN dialog using @st.dialog
 @st.dialog("Manage ISBN")
@@ -672,6 +718,11 @@ def manage_isbn_dialog(book_id, current_apply_isbn, current_isbn):
         st.success("ISBN Updated Successfully")
         st.rerun()
 
+
+###################################################################################################################################
+##################################--------------- Book Table ----------------------------##################################
+###################################################################################################################################
+
 # Group books by month
 grouped_books = books.groupby(pd.Grouper(key='date', freq='ME'))
 
@@ -690,9 +741,8 @@ author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_cou
 
 # Display books
 st.markdown("## 📚 Book List")
-cont = st.container(border = True)
+cont = st.container(border=True)
 with cont:
-
     if books.empty:
         st.warning("No books available.")
     else:
@@ -733,19 +783,15 @@ with cont:
                 with col6:
                     st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True) 
                 with col7:
-                    # Reordered buttons: ISBN first, View last
-                    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
-                    with btn_col1:
-                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
+                    # Single button with popover menu
+                    with st.popover(":material/settings: Actions", use_container_width=True):
+                        if st.button("Edit ISBN", key=f"isbn_{row['book_id']}"):
                             manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
-                    with btn_col2:
-                        if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
-                            edit_author_dialog(row['book_id']) 
-                    with btn_col3:
-                        if st.button(":material/edit_note:", key=f"edit_ops_{row['book_id']}"):
-                           edit_operation_dialog(row['book_id'])
-                    with btn_col4:
-                        if st.button(":material/local_shipping:", key=f"view_{row['book_id']}"):
+                        if st.button("Edit Authors", key=f"authors_{row['book_id']}"):
+                            edit_author_dialog(row['book_id'])
+                        if st.button("Edit Operations", key=f"ops_{row['book_id']}"):
+                            edit_operation_dialog(row['book_id'])
+                        if st.button("Edit Print & Delivery", key=f"delivery_{row['book_id']}"):
                             edit_inventory_delivery_dialog(row['book_id'])
 
             st.markdown("---")
