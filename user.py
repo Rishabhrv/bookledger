@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text  # Import text for raw SQL queries
-from datetime import date
-from admin import author_details_section
 
 st.cache_data.clear()
 
@@ -10,7 +8,7 @@ st.cache_data.clear()
 conn = st.connection("mysql", type="sql")
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price FROM books"
 books = conn.query(query)
 
 # Convert 'date' column to datetime objects if it's not already
@@ -19,18 +17,50 @@ if not pd.api.types.is_datetime64_any_dtype(books['date']):
 
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
-        return f"**<span style='color:#47b354;'>{isbn}</span>**"  # Gray for valid ISBN
+        return f"**<span style='color:#47b354; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
     elif apply_isbn == 0:
-        return f"**<span style='color:#5c3c3b;'>Not Applied</span>**"  # Red for Not Applied
+        return f"**<span style='color:#eb7150; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
-        return f"**<span style='color:#e0ab19;'>Not Received</span>**"  # Orange for Not Received
-    return f"**:<span style='color:#000000;'>-</span>**"  # Black for default/unknown case
+        return f"**<span style='color:#e0ab19; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
+    return f"**<span style='color:#000000; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
+
+# def get_isbn_display(isbn, apply_isbn):
+#     pill_style = (
+#         "padding: 4px 8px; "
+#         "border-radius: 12px; "
+#         "display: inline-block; "
+#         "font-weight: bold; "
+#     )
+#     if pd.notna(isbn):
+#         return f"<span style='{pill_style} background-color: #e6f4e8; color: #47b354;'>{isbn}</span>"
+#     elif apply_isbn == 0:
+#         return f"<span style='{pill_style} background-color: #fce9e8; color: #5c3c3b;'>Not Applied</span>"
+#     elif apply_isbn == 1:
+#         return f"<span style='{pill_style} background-color: #fef6e4; color: #e0ab19;'>Not Received</span>"
+#     return f"<span style='{pill_style} background-color: #f0f0f0; color: #000000;'>-</span>"
 
 # Function to get status with outlined pill styling
 def get_status_pill(deliver_value):
-    status = "Delivered" if deliver_value == 1 else "On Going"
-    color = "green" if deliver_value == 1 else "orange"
-    return f"**:{color}[{status}]**"
+    # Base style aligned with get_isbn_display
+    pill_style = (
+        "padding: 2px 6px; "  # Matching padding with get_isbn_display
+        "border-radius: 4px; "  # Matching border-radius for consistency
+        "background-color: #f7f7f7; "  # Matching grayish background
+        "font-size: 14px; "  # Matching font size
+        "font-weight: bold; "  # Keeping text bold like get_isbn_display
+        "display: inline-block;"  # Ensures the background wraps the text
+    )
+
+    # Determine status and colors
+    if deliver_value == 1:
+        status = "Delivered"
+        text_color = "#47b354"  # Green text to match valid ISBN color
+    else:
+        status = "On Going"
+        text_color = "#e0ab19"  # Orange text to match Not Received color
+
+    return f"<span style='{pill_style} color: {text_color};'>{status}</span>"
+
 
 # Function to fetch book details (for title and book_id)
 def fetch_book_details(book_id):
@@ -720,6 +750,46 @@ def manage_isbn_dialog(book_id, current_apply_isbn, current_isbn):
 
 
 ###################################################################################################################################
+##################################--------------- Edit Price Dialog ----------------------------##################################
+###################################################################################################################################
+
+
+# New Price dialog
+@st.dialog("Manage Book Price")
+def manage_price_dialog(book_id, current_price):
+    price_str = st.text_input(
+        "Book Price (₹)",
+        value=str(int(current_price)) if pd.notna(current_price) else "",
+        key=f"price_{book_id}",
+        placeholder="Enter whole amount"
+    )
+    
+    if st.button("Save Price", key=f"save_price_{book_id}"):
+        try:
+            # Convert input to integer, handling empty string
+            price = int(price_str) if price_str.strip() else None
+            if price is not None and price < 0:
+                st.error("Price cannot be negative")
+                return
+                
+            with conn.session as s:
+                s.execute(
+                    text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                    {"price": price, "book_id": book_id}
+                )
+                s.commit()
+            st.success("Price Updated Successfully")
+            st.rerun()
+        except ValueError:
+            st.error("Please enter a valid whole number")
+
+
+@st.dialog("Ok")
+def write_on_me():
+    st.write("You clicked the button!")
+
+
+###################################################################################################################################
 ##################################--------------- Book Table ----------------------------##################################
 ###################################################################################################################################
 
@@ -739,59 +809,137 @@ author_counts = conn.query(author_count_query)
 # Convert to dictionary for easy lookup
 author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_count']))
 
-# Display books
-st.markdown("## 📚 Book List")
-cont = st.container(border=True)
+# Custom CSS for modern table styling
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 42px !important;  /* Small padding for breathing room */
+        }
+
+        .data-row {
+            margin-bottom: 30px;
+            border-bottom: 1px solid #e9ecef;
+            font-size: 14px;
+            color: #212529;
+            transition: background-color 0.2s;
+        }
+        .month-header {
+            font-size: 16px;
+            font-weight: 500;
+            color: #343a40;
+            margin: 0px 0 8px 0;
+        }
+        .popover-button {
+            background-color: #007bff;
+            color: white;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+            
+    </style>
+""", unsafe_allow_html=True)
+
+col1,col2 = st.columns([9, 1])
+
+with col1:
+    st.markdown("## 📚 Book List")
+with col2:
+    if st.button("Add Book", type = "tertiary"):
+        write_on_me()
+
+column_size = [1, 4, 1, 1, 1,2] 
+
+#st.markdown("## 📚 Book List")
+cont = st.container(border=False)
 with cont:
     if books.empty:
         st.warning("No books available.")
     else:
         # Table Header
-        with st.container():
-            header_col1, header_col2, header_col3, header_col4, header_col5, header_col6, header_col7 = st.columns([1, 3, 2, 2, 1, 2, 3])
-            with header_col1:
-                st.markdown("**ID**")
-            with header_col2:
-                st.markdown("**Title**")
-            with header_col3:
-                st.markdown("**Date**")
-            with header_col4:
-                st.markdown("**ISBN**")
-            with header_col5:
-                st.markdown("**Authors**")
-            with header_col6:
-                st.markdown("**Status**")
-            with header_col7:
-                st.markdown("**Actions**")
+        header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns(column_size)
+        with header_col1: st.markdown("###### ID")
+        with header_col2: st.markdown("###### Title & ISBN")
+        with header_col3: st.markdown("###### Date")
+        with header_col4: st.markdown("###### ISBN")
+        with header_col5: st.markdown("###### Status")
+        with header_col6: st.markdown("###### Actions")
 
+        # Table Body
         for month, monthly_books in reversed_grouped_books:
-            st.markdown(f"##### {month.strftime('%B %Y')}")
+            st.markdown(f'<div class="month-header"><b>{month.strftime("%B %Y")}</b></div>', unsafe_allow_html=True)
             for _, row in monthly_books.iterrows():
-                col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 2, 2, 1, 2, 3])
-                
-                with col1:
-                    st.write(row['book_id'])
-                with col2:
-                    st.write(row['title'])
-                with col3:
-                    st.write(row['date'].strftime('%Y-%m-%d'))
-                with col4:
-                    st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
-                with col5:
-                    author_count = author_count_dict.get(row['book_id'], 0)  
-                    st.write(f"{author_count}")
+                st.markdown('<div class="data-row">', unsafe_allow_html=True)
+                col1, col2, col3, col4, col5, col6 = st.columns(column_size)
+                with col1: st.write(row['book_id'])
+                with col2: 
+                    # Combine Title with green Author Count (with grayish background), followed by ISBN
+                    author_count = author_count_dict.get(row['book_id'], 0)
+                    st.markdown(
+                        f"{row['title']} <span style='color: #2aba25; font-size:14px; margin-left: 5px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;'>{author_count}</span>",
+                        unsafe_allow_html=True
+                    )
+                with col3: st.write(row['date'].strftime('%Y-%m-%d'))
+                with col4: st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
+                with col5: st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True)
                 with col6:
-                    st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True) 
-                with col7:
-                    # Single button with popover menu
-                    with st.popover(":material/settings: Actions", use_container_width=True):
-                        if st.button("Edit ISBN", key=f"isbn_{row['book_id']}"):
+                    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
+                    with btn_col1:
+                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
                             manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
-                        if st.button("Edit Authors", key=f"authors_{row['book_id']}"):
+                    with btn_col2:
+                        if st.button(":material/currency_rupee:", key=f"price_btn_{row['book_id']}"):
+                            manage_price_dialog(row['book_id'], row['price'])
+                    with btn_col3:
+                        if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
                             edit_author_dialog(row['book_id'])
-                        if st.button("Edit Operations", key=f"ops_{row['book_id']}"):
+                    with btn_col4:
+                        if st.button(":material/manufacturing:", key=f"ops_{row['book_id']}"):
                             edit_operation_dialog(row['book_id'])
-                        if st.button("Edit Print & Delivery", key=f"delivery_{row['book_id']}"):
+                    with btn_col5:
+                        if st.button(":material/local_shipping:", key=f"delivery_{row['book_id']}"):
                             edit_inventory_delivery_dialog(row['book_id'])
+                
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            st.markdown("---")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# with col7:
+#                 # Reordered buttons: ISBN first, View last
+#                 btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+#                 with btn_col1:
+#                     if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
+#                         manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
+#                 with btn_col2:
+#                     if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
+#                         edit_author_dialog(row['book_id'])  # Ensure edit_author_dialog is defined
+#                 with btn_col3:
+#                     if st.button(":material/manufacturing:", key=f"edit_ops_{row['book_id']}"):
+#                         st.write(f"Editing operations for book {row['book_id']} (implement edit logic here)")
+#                 with btn_col4:
+#                     if st.button(":material/visibility:", key=f"view_{row['book_id']}"):
+#                         st.write(f"Viewing book {row['book_id']} (implement view logic here)")
+
+
+
+
+                    # with col7:
+                    #    with st.popover(":material/settings: Actions", use_container_width=True):
+                    #         if st.button("Edit ISBN", key=f"isbn_{row['book_id']}"):
+                    #             manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
+                    #         if st.button("Edit Price", key=f"price_btn_{row['book_id']}"):
+                    #             manage_price_dialog(row['book_id'], row['price'])
+                    #         if st.button("Edit Authors", key=f"authors_{row['book_id']}"):
+                    #             edit_author_dialog(row['book_id'])
+                    #         if st.button("Edit Operations", key=f"ops_{row['book_id']}"):
+                    #             edit_operation_dialog(row['book_id'])
+                    #         if st.button("Edit Print & Delivery", key=f"delivery_{row['book_id']}"):
+                    #             edit_inventory_delivery_dialog(row['book_id'])
+                    # st.markdown('</div>', unsafe_allow_html=True)
