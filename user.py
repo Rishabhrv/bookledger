@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import date
 import time
+from streamlit_extras.let_it_rain import rain
 
 
 st.cache_data.clear()
@@ -36,40 +37,26 @@ def get_isbn_display(isbn, apply_isbn):
         return f"**<span style='color:#e0ab19; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
     return f"**<span style='color:#000000; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
-# def get_isbn_display(isbn, apply_isbn):
-#     pill_style = (
-#         "padding: 4px 8px; "
-#         "border-radius: 12px; "
-#         "display: inline-block; "
-#         "font-weight: bold; "
-#     )
-#     if pd.notna(isbn):
-#         return f"<span style='{pill_style} background-color: #e6f4e8; color: #47b354;'>{isbn}</span>"
-#     elif apply_isbn == 0:
-#         return f"<span style='{pill_style} background-color: #fce9e8; color: #5c3c3b;'>Not Applied</span>"
-#     elif apply_isbn == 1:
-#         return f"<span style='{pill_style} background-color: #fef6e4; color: #e0ab19;'>Not Received</span>"
-#     return f"<span style='{pill_style} background-color: #f0f0f0; color: #000000;'>-</span>"
 
 # Function to get status with outlined pill styling
 def get_status_pill(deliver_value):
-    # Base style aligned with get_isbn_display
+
     pill_style = (
-        "padding: 2px 6px; "  # Matching padding with get_isbn_display
-        "border-radius: 4px; "  # Matching border-radius for consistency
-        "background-color: #f7f7f7; "  # Matching grayish background
-        "font-size: 14px; "  # Matching font size
-        "font-weight: bold; "  # Keeping text bold like get_isbn_display
-        "display: inline-block;"  # Ensures the background wraps the text
+        "padding: 2px 6px; "  
+        "border-radius: 4px; " 
+        "background-color: #f7f7f7; "  
+        "font-size: 14px; "  
+        "font-weight: bold; "  
+        "display: inline-block;"  
     )
 
     # Determine status and colors
     if deliver_value == 1:
         status = "Delivered"
-        text_color = "#47b354"  # Green text to match valid ISBN color
+        text_color = "#47b354" 
     else:
         status = "On Going"
-        text_color = "#e0ab19"  # Orange text to match Not Received color
+        text_color = "#e0ab19"  
 
     return f"<span style='{pill_style} color: {text_color};'>{status}</span>"
 
@@ -79,17 +66,21 @@ def fetch_book_details(book_id):
     query = f"SELECT book_id, title FROM books WHERE book_id = '{book_id}'"
     return conn.query(query)
 
-## --- Dialog Function ---
+
+###################################################################################################################################
+##################################--------------- Add New Book & Auhtor ----------------------------##################################
+###################################################################################################################################
+
 @st.dialog("Add Book and Authors", width="large")
 def add_book_dialog():
     conn = connect_db()
 
     # --- UI Components Inside Dialog ---
     def book_details_section():
-        st.markdown("<h5>Book Details", unsafe_allow_html=True)
+        st.markdown("<h5>Book Details</h5>", unsafe_allow_html=True)
         col1, col2 = st.columns(2)
-        book_title = col1.text_input("Book Title", placeholder="Enter Book Title..")
-        book_date = col2.date_input("Date", value=date.today())
+        book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
+        book_date = col2.date_input("Date", value=date.today(), key="book_date")
         return {
             "title": book_title,
             "date": book_date
@@ -97,14 +88,11 @@ def add_book_dialog():
 
     def author_details_section(conn):
         if "authors" not in st.session_state:
-            st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]
-
-        def add_author():
-            st.session_state.authors.append({"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"})
-
-        def remove_author(index):
-            if len(st.session_state.authors) > 1:  # Ensure at least one author remains
-                del st.session_state.authors[index]
+            # Initialize exactly 4 authors with default positions
+            st.session_state.authors = [
+                {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}"}
+                for i in range(4)
+            ]
 
         def get_author_suggestions(conn, search_term):
             if not search_term:
@@ -122,19 +110,23 @@ def add_book_dialog():
                         st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
                     return authors
                 except Exception as e:
+                    st.error(f"Error fetching author suggestions: {e}")
                     return []
 
-        with st.container(border=True): 
-            st.markdown("<h5>Author Details", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<h5>Author Details</h5>", unsafe_allow_html=True)
             
-            # Use an expander for each author to save space and improve layout
-            for i, author in enumerate(st.session_state.authors):
-                with st.expander(f"Author {i+1}", expanded=True):
-                    col1, col2 = st.columns([2, 1])  # Adjusted column layout for better space usage
+            # Create tabs for each author
+            tab_titles = [f"Author {i+1}" for i in range(4)]
+            tabs = st.tabs(tab_titles)
+
+            for i, tab in enumerate(tabs):
+                with tab:
+                    col1, col2 = st.columns([2, 1])
                     
                     # Author Name and Suggestions
                     author_name_input_key = f"author_name_{i}"
-                    author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key, placeholder='Enter Author name..')
+                    author_name = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=author_name_input_key, placeholder='Enter Author name..')
 
                     suggestions = get_author_suggestions(conn, author_name)
 
@@ -166,32 +158,35 @@ def add_book_dialog():
                             selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
                             selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
                             if selected_author:
+                                # Update the author details with the selected existing author
                                 st.session_state.authors[i]["name"] = selected_author.name
                                 st.session_state.authors[i]["email"] = selected_author.email
                                 st.session_state.authors[i]["phone"] = selected_author.phone
                                 st.session_state.authors[i]["author_id"] = selected_author.author_id
                     else:
+                        # If no suggestion is selected, update the name but preserve other fields
                         st.session_state.authors[i]["name"] = author_name
+                        if not st.session_state.authors[i]["author_id"]:  # If not an existing author, ensure fields are not overwritten
+                            st.session_state.authors[i]["email"] = st.session_state.authors[i].get("email", "")
+                            st.session_state.authors[i]["phone"] = st.session_state.authors[i].get("phone", "")
 
                     # Email, Phone, and Position in a more compact layout
                     col3, col4 = st.columns(2)
-                    st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"], key=f"email_{i}")
-                    st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"], key=f"phone_{i}")
+                    st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..")
+                    st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..")
 
-                    col5, col6 = st.columns([1, 1])
+                    # Position selection (ensure uniqueness)
+                    col5, _ = st.columns([1, 1])
+                    available_positions = ["1st", "2nd", "3rd", "4th"]
+                    # Remove positions already taken by other authors
+                    taken_positions = [a["author_position"] for a in st.session_state.authors if a != st.session_state.authors[i]]
+                    available_positions = [p for p in available_positions if p not in taken_positions or p == st.session_state.authors[i]["author_position"]]
                     st.session_state.authors[i]["author_position"] = col5.selectbox(
                         f"Position {i+1}",
-                        ["1st", "2nd", "3rd", "4th"],
-                        index=["1st", "2nd", "3rd", "4th"].index(author["author_position"]),
+                        available_positions,
+                        index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
                         key=f"author_position_{i}"
                     )
-                    if len(st.session_state.authors) > 1:  # Show remove button only if more than one author
-                        if col6.button(":material/close:", key=f"remove_{i}", type="tertiary"):
-                            remove_author(i)
-
-            # Add Author button outside expanders
-            if st.button(":material/add:", key="add_author"):
-                add_author()
 
         return st.session_state.authors
 
@@ -205,6 +200,47 @@ def add_book_dialog():
             s.commit()
             return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
+    def is_author_active(author):
+        """Check if an author is 'active' (i.e., has at least one non-empty field)."""
+        return bool(author["name"] or author["email"] or author["phone"])
+
+    def validate_form(book_data, author_data):
+        """Validate that all required fields are filled for book and active authors, and positions are unique."""
+        errors = []
+
+        # Validate book details
+        if not book_data["title"]:
+            errors.append("Book title is required.")
+        if not book_data["date"]:
+            errors.append("Book date is required.")
+
+        # Validate author details (only for active authors)
+        active_authors = [a for a in author_data if is_author_active(a)]
+        if not active_authors:
+            errors.append("At least one author must be provided.")
+
+        # Track existing author IDs to prevent duplicates
+        existing_author_ids = set()
+        for i, author in enumerate(author_data):
+            if is_author_active(author):
+                if not author["name"]:
+                    errors.append(f"Author {i+1} name is required.")
+                if not author["email"]:
+                    errors.append(f"Author {i+1} email is required.")
+                if not author["phone"]:
+                    errors.append(f"Author {i+1} phone is required.")
+                if author["author_id"]:
+                    if author["author_id"] in existing_author_ids:
+                        errors.append(f"Author {i+1} (ID: {author['author_id']}) is already added. Please remove duplicates.")
+                    existing_author_ids.add(author["author_id"])
+
+        # Validate unique positions for active authors
+        active_positions = [author["author_position"] for author in active_authors]
+        if len(active_positions) != len(set(active_positions)):
+            errors.append("All active authors must have unique positions.")
+
+        return errors
+
     # --- Combined Container Inside Dialog ---
     with st.container():
         book_data = book_details_section()
@@ -212,10 +248,11 @@ def add_book_dialog():
         author_data = author_details_section(conn)
 
     # --- Save Functionality Inside Dialog ---
-    col1, col2 = st.columns([1,1])
-    if col1.button("Save", key="dialog_save"):
-        if not book_data["title"] or not book_data["date"]:
-            st.warning("Please fill in all book details.")
+    col1, col2 = st.columns([7,1])
+    if col1.button("Save", key="dialog_save", type="primary"):
+        errors = validate_form(book_data, author_data)
+        if errors:
+            st.error("\n".join(errors), icon="🚨")
         else:
             with conn.session as s:
                 try:
@@ -226,27 +263,39 @@ def add_book_dialog():
                     """), params={"title": book_data["title"], "date": book_data["date"]})
                     book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                    # Process authors and links
-                    for author in author_data:
-                        if author["name"] and author["email"] and author["phone"]:
-                            author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
-                            if book_id and author_id_to_link:
-                                s.execute(text("""
-                                    INSERT INTO book_authors (book_id, author_id, author_position)
-                                    VALUES (:book_id, :author_id, :author_position)
-                                """), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
+                    # Process only active authors
+                    active_authors = [a for a in author_data if is_author_active(a)]
+                    for author in active_authors:
+                        if author["author_id"]:
+                            # Use existing author
+                            author_id_to_link = author["author_id"]
+                        else:
+                            # Insert new author
+                            author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+
+                        if book_id and author_id_to_link:
+                            s.execute(text("""
+                                INSERT INTO book_authors (book_id, author_id, author_position)
+                                VALUES (:book_id, :author_id, :author_position)
+                            """), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
                     s.commit()
-                    st.success("Book and Authors Saved Successfully!")
-                    time.sleep(1)  # Optional: Give user time to see the success message
-                    st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]  # Reset authors
+                    st.success("Book and Authors Saved Successfully!", icon="✅")
+                    time.sleep(1)  # Give user time to see the success message
+                    st.session_state.authors = [
+                        {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}"}
+                        for i in range(4)
+                    ]  # Reset authors
                     st.rerun()  # Close the dialog by rerunning the app
                 except Exception as db_error:
                     s.rollback()
-                    st.error(f"Database error during save: {db_error}")
+                    st.error(f"Database error during save: {db_error}", icon="❌")
 
-    if col2.button("Cancel", key="dialog_cancel"):
-        st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]  # Reset authors
-        st.rerun() 
+    if col2.button("Cancel", key="dialog_cancel", type="secondary"):
+        st.session_state.authors = [
+            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}"}
+            for i in range(4)
+        ]  # Reset authors
+        st.rerun()
 
 
 
@@ -285,6 +334,8 @@ def update_book_authors(id, updates):
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large')
 def edit_author_dialog(book_id):
+    # Constants
+    MAX_AUTHORS = 4
     # Fetch book details for title
     book_details = fetch_book_details(book_id)
     if not book_details.empty:
@@ -394,15 +445,24 @@ def edit_author_dialog(book_id):
                         st.cache_data.clear()
                         st.success(f"✅ Updated details for {row['name']} (Author ID: {row['author_id']})")
 
-    # Local state for new authors
-    if "local_authors" not in st.session_state:
-        st.session_state.local_authors = [{"name": "", "email": "", "phone": "", "author_id": None}]
+    existing_author_count = len(book_authors)
+    available_slots = MAX_AUTHORS - existing_author_count
 
-    def add_local_author():
-        st.session_state.local_authors.append({"name": "", "email": "", "phone": "", "author_id": None})
+    if existing_author_count >= MAX_AUTHORS:
+        st.warning("This book already has the maximum number of authors (4). No more authors can be added.")
+        if st.button("Close"):
+            st.rerun()
+        return
 
-    def remove_local_author(index):
-        del st.session_state.local_authors[index]
+    if existing_author_count == 0:
+        st.warning(f"No authors found for Book ID: {book_id}")
+
+    # Initialize session state for new authors
+    if "new_authors" not in st.session_state:
+        st.session_state.new_authors = [
+            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None}
+            for _ in range(available_slots)
+        ]
 
     def get_author_suggestions(conn, search_term):
         if not search_term:
@@ -420,88 +480,137 @@ def edit_author_dialog(book_id):
                     st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
                 return authors
             except Exception as e:
+                st.error(f"Error fetching suggestions: {e}")
                 return []
 
-    st.markdown("### Add New Author")
+    def validate_author(author, existing_positions, existing_author_ids):
+        """Validate an author's details."""
+        if not (author["name"] and author["email"] and author["phone"] and author["author_position"]):
+            return False, "All fields (Name, Email, Phone, Position) are required for each author."
+        if author["author_position"] in existing_positions:
+            return False, f"Position '{author['author_position']}' is already taken."
+        if author["author_id"] in existing_author_ids:
+            return False, f"Author '{author['name']}' is already linked to this book."
+        return True, ""
 
-    with st.container(border=True):
-        st.markdown("<h5>Author Details", unsafe_allow_html=True)
-        for i, author in enumerate(st.session_state.local_authors):
-            with st.container():
-                col1, col2, col3, col4, col5, col6 = st.columns([3, 2, 2, 2, 2, 1])
+    # Get existing positions and author IDs to prevent duplicates
+    existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
+    existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
 
-                author_name_input_key = f"local_author_name_{i}"
-                author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key, placeholder='Enter Author name..')
+    st.markdown(f"### Add Up to {available_slots} New Authors")
 
-                suggestions = get_author_suggestions(conn, author_name)
+    # Use tabs for static number of new authors
+    tabs = st.tabs([f"Author {i+1}" for i in range(available_slots)])
 
-                suggestion_options = []
-                disabled_suggestion = False
-                suggestion_placeholder = "Type to search authors..."
+    for i, tab in enumerate(tabs):
+        with tab:
+            with st.container(border=True):
+                st.markdown(f"#### New Author {i+1}", unsafe_allow_html=True)
+                col1, col2 = st.columns([2, 1])
 
-                if suggestions:
-                    suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
-                    suggestion_options = [""] + suggestion_names
-                    suggestion_placeholder = "Suggested authors found..."
-                else:
-                    suggestion_options = ["No authors found"]
-                    disabled_suggestion = True
-                    suggestion_placeholder = "No authors found"
+                # Author Name with Suggestions
+                with col1:
+                    author_name_input_key = f"new_author_name_{i}"
+                    author_name = st.text_input("Author Name", st.session_state.new_authors[i]["name"], key=author_name_input_key, placeholder='Enter Author name..')
 
-                selected_suggestion = col2.selectbox(
-                    f"Suggestions {i+1}",
-                    suggestion_options,
-                    index=0,
-                    key=f"local_author_suggestion_{i}",
-                    label_visibility="hidden",
-                    disabled=disabled_suggestion,
-                    placeholder=suggestion_placeholder
-                )
+                    suggestions = get_author_suggestions(conn, author_name)
+                    suggestion_options = []
+                    disabled_suggestion = False
+                    suggestion_placeholder = "Type to search authors..."
 
-                if selected_suggestion and selected_suggestion != "No authors found":
-                    if "(ID: " in selected_suggestion:
-                        selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
-                        selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
-                        if selected_author:
-                            st.session_state.local_authors[i]["name"] = selected_author.name
-                            st.session_state.local_authors[i]["email"] = selected_author.email
-                            st.session_state.local_authors[i]["phone"] = selected_author.phone
-                            st.session_state.local_authors[i]["author_id"] = selected_author.author_id
-                else:
-                    st.session_state.local_authors[i]["name"] = author_name
+                    if suggestions:
+                        suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
+                        suggestion_options = [""] + suggestion_names
+                        suggestion_placeholder = "Suggested authors found..."
+                    else:
+                        suggestion_options = ["No authors found"]
+                        disabled_suggestion = True
+                        suggestion_placeholder = "No authors found"
 
-                st.session_state.local_authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"])
-                st.session_state.local_authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"])
-                selected_position = col5.selectbox(
-                    f"Position {i+1}",
-                    ["1st", "2nd", "3rd", "4th"],
-                    key=f"local_author_position_{i}"
-                )
-                st.session_state.local_authors[i]["author_position"] = selected_position
-                if col6.button(":material/close:", key=f"remove_local_{i}", type="tertiary"):
-                    remove_local_author(i)
-                    st.rerun() # Refresh the dialog to show the new authors.
+                    selected_suggestion = st.selectbox(
+                        "Suggestions",
+                        suggestion_options,
+                        index=0,
+                        key=f"new_author_suggestion_{i}",
+                        label_visibility="hidden",
+                        disabled=disabled_suggestion,
+                        placeholder=suggestion_placeholder
+                    )
 
-        if st.button(":material/add:"):
-            add_local_author()
-            st.rerun() # Refresh the dialog to show the new authors.
+                    if selected_suggestion and selected_suggestion != "No authors found":
+                        if "(ID: " in selected_suggestion:
+                            selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
+                            selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
+                            if selected_author:
+                                st.session_state.new_authors[i]["name"] = selected_author.name
+                                st.session_state.new_authors[i]["email"] = selected_author.email
+                                st.session_state.new_authors[i]["phone"] = selected_author.phone
+                                st.session_state.new_authors[i]["author_id"] = selected_author.author_id
+                    else:
+                        st.session_state.new_authors[i]["name"] = author_name
 
-    if st.button("Add New Authors to Book"):
-        for author in st.session_state.local_authors:
-            if author["name"] and author["email"] and author["phone"]:
-                author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
-                if book_id and author_id_to_link:
-                    with conn.session as s:
-                        s.execute(text("""INSERT INTO book_authors (book_id, author_id, author_position) VALUES (:book_id, :author_id, :author_position)"""), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
-                        s.commit()
-        st.cache_data.clear()
-        st.success("New Authors added successfully")
-        st.session_state.local_authors = [{"name": "", "email": "", "phone": "", "author_id": None}] #reset local author state.
-        st.rerun()
+                # Email, Phone, and Position
+                with col2:
+                    st.session_state.new_authors[i]["email"] = st.text_input("Email", st.session_state.new_authors[i]["email"], key=f"new_author_email_{i}")
+                    st.session_state.new_authors[i]["phone"] = st.text_input("Phone", st.session_state.new_authors[i]["phone"], key=f"new_author_phone_{i}")
+                    available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in existing_positions]
+                    if available_positions:
+                        st.session_state.new_authors[i]["author_position"] = st.selectbox(
+                            "Position",
+                            available_positions,
+                            key=f"new_author_position_{i}"
+                        )
+                    else:
+                        st.error("No available positions left.")
+
+    # Single button to save all new authors
+    if st.button("Add Authors to Book", key="add_authors_to_book"):
+        errors = []
+        active_authors = [author for author in st.session_state.new_authors if any(author.values())]  # Only consider authors with at least one field filled
+
+        for author in active_authors:
+            is_valid, error_message = validate_author(author, existing_positions, existing_author_ids)
+            if not is_valid:
+                errors.append(error_message)
+            else:
+                existing_positions.append(author["author_position"])  # Update positions for validation of next author
+
+        if errors:
+            for error in errors:
+                st.error(error)
+        else:
+            for author in active_authors:
+                if author["name"] and author["email"] and author["phone"]:
+                    author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
+                    if book_id and author_id_to_link:
+                        with conn.session as s:
+                            s.execute(
+                                text("""
+                                    INSERT INTO book_authors (book_id, author_id, author_position)
+                                    VALUES (:book_id, :author_id, :author_position)
+                                """),
+                                params={
+                                    "book_id": book_id,
+                                    "author_id": author_id_to_link,
+                                    "author_position": author["author_position"]
+                                }
+                            )
+                            s.commit()
+            st.cache_data.clear()
+            st.success("New Authors added successfully")
+            del st.session_state.new_authors  # Reset state
+            st.rerun()
 
 def insert_author(conn, name, email, phone):
     with conn.session as s:
-        s.execute(text("""INSERT INTO authors (name, email, phone) VALUES (:name, :email, :phone) ON DUPLICATE KEY UPDATE name=name"""), params={"name": name, "email": email, "phone": phone})
+        s.execute(
+            text("""
+                INSERT INTO authors (name, email, phone)
+                VALUES (:name, :email, :phone)
+                ON DUPLICATE KEY UPDATE name=name
+            """),
+            params={"name": name, "email": email, "phone": phone}
+        )
         s.commit()
         return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
     
@@ -988,27 +1097,123 @@ def manage_price_dialog(book_id, current_price):
         except ValueError:
             st.error("Please enter a valid whole number")
 
-    # Payment Status Overview (below Book Price)
     st.markdown("#### Payment Status Overview")
+    st.markdown("""
+        <style>
+        .payment-overview {
+            background-color: #f9f9f9;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .payment-overview h4 {
+            color: #333;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .author-card {
+            background-color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 5px solid;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        .status-paid {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .status-partial {
+            color: #ffc107;
+            font-weight: bold;
+        }
+        .status-pending {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        .author-card.status-paid {
+            border-left-color: #28a745;
+        }
+        .author-card.status-partial {
+            border-left-color: #ffc107;
+        }
+        .author-card.status-pending {
+            border-left-color: #dc3545;
+        }
+        .payment-details {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+        .progress-bar {
+            background-color: #e9ecef;
+            border-radius: 5px;
+            height: 10px;
+            margin-top: 10px;
+        }
+        .progress-fill {
+            height: 100%;
+            border-radius: 5px;
+        }
+        .progress-fill.status-paid {
+            background-color: #28a745;
+        }
+        .progress-fill.status-partial {
+            background-color: #ffc107;
+        }
+        .progress-fill.status-pending {
+            background-color: #dc3545;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
     book_authors = fetch_book_authors(book_id)
     if book_authors.empty:
         st.warning(f"No authors found for Book ID: {book_id}")
     else:
-        for _, row in book_authors.iterrows():
-            total_amount = int(row.get('total_amount', 0) or 0)
-            emi1 = int(row.get('emi1', 0) or 0)
-            emi2 = int(row.get('emi2', 0) or 0)
-            emi3 = int(row.get('emi3', 0) or 0)
-            amount_paid = emi1 + emi2 + emi3
+        with st.container():
+            st.markdown('<div class="payment-overview">', unsafe_allow_html=True)
+            for _, row in book_authors.iterrows():
+                total_amount = int(row.get('total_amount', 0) or 0)
+                emi1 = int(row.get('emi1', 0) or 0)
+                emi2 = int(row.get('emi2', 0) or 0)
+                emi3 = int(row.get('emi3', 0) or 0)
+                amount_paid = emi1 + emi2 + emi3
 
-            if amount_paid >= total_amount and total_amount > 0:
-                status = '<span class="payment-status status-paid">Fully Paid</span>'
-            elif amount_paid > 0:
-                status = '<span class="payment-status status-partial">Partially Paid</span>'
-            else:
-                status = '<span class="payment-status status-pending">Pending</span>'
-            
-            st.markdown(f"{row['name']} (ID: {row['author_id']} - {row['author_position']}): {status}", unsafe_allow_html=True)
+                # Determine payment status
+                if amount_paid >= total_amount and total_amount > 0:
+                    status = 'status-paid'
+                    status_text = 'Fully Paid'
+                elif amount_paid > 0:
+                    status = 'status-partial'
+                    status_text = 'Partially Paid'
+                else:
+                    status = 'status-pending'
+                    status_text = 'Pending'
+
+                # Calculate payment progress percentage
+                progress_percentage = min((amount_paid / total_amount) * 100, 100) if total_amount > 0 else 0
+
+                # Display author payment details in a card-like structure
+                st.markdown(
+                    f"""
+                    <div class="author-card {status}">
+                        <div>
+                            <strong>{row['name']}</strong> (ID: {row['author_id']} - {row['author_position']})
+                            <span class="payment-status {status}">&nbsp;&nbsp;• {status_text}</span>
+                        </div>
+                        <div class="payment-details">
+                            Total Amount: ₹{total_amount} | Paid: ₹{amount_paid} 
+                            (EMI 1: ₹{emi1}, EMI 2: ₹{emi2}, EMI 3: ₹{emi3})
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill {status}" style="width: {progress_percentage}%"></div>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # Section 2: Author Payments with Tabs
     st.markdown("### 👤 Author Payments")
@@ -1259,3 +1464,14 @@ with cont:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
+
+
+# def example():
+#     rain(
+#         emoji="🎈",
+#         font_size=50,
+#         falling_speed=2,
+#         animation_length="infinite",
+#     )
+
+# example()
