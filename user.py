@@ -1,8 +1,20 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import text  # Import text for raw SQL queries
+from sqlalchemy import text
+from datetime import date
+import time
+
 
 st.cache_data.clear()
+
+# --- Database Connection ---
+def connect_db():
+    try:
+        conn = st.connection('mysql', type='sql')
+        return conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
 
 # Connect to MySQL
 conn = st.connection("mysql", type="sql")
@@ -67,6 +79,175 @@ def fetch_book_details(book_id):
     query = f"SELECT book_id, title FROM books WHERE book_id = '{book_id}'"
     return conn.query(query)
 
+## --- Dialog Function ---
+@st.dialog("Add Book and Authors", width="large")
+def add_book_dialog():
+    conn = connect_db()
+
+    # --- UI Components Inside Dialog ---
+    def book_details_section():
+        st.markdown("<h5>Book Details", unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
+        book_title = col1.text_input("Book Title", placeholder="Enter Book Title..")
+        book_date = col2.date_input("Date", value=date.today())
+        return {
+            "title": book_title,
+            "date": book_date
+        }
+
+    def author_details_section(conn):
+        if "authors" not in st.session_state:
+            st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]
+
+        def add_author():
+            st.session_state.authors.append({"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"})
+
+        def remove_author(index):
+            if len(st.session_state.authors) > 1:  # Ensure at least one author remains
+                del st.session_state.authors[index]
+
+        def get_author_suggestions(conn, search_term):
+            if not search_term:
+                return []
+            with conn.session as s:
+                try:
+                    query = text("""
+                        SELECT author_id, name, email, phone
+                        FROM authors
+                        WHERE name LIKE CONCAT(:prefix, '%')
+                        LIMIT 5
+                    """)
+                    authors = s.execute(query, params={"prefix": search_term}).fetchall()
+                    if authors:
+                        st.info(f"Found {len(authors)} authors matching '{search_term}'.", icon="🔍")
+                    return authors
+                except Exception as e:
+                    return []
+
+        with st.container(border=True): 
+            st.markdown("<h5>Author Details", unsafe_allow_html=True)
+            
+            # Use an expander for each author to save space and improve layout
+            for i, author in enumerate(st.session_state.authors):
+                with st.expander(f"Author {i+1}", expanded=True):
+                    col1, col2 = st.columns([2, 1])  # Adjusted column layout for better space usage
+                    
+                    # Author Name and Suggestions
+                    author_name_input_key = f"author_name_{i}"
+                    author_name = col1.text_input(f"Author Name {i+1}", author["name"], key=author_name_input_key, placeholder='Enter Author name..')
+
+                    suggestions = get_author_suggestions(conn, author_name)
+
+                    suggestion_options = []
+                    disabled_suggestion = False
+                    suggestion_placeholder = "Type to search authors..."
+
+                    if suggestions:
+                        suggestion_names = [f"{a.name} (ID: {a.author_id})" for a in suggestions]
+                        suggestion_options = [""] + suggestion_names
+                        suggestion_placeholder = "Suggested authors found..."
+                    else:
+                        suggestion_options = ["No authors found"]
+                        disabled_suggestion = True
+                        suggestion_placeholder = "No authors found"
+
+                    selected_suggestion = col2.selectbox(
+                        f"Suggestions {i+1}",
+                        suggestion_options,
+                        index=0,
+                        key=f"author_suggestion_{i}",
+                        label_visibility="hidden",
+                        disabled=disabled_suggestion,
+                        placeholder=suggestion_placeholder
+                    )
+
+                    if selected_suggestion and selected_suggestion != "No authors found": 
+                        if "(ID: " in selected_suggestion:  
+                            selected_author_id = int(selected_suggestion.split('(ID: ')[1][:-1])
+                            selected_author = next((a for a in suggestions if a.author_id == selected_author_id), None)
+                            if selected_author:
+                                st.session_state.authors[i]["name"] = selected_author.name
+                                st.session_state.authors[i]["email"] = selected_author.email
+                                st.session_state.authors[i]["phone"] = selected_author.phone
+                                st.session_state.authors[i]["author_id"] = selected_author.author_id
+                    else:
+                        st.session_state.authors[i]["name"] = author_name
+
+                    # Email, Phone, and Position in a more compact layout
+                    col3, col4 = st.columns(2)
+                    st.session_state.authors[i]["email"] = col3.text_input(f"Email {i+1}", author["email"], key=f"email_{i}")
+                    st.session_state.authors[i]["phone"] = col4.text_input(f"Phone {i+1}", author["phone"], key=f"phone_{i}")
+
+                    col5, col6 = st.columns([1, 1])
+                    st.session_state.authors[i]["author_position"] = col5.selectbox(
+                        f"Position {i+1}",
+                        ["1st", "2nd", "3rd", "4th"],
+                        index=["1st", "2nd", "3rd", "4th"].index(author["author_position"]),
+                        key=f"author_position_{i}"
+                    )
+                    if len(st.session_state.authors) > 1:  # Show remove button only if more than one author
+                        if col6.button(":material/close:", key=f"remove_{i}", type="tertiary"):
+                            remove_author(i)
+
+            # Add Author button outside expanders
+            if st.button(":material/add:", key="add_author"):
+                add_author()
+
+        return st.session_state.authors
+
+    def insert_author(conn, name, email, phone):
+        with conn.session as s:
+            s.execute(text("""
+                INSERT INTO authors (name, email, phone)
+                VALUES (:name, :email, :phone)
+                ON DUPLICATE KEY UPDATE name=name
+            """), params={"name": name, "email": email, "phone": phone})
+            s.commit()
+            return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+
+    # --- Combined Container Inside Dialog ---
+    with st.container():
+        book_data = book_details_section()
+        st.markdown(" ")
+        author_data = author_details_section(conn)
+
+    # --- Save Functionality Inside Dialog ---
+    col1, col2 = st.columns([1,1])
+    if col1.button("Save", key="dialog_save"):
+        if not book_data["title"] or not book_data["date"]:
+            st.warning("Please fill in all book details.")
+        else:
+            with conn.session as s:
+                try:
+                    # Insert book
+                    s.execute(text("""
+                        INSERT INTO books (title, date)
+                        VALUES (:title, :date)
+                    """), params={"title": book_data["title"], "date": book_data["date"]})
+                    book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+
+                    # Process authors and links
+                    for author in author_data:
+                        if author["name"] and author["email"] and author["phone"]:
+                            author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
+                            if book_id and author_id_to_link:
+                                s.execute(text("""
+                                    INSERT INTO book_authors (book_id, author_id, author_position)
+                                    VALUES (:book_id, :author_id, :author_position)
+                                """), params={"book_id": book_id, "author_id": author_id_to_link, "author_position": author["author_position"]})
+                    s.commit()
+                    st.success("Book and Authors Saved Successfully!")
+                    time.sleep(1)  # Optional: Give user time to see the success message
+                    st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]  # Reset authors
+                    st.rerun()  # Close the dialog by rerunning the app
+                except Exception as db_error:
+                    s.rollback()
+                    st.error(f"Database error during save: {db_error}")
+
+    if col2.button("Cancel", key="dialog_cancel"):
+        st.session_state.authors = [{"name": "", "email": "", "phone": "", "author_id": None, "author_position": "1st"}]  # Reset authors
+        st.rerun() 
+
 
 
 ###################################################################################################################################
@@ -82,8 +263,9 @@ def fetch_book_authors(book_id):
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, ba.digital_book_approved, ba.plagiarism_report, 
-           ba.printing_confirmation,
-           ba.delivery_address, ba.delivery_charge, ba.number_of_books
+           ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
+           ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
+           ba.emi1_date, ba.emi2_date, ba.emi3_date
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
@@ -119,12 +301,12 @@ def edit_author_dialog(book_id):
             background-color: #f9f9f9; 
             padding: 0px; 
             border-radius: 8px; 
-            margin-bottom: 10px; 
+            margin-bottom: 5px; 
             box-shadow: 2px 2px 10px rgba(0,0,0,0.1); 
         }
         .stTextInput>div>div>input, .stSelectbox>div>div>select {
             border-radius: 5px;
-            padding: 6px;
+            padding: 3px;
         }
         .stCheckbox>div {
             padding-top: 4px;
@@ -755,8 +937,32 @@ def manage_isbn_dialog(book_id, current_apply_isbn, current_isbn):
 
 
 # New Price dialog
-@st.dialog("Manage Book Price")
+@st.dialog("Manage Book Price and Author Payments", width="large")
 def manage_price_dialog(book_id, current_price):
+
+    # Fetch book details for title
+    book_details = fetch_book_details(book_id)
+    book_title = book_details.iloc[0]['title'] if not book_details.empty else "Unknown Title"
+    st.markdown(f"## {book_id} : {book_title}")
+
+    # CSS for payment status styling
+    st.markdown("""
+        <style>
+        .payment-status {
+            font-size: 12px;
+            padding: 3px 8px;
+            border-radius: 12px;
+            margin-left: 10px;
+            display: inline-block;
+        }
+        .status-paid { background-color: #e6ffe6; color: #006600; }
+        .status-partial { background-color: #fff3e6; color: #cc6600; }
+        .status-pending { background-color: #ffe6e6; color: #cc0000; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Section 1: Book Price
+    st.markdown("### 📖 Book Price")
     price_str = st.text_input(
         "Book Price (₹)",
         value=str(int(current_price)) if pd.notna(current_price) else "",
@@ -764,9 +970,8 @@ def manage_price_dialog(book_id, current_price):
         placeholder="Enter whole amount"
     )
     
-    if st.button("Save Price", key=f"save_price_{book_id}"):
+    if st.button("Save Book Price", key=f"save_price_{book_id}"):
         try:
-            # Convert input to integer, handling empty string
             price = int(price_str) if price_str.strip() else None
             if price is not None and price < 0:
                 st.error("Price cannot be negative")
@@ -778,10 +983,156 @@ def manage_price_dialog(book_id, current_price):
                     {"price": price, "book_id": book_id}
                 )
                 s.commit()
-            st.success("Price Updated Successfully")
+            st.success("Book Price Updated Successfully")
             st.rerun()
         except ValueError:
             st.error("Please enter a valid whole number")
+
+    # Payment Status Overview (below Book Price)
+    st.markdown("#### Payment Status Overview")
+    book_authors = fetch_book_authors(book_id)
+    if book_authors.empty:
+        st.warning(f"No authors found for Book ID: {book_id}")
+    else:
+        for _, row in book_authors.iterrows():
+            total_amount = int(row.get('total_amount', 0) or 0)
+            emi1 = int(row.get('emi1', 0) or 0)
+            emi2 = int(row.get('emi2', 0) or 0)
+            emi3 = int(row.get('emi3', 0) or 0)
+            amount_paid = emi1 + emi2 + emi3
+
+            if amount_paid >= total_amount and total_amount > 0:
+                status = '<span class="payment-status status-paid">Fully Paid</span>'
+            elif amount_paid > 0:
+                status = '<span class="payment-status status-partial">Partially Paid</span>'
+            else:
+                status = '<span class="payment-status status-pending">Pending</span>'
+            
+            st.markdown(f"{row['name']} (ID: {row['author_id']} - {row['author_position']}): {status}", unsafe_allow_html=True)
+
+    # Section 2: Author Payments with Tabs
+    st.markdown("### 👤 Author Payments")
+    if not book_authors.empty:
+        total_author_amounts = 0
+        updated_authors = []
+
+        # Create tabs for each author
+        tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
+        tabs = st.tabs(tab_titles)
+
+        for tab, (_, row) in zip(tabs, book_authors.iterrows()):
+            with tab:
+                # Fetch existing payment details
+                total_amount = int(row.get('total_amount', 0) or 0)
+                emi1 = int(row.get('emi1', 0) or 0)
+                emi2 = int(row.get('emi2', 0) or 0)
+                emi3 = int(row.get('emi3', 0) or 0)
+                emi1_date = row.get('emi1_date', None)
+                emi2_date = row.get('emi2_date', None)
+                emi3_date = row.get('emi3_date', None)
+                amount_paid = emi1 + emi2 + emi3
+
+                # Payment status inside tab
+                if amount_paid >= total_amount and total_amount > 0:
+                    status = '<span class="payment-status status-paid">Fully Paid</span>'
+                elif amount_paid > 0:
+                    status = '<span class="payment-status status-partial">Partially Paid</span>'
+                else:
+                    status = '<span class="payment-status status-pending">Pending</span>'
+                st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
+
+                # Total Amount Due
+                total_str = st.text_input(
+                    "Total Amount Due (₹)",
+                    value=str(total_amount) if total_amount > 0 else "",
+                    key=f"total_{row['id']}",
+                    placeholder="Enter whole amount"
+                )
+
+                # EMI Payments with Dates
+                st.markdown("#### EMI Details")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    emi1_str = st.text_input(
+                        "EMI 1 Amount (₹)",
+                        value=str(emi1) if emi1 > 0 else "",
+                        key=f"emi1_{row['id']}"
+                    )
+                    emi2_str = st.text_input(
+                        "EMI 2 Amount (₹)",
+                        value=str(emi2) if emi2 > 0 else "",
+                        key=f"emi2_{row['id']}"
+                    )
+                    emi3_str = st.text_input(
+                        "EMI 3 Amount (₹)",
+                        value=str(emi3) if emi3 > 0 else "",
+                        key=f"emi3_{row['id']}"
+                    )
+                
+                with col2:
+                    emi1_date_new = st.date_input(
+                        "EMI 1 Date",
+                        value=pd.to_datetime(emi1_date) if emi1_date else None,
+                        key=f"emi1_date_{row['id']}"
+                    )
+                    emi2_date_new = st.date_input(
+                        "EMI 2 Date",
+                        value=pd.to_datetime(emi2_date) if emi2_date else None,
+                        key=f"emi2_date_{row['id']}"
+                    )
+                    emi3_date_new = st.date_input(
+                        "EMI 3 Date",
+                        value=pd.to_datetime(emi3_date) if emi3_date else None,
+                        key=f"emi3_date_{row['id']}"
+                    )
+
+                # Calculate remaining balance
+                try:
+                    new_total = int(total_str) if total_str.strip() else 0
+                    new_emi1 = int(emi1_str) if emi1_str.strip() else 0
+                    new_emi2 = int(emi2_str) if emi2_str.strip() else 0
+                    new_emi3 = int(emi3_str) if emi3_str.strip() else 0
+                    new_paid = new_emi1 + new_emi2 + new_emi3
+                    remaining = new_total - new_paid
+                    total_author_amounts += new_total
+                    updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
+                                          emi1_date_new, emi2_date_new, emi3_date_new))
+                except ValueError:
+                    st.error("Please enter valid whole numbers for all fields")
+                    return
+
+                st.markdown(f"**Total Paid:** ₹{new_paid} | **Remaining Balance:** ₹{remaining}")
+
+                # Save button
+                if st.button("Save Payment", key=f"save_payment_{row['id']}"):
+                    if new_paid > new_total:
+                        st.error("Total EMI payments cannot exceed total amount")
+                    elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
+                        st.error("Amounts cannot be negative")
+                    else:
+                        book_price = int(price_str) if price_str.strip() else current_price
+                        if pd.isna(book_price):
+                            st.error("Please set a book price first")
+                            return
+                        if total_author_amounts > book_price:
+                            st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
+                            return
+
+                        updates = {
+                            "total_amount": new_total,
+                            "emi1": new_emi1,
+                            "emi2": new_emi2,
+                            "emi3": new_emi3,
+                            "emi1_date": emi1_date_new,
+                            "emi2_date": emi2_date_new,
+                            "emi3_date": emi3_date_new
+                        }
+                        update_book_authors(row['id'], updates)
+                        st.success(f"Payment updated for {row['name']}")
+                        st.cache_data.clear()
+                        st.rerun()
+
 
 
 @st.dialog("Ok")
@@ -852,7 +1203,7 @@ with col1:
     st.markdown("## 📚 Book List")
 with col2:
     if st.button("Add Book", type = "tertiary"):
-        write_on_me()
+        add_book_dialog()
 
 column_size = [1, 4, 1, 1, 1,2] 
 
@@ -865,7 +1216,7 @@ with cont:
         # Table Header
         header_col1, header_col2, header_col3, header_col4, header_col5, header_col6 = st.columns(column_size)
         with header_col1: st.markdown("###### ID")
-        with header_col2: st.markdown("###### Title & ISBN")
+        with header_col2: st.markdown("###### Title")
         with header_col3: st.markdown("###### Date")
         with header_col4: st.markdown("###### ISBN")
         with header_col5: st.markdown("###### Status")
@@ -879,7 +1230,6 @@ with cont:
                 col1, col2, col3, col4, col5, col6 = st.columns(column_size)
                 with col1: st.write(row['book_id'])
                 with col2: 
-                    # Combine Title with green Author Count (with grayish background), followed by ISBN
                     author_count = author_count_dict.get(row['book_id'], 0)
                     st.markdown(
                         f"{row['title']} <span style='color: #2aba25; font-size:14px; margin-left: 5px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;'>{author_count}</span>",
@@ -909,37 +1259,3 @@ with cont:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
-
-
-# with col7:
-#                 # Reordered buttons: ISBN first, View last
-#                 btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
-#                 with btn_col1:
-#                     if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}"):
-#                         manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
-#                 with btn_col2:
-#                     if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}"):
-#                         edit_author_dialog(row['book_id'])  # Ensure edit_author_dialog is defined
-#                 with btn_col3:
-#                     if st.button(":material/manufacturing:", key=f"edit_ops_{row['book_id']}"):
-#                         st.write(f"Editing operations for book {row['book_id']} (implement edit logic here)")
-#                 with btn_col4:
-#                     if st.button(":material/visibility:", key=f"view_{row['book_id']}"):
-#                         st.write(f"Viewing book {row['book_id']} (implement view logic here)")
-
-
-
-
-                    # with col7:
-                    #    with st.popover(":material/settings: Actions", use_container_width=True):
-                    #         if st.button("Edit ISBN", key=f"isbn_{row['book_id']}"):
-                    #             manage_isbn_dialog(row['book_id'], row['apply_isbn'], row['isbn'])
-                    #         if st.button("Edit Price", key=f"price_btn_{row['book_id']}"):
-                    #             manage_price_dialog(row['book_id'], row['price'])
-                    #         if st.button("Edit Authors", key=f"authors_{row['book_id']}"):
-                    #             edit_author_dialog(row['book_id'])
-                    #         if st.button("Edit Operations", key=f"ops_{row['book_id']}"):
-                    #             edit_operation_dialog(row['book_id'])
-                    #         if st.button("Edit Print & Delivery", key=f"delivery_{row['book_id']}"):
-                    #             edit_inventory_delivery_dialog(row['book_id'])
-                    # st.markdown('</div>', unsafe_allow_html=True)
