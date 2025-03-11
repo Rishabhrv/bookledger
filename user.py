@@ -1456,13 +1456,10 @@ def manage_price_dialog(book_id, current_price):
 ##################################--------------- Book Table ----------------------------##################################
 ###################################################################################################################################
 
-import streamlit as st
-import pandas as pd
-
-# Group books by month
+# Group books by month (for display purposes only, not for pagination)
 grouped_books = books.groupby(pd.Grouper(key='date', freq='ME'))
 
-# Reverse the order of grouped months
+# Reverse the order of grouped months (for display purposes)
 reversed_grouped_books = reversed(list(grouped_books))
 
 # Query to get author count per book
@@ -1475,7 +1472,7 @@ author_counts = conn.query(author_count_query)
 # Convert to dictionary for easy lookup
 author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_count']))
 
-# Custom CSS for modern table styling
+# Custom CSS for modern table styling and pagination controls
 st.markdown("""
     <style>
             
@@ -1517,7 +1514,36 @@ st.markdown("""
             border-left: 3px solid #f54242; /* Blue side border */
             display: inline-block;
         }
-            
+
+        /* Pagination Styling */
+        .pagination-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-top: 20px;
+            gap: 10px;
+        }
+        .pagination-button {
+            background-color: #007bff;
+            color: white;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 14px;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .pagination-button:disabled {
+            background-color: #d3d3d3;
+            cursor: not-allowed;
+        }
+        .pagination-button:hover:not(:disabled) {
+            background-color: #0056b3;
+        }
+        .pagination-info {
+            font-size: 14px;
+            color: #343a40;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -1543,14 +1569,17 @@ def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, e
     if year:
         filtered_df = filtered_df[filtered_df['date'].dt.year == year]
     if start_date:
+        start_date = pd.Timestamp(start_date)
         filtered_df = filtered_df[filtered_df['date'] >= start_date]
     if end_date:
+        end_date = pd.Timestamp(end_date)
         filtered_df = filtered_df[filtered_df['date'] <= end_date]
     return filtered_df
 
 st.markdown("## 📚 Book List")
-# Search Functionality
-srcol1, srcol2, srcol3 = st.columns([8, 3,1])  # Added an extra column for the popover
+
+# Search Functionality and Page Size Selection
+srcol1, srcol2, srcol3, srcol4 = st.columns([8, 3, 1, 1])  # Added an extra column for page size
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, or date...", key="search_bar",
@@ -1576,6 +1605,8 @@ with srcol2:
             st.session_state.start_date_filter = None
         if 'end_date_filter' not in st.session_state:
             st.session_state.end_date_filter = None
+        if 'clear_filters_trigger' not in st.session_state:
+            st.session_state.clear_filters_trigger = False
 
         # Day filter
         st.session_state.day_filter = st.selectbox("Filter by Day", options=[None] + list(unique_days), 
@@ -1595,8 +1626,19 @@ with srcol2:
         # Date range filter
         min_date = books['date'].min().date()
         max_date = books['date'].max().date()
-        st.session_state.start_date_filter = st.date_input("Start Date", value=st.session_state.start_date_filter, min_value=min_date, max_value=max_date, key="start_date")
-        st.session_state.end_date_filter = st.date_input("End Date", value=st.session_state.end_date_filter, min_value=min_date, max_value=max_date, key="end_date")
+
+        # Use unique keys for date inputs to force re-rendering when clearing filters
+        start_date_key = "start_date" if not st.session_state.clear_filters_trigger else f"start_date_{st.session_state.clear_filters_trigger}"
+        end_date_key = "end_date" if not st.session_state.clear_filters_trigger else f"end_date_{st.session_state.clear_filters_trigger}"
+        st.session_state.start_date_filter = st.date_input("Start Date", value=st.session_state.start_date_filter, min_value=min_date, max_value=max_date, key=start_date_key)
+        st.session_state.end_date_filter = st.date_input("End Date", value=st.session_state.end_date_filter, min_value=min_date, max_value=max_date, key=end_date_key)
+
+        # Validate date range
+        if st.session_state.start_date_filter and st.session_state.end_date_filter:
+            if st.session_state.start_date_filter > st.session_state.end_date_filter:
+                st.error("Start Date must be before or equal to End Date.")
+                st.session_state.start_date_filter = None
+                st.session_state.end_date_filter = None
 
         # Apply filters
         applied_filters = []
@@ -1620,7 +1662,7 @@ with srcol2:
                 st.session_state.start_date_filter, 
                 st.session_state.end_date_filter
             )
-            st.success(f"Applied filters: {', '.join(applied_filters)}")
+            st.success(f"Filter {', '.join(applied_filters)}")
 
         # Clear filters button
         if st.button("Clear Filters", key="clear_filters"):
@@ -1629,32 +1671,77 @@ with srcol2:
             st.session_state.year_filter = None
             st.session_state.start_date_filter = None
             st.session_state.end_date_filter = None
-            st.rerun()  # Rerun the app to reset the UI
+            st.session_state.clear_filters_trigger = not st.session_state.clear_filters_trigger
+            st.rerun()
 
+# Add page size selection
+with srcol4:
+    page_size_options = [10, 100, "All"]
+    if 'page_size' not in st.session_state:
+        st.session_state.page_size = 10  # Default page size
+    st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
+                                              label_visibility="collapsed")
+
+# Add New Book button
 with srcol3:
     if st.button("➕", type="secondary", help="Add New Book", use_container_width=True):
         add_book_dialog()
 
+# Pagination Logic (Modified)
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+
+# Apply sorting to the filtered books (sort by date in descending order)
+filtered_books = filtered_books.sort_values(by='date', ascending=False)
+
+# Determine if pagination should be enabled
+# Pagination is enabled only if page_size is "All" and no search/filter is applied
+pagination_enabled = st.session_state.page_size == "All" and not (
+    search_query or any([
+        st.session_state.day_filter,
+        st.session_state.month_filter,
+        st.session_state.year_filter,
+        st.session_state.start_date_filter,
+        st.session_state.end_date_filter
+    ])
+)
+
+# Apply pagination or limit the number of books based on page size
+if pagination_enabled:
+    # Pagination is enabled: Show all books with pagination
+    page_size = 15  # Default page size for pagination when "All" is selected
+    total_books = len(filtered_books)
+    total_pages = max(1, (total_books + page_size - 1) // page_size)
+    st.session_state.current_page = min(st.session_state.current_page, total_pages)  # Ensure current page is valid
+    start_idx = (st.session_state.current_page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_books = filtered_books.iloc[start_idx:end_idx]
+else:
+    # Pagination is disabled: Show only the top N books based on page_size
+    if st.session_state.page_size == "All":
+        paginated_books = filtered_books
+    else:
+        page_size = st.session_state.page_size
+        paginated_books = filtered_books.head(page_size)
+
+# Display the table
 column_size = [1, 4, 1, 1, 1, 2]
 
 cont = st.container(border=False)
 with cont:
-    if filtered_books.empty:
+    if paginated_books.empty:
         st.warning("No books available.")
     else:
         if search_query:
-            st.warning(f"Showing {len(filtered_books)} results for '{search_query}'")
+            st.warning(f"Showing {len(paginated_books)} results for '{search_query}'")
 
-        # Group and sort paginated books by month
-        grouped_books = filtered_books.groupby(pd.Grouper(key='date', freq='ME'))
+        # Group and sort paginated books by month (for display purposes only)
+        grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
 
         # Table Body
         for month, monthly_books in reversed_grouped_books:
-            # Sort books within each month by date (recent first)
             monthly_books = monthly_books.sort_values(by='date', ascending=False)
-            
-            # Add the number of books next to the month name
             num_books = len(monthly_books)
             st.markdown(f'<div class="month-header">{month.strftime("%B %Y")} ({num_books} books)</div>', unsafe_allow_html=True)
             
@@ -1695,6 +1782,41 @@ with cont:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
+
+        # Pagination Controls (only show if pagination is enabled)
+        if pagination_enabled:
+            total_books = len(filtered_books)
+            total_pages = max(1, (total_books + page_size - 1) // page_size)
+            current_page = st.session_state.current_page
+
+            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+            with col1:
+                st.markdown('<div class="pagination-container">', unsafe_allow_html=True)
+                prev_disabled = current_page == 1
+                next_disabled = current_page == total_pages
+            with col2:
+                # Previous Button
+                if st.button("Previous", key="prev_page", disabled=prev_disabled, help="Go to previous page"):
+                    st.session_state.current_page -= 1
+                    st.rerun()
+            with col3:
+                # Page Info
+                st.markdown(f'<span class="pagination-info">Page {current_page} of {total_pages}</span>', unsafe_allow_html=True)
+            with col4:
+                # Next Button
+                if st.button("Next", key="next_page", disabled=next_disabled, help="Go to next page"):
+                    st.session_state.current_page += 1
+                    st.rerun()
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+
+                
+
+
+
+                
+
 
 
 # def example():
