@@ -101,12 +101,18 @@ def add_book_dialog():
             col1, col2 = st.columns(2)
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
+            
+            # Add the "Single Author" toggle (default is off, meaning multiple authors allowed)
+            is_single_author = st.toggle("Single Author Book?", value=False, key="single_author_toggle",
+                                         help="Enable this to restrict the book to a single author.")
+            
             return {
                 "title": book_title,
-                "date": book_date
+                "date": book_date,
+                "is_single_author": is_single_author  # Add this to book_data
             }
 
-    def author_details_section(conn):
+    def author_details_section(conn, is_single_author):
         if "authors" not in st.session_state:
             # Initialize exactly 4 authors with default positions
             st.session_state.authors = [
@@ -138,48 +144,52 @@ def add_book_dialog():
             tabs = st.tabs(tab_titles)
 
             for i, tab in enumerate(tabs):
+                # Disable tabs for Authors 2, 3, and 4 if "Single Author" is toggled on
+                disabled = is_single_author and i > 0
                 with tab:
-                    # Author selection or new author
-                    selected_author = st.selectbox(
-                        f"Select Author {i+1}",
-                        author_options,
-                        key=f"author_select_{i}",
-                        help="Select an existing author or 'Add New Author' to enter new details."
-                    )
+                    if disabled:
+                        st.warning("Can't Add More Authors in 'Single Author' Mode")
+                    else:
+                        # Author selection or new author
+                        selected_author = st.selectbox(
+                            f"Select Author {i+1}",
+                            author_options,
+                            key=f"author_select_{i}",
+                            help="Select an existing author or 'Add New Author' to enter new details.",
+                            disabled=disabled
+                        )
 
-                    if selected_author != "Add New Author" and selected_author:
-                        selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
-                        selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
-                        if selected_author_details:
-                            st.session_state.authors[i]["name"] = selected_author_details.name
-                            st.session_state.authors[i]["email"] = selected_author_details.email
-                            st.session_state.authors[i]["phone"] = selected_author_details.phone
-                            st.session_state.authors[i]["author_id"] = selected_author_details.author_id
-                    elif selected_author == "Add New Author":
-                        st.session_state.authors[i]["author_id"] = None  # Reset for new author
+                        if selected_author != "Add New Author" and selected_author and not disabled:
+                            selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
+                            selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
+                            if selected_author_details:
+                                st.session_state.authors[i]["name"] = selected_author_details.name
+                                st.session_state.authors[i]["email"] = selected_author_details.email
+                                st.session_state.authors[i]["phone"] = selected_author_details.phone
+                                st.session_state.authors[i]["author_id"] = selected_author_details.author_id
+                        elif selected_author == "Add New Author" and not disabled:
+                            st.session_state.authors[i]["author_id"] = None  # Reset for new author
 
-                    col1, col2 = st.columns(2)
-                    st.session_state.authors[i]["name"] = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=f"name_{i}", placeholder="Enter Author name..")
-                    available_positions = ["1st", "2nd", "3rd", "4th"]
-                    taken_positions = [a["author_position"] for a in st.session_state.authors if a != st.session_state.authors[i]]
-                    available_positions = [p for p in available_positions if p not in taken_positions or p == st.session_state.authors[i]["author_position"]]
-                    st.session_state.authors[i]["author_position"] = col2.selectbox(
-                        f"Position {i+1}",
-                        available_positions,
-                        index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
-                        key=f"author_position_{i}"
-                    )
-                    
-                    
-                    col3, col4 = st.columns(2)
-                    st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..")
-                    st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..")
-                    
-                    
-                    col5, col6 = st.columns(2)
-                    st.session_state.authors[i]["corresponding_agent"] = col5.text_input(f"Corresponding Agent {i+1}", st.session_state.authors[i]["corresponding_agent"], key=f"agent_{i}", placeholder="Enter agent name..")
-                    st.session_state.authors[i]["publishing_consultant"] = col6.text_input(f"Publishing Consultant {i+1}", st.session_state.authors[i]["publishing_consultant"], key=f"consultant_{i}", placeholder="Enter consultant name..")
-                    
+                        col1, col2 = st.columns(2)
+                        st.session_state.authors[i]["name"] = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=f"name_{i}", placeholder="Enter Author name..", disabled=disabled)
+                        available_positions = ["1st", "2nd", "3rd", "4th"]
+                        taken_positions = [a["author_position"] for a in st.session_state.authors if a != st.session_state.authors[i]]
+                        available_positions = [p for p in available_positions if p not in taken_positions or p == st.session_state.authors[i]["author_position"]]
+                        st.session_state.authors[i]["author_position"] = col2.selectbox(
+                            f"Position {i+1}",
+                            available_positions,
+                            index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
+                            key=f"author_position_{i}",
+                            disabled=disabled
+                        )
+                        
+                        col3, col4 = st.columns(2)
+                        st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..", disabled=disabled)
+                        st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
+                        
+                        col5, col6 = st.columns(2)
+                        st.session_state.authors[i]["corresponding_agent"] = col5.text_input(f"Corresponding Agent {i+1}", st.session_state.authors[i]["corresponding_agent"], key=f"agent_{i}", placeholder="Enter agent name..", disabled=disabled)
+                        st.session_state.authors[i]["publishing_consultant"] = col6.text_input(f"Publishing Consultant {i+1}", st.session_state.authors[i]["publishing_consultant"], key=f"consultant_{i}", placeholder="Enter consultant name..", disabled=disabled)
 
         return st.session_state.authors
 
@@ -197,7 +207,7 @@ def add_book_dialog():
         """Check if an author is 'active' (i.e., has at least one non-empty field)."""
         return bool(author["name"] or author["email"] or author["phone"] or author["corresponding_agent"] or author["publishing_consultant"])
 
-    def validate_form(book_data, author_data):
+    def validate_form(book_data, author_data, is_single_author):
         """Validate that all required fields are filled for book and active authors, and positions are unique."""
         errors = []
 
@@ -211,6 +221,10 @@ def add_book_dialog():
         active_authors = [a for a in author_data if is_author_active(a)]
         if not active_authors:
             errors.append("At least one author must be provided.")
+
+        # If "Single Author" is toggled on, ensure exactly one author is active
+        if is_single_author and len(active_authors) > 1:
+            errors.append("Only one author is allowed when 'Single Author' is selected.")
 
         # Track existing author IDs to prevent duplicates
         existing_author_ids = set()
@@ -242,23 +256,23 @@ def add_book_dialog():
     with st.container():
         book_data = book_details_section()
         st.markdown(" ")
-        author_data = author_details_section(conn)
+        author_data = author_details_section(conn, book_data["is_single_author"])
 
     # --- Save, Clear, and Cancel Buttons ---
-    col1, col2= st.columns([7,1])
+    col1, col2 = st.columns([7,1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            errors = validate_form(book_data, author_data)
+            errors = validate_form(book_data, author_data, book_data["is_single_author"])
             if errors:
                 st.error("\n".join(errors), icon="🚨")
             else:
                 with conn.session as s:
                     try:
-                        # Insert book
+                        # Insert book (include is_single_author)
                         s.execute(text("""
-                            INSERT INTO books (title, date)
-                            VALUES (:title, :date)
-                        """), params={"title": book_data["title"], "date": book_data["date"]})
+                            INSERT INTO books (title, date, is_single_author)
+                            VALUES (:title, :date, :is_single_author)
+                        """), params={"title": book_data["title"], "date": book_data["date"], "is_single_author": book_data["is_single_author"]})
                         book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
                         # Process only active authors
@@ -1676,9 +1690,9 @@ with srcol2:
 
 # Add page size selection
 with srcol4:
-    page_size_options = [10, 100, "All"]
+    page_size_options = [50, 100, "All"]
     if 'page_size' not in st.session_state:
-        st.session_state.page_size = 10  # Default page size
+        st.session_state.page_size = 50  # Default page size
     st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
                                               label_visibility="collapsed")
 
@@ -1709,7 +1723,7 @@ pagination_enabled = st.session_state.page_size == "All" and not (
 # Apply pagination or limit the number of books based on page size
 if pagination_enabled:
     # Pagination is enabled: Show all books with pagination
-    page_size = 15  # Default page size for pagination when "All" is selected
+    page_size = 100  # Default page size for pagination when "All" is selected
     total_books = len(filtered_books)
     total_pages = max(1, (total_books + page_size - 1) // page_size)
     st.session_state.current_page = min(st.session_state.current_page, total_pages)  # Ensure current page is valid
@@ -1809,6 +1823,10 @@ with cont:
                     st.rerun()
 
                 st.markdown('</div>', unsafe_allow_html=True)
+
+        # Add informational message if pagination is disabled due to specific page size
+        if not pagination_enabled and st.session_state.page_size != "All":
+            st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
 
 
                 
