@@ -6,7 +6,6 @@ import time
 from streamlit_extras.let_it_rain import rain
 import re
 
-
 st.cache_data.clear()
 
 # --- Database Connection ---
@@ -40,12 +39,12 @@ if not pd.api.types.is_datetime64_any_dtype(books['date']):
 
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
-        return f"**<span style='color:#47b354; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
+        return f"**<span style='color:#47b354; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
     elif apply_isbn == 0:
-        return f"**<span style='color:#eb7150; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
+        return f"**<span style='color:#eb7150; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
-        return f"**<span style='color:#e0ab19; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
-    return f"**<span style='color:#000000; background-color:#f7f7f7; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
+        return f"**<span style='color:#e0ab19; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
+    return f"**<span style='color:#000000; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
 
 # Function to get status with outlined pill styling
@@ -54,7 +53,7 @@ def get_status_pill(deliver_value):
     pill_style = (
         "padding: 2px 6px; "  
         "border-radius: 4px; " 
-        "background-color: #f7f7f7; "  
+        "background-color: #ffffff; "  
         "font-size: 14px; "  
         "font-weight: bold; "  
         "display: inline-block;"  
@@ -1229,13 +1228,18 @@ def insert_author(conn, name, email, phone):
 ##################################--------------- Edit Operations Dialog ----------------------------##################################
 ###################################################################################################################################
 
+@st.cache_data
+def fetch_unique_names(column):
+    query = f"SELECT DISTINCT {column} AS name FROM books WHERE {column} IS NOT NULL AND {column} != ''"
+    return sorted(conn.query(query)['name'].tolist())
+
 @st.dialog("Edit Operation Details", width='large')
-def edit_operation_dialog(book_id):
+def edit_operation_dialog(book_id, conn):
     # Fetch book details for title
-    book_details = fetch_book_details(book_id,conn)
+    book_details = fetch_book_details(book_id, conn)
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
-        col1,col2 = st.columns([6,1])
+        col1, col2 = st.columns([6, 1])
         with col1:
             st.markdown(f"## {book_id} : {book_title}")
         with col2:
@@ -1245,29 +1249,38 @@ def edit_operation_dialog(book_id):
         st.markdown(f"### Operations for Book ID: {book_id}")
         st.warning("Book title not found.")
 
-    # Custom CSS for better aesthetics
+    # Streamlit-aligned CSS
     st.markdown("""
         <style>
-        .info-box { 
-            background-color: #f9f9f9; 
-            padding: 10px; 
-            border-radius: 8px; 
-            margin-bottom: 10px; 
-            box-shadow: 2px 2px 10px rgba(0,0,0,0.1); 
-        }
-        .stTextInput>div>div>input, .stDateInput>div>div>input, .stTimeInput>div>div>input {
-            border-radius: 5px;
-            padding: 6px;
-        }
-        .stTab {
+        .status-box {
+            padding: 6px 8px;
+            border-radius: 4px;
+            margin: 0 4px 4px 0;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.4;
+            border: 1px solid #e6e6e6;
             background-color: #ffffff;
-            padding: 10px;
-            border-radius: 8px;
+        }
+        .status-complete {
+            background-color: #f0f9eb;
+            border-color: #b7e1a1;
+            color: #2e7d32;
+        }
+        .status-ongoing {
+            background-color: #fff4e6;
+            border-color: #ffd8a8;
+            color: #e65100;
+        }
+        .status-pending {
+            background-color: #f6f6f6;
+            border-color: #d9d9d9;
+            color: #666666;
         }
         </style>
     """, unsafe_allow_html=True)
 
-    # Fetch current operation details from the books table
+    # Fetch operation details
     query = f"""
         SELECT writing_start, writing_end, writing_by, 
                proofreading_start, proofreading_end, proofreading_by, 
@@ -1284,14 +1297,87 @@ def edit_operation_dialog(book_id):
     else:
         current_data = book_operations.iloc[0].to_dict()
 
+    # Streamlit-style Status Overview
+    cols = st.columns(5, gap="small")
+    operations = [
+        ("Writing", "writing_start", "writing_end"),
+        ("Proofreading", "proofreading_start", "proofreading_end"),
+        ("Formatting", "formatting_start", "formatting_end"),
+        ("Front Cover", "front_cover_start", "front_cover_end"),
+        ("Back Cover", "back_cover_start", "back_cover_end")
+    ]
+
+    for i, (op_name, start_field, end_field) in enumerate(operations):
+        with cols[i]:
+            start = current_data.get(start_field)
+            end = current_data.get(end_field)
+            
+            # Determine status
+            if end:
+                status_class = "status-complete"
+                end_date = str(end).split()[0] if end else ""
+                status_text = f"Done<br>{end_date}"
+            elif start:
+                status_class = "status-ongoing"
+                status_text = "Ongoing"
+            else:
+                status_class = "status-pending"
+                status_text = "Pending"
+            
+            # Streamlit-integrated status display
+            html = f"""
+                <div class="status-box {status_class}">
+                    <strong>{op_name}</strong><br>
+                    {status_text}
+                </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
+
+    # Your existing tab code would follow here...
+
+    writing_names = fetch_unique_names("writing_by")
+    proofreading_names = fetch_unique_names("proofreading_by")
+    formatting_names = fetch_unique_names("formatting_by")
+    front_cover_names = fetch_unique_names("front_cover_by")
+    back_cover_names = fetch_unique_names("back_cover_by")
+
+    # Sort the lists and ensure no empty entries
+    writing_names = sorted([name for name in writing_names if name])
+    proofreading_names = sorted([name for name in proofreading_names if name])
+    formatting_names = sorted([name for name in formatting_names if name])
+    front_cover_names = sorted([name for name in front_cover_names if name])
+    back_cover_names = sorted([name for name in back_cover_names if name])
+
+    # Initialize session state for text inputs
+    if f"writing_by_{book_id}" not in st.session_state:
+        st.session_state[f"writing_by_{book_id}"] = current_data.get('writing_by', "")
+    if f"proofreading_by_{book_id}" not in st.session_state:
+        st.session_state[f"proofreading_by_{book_id}"] = current_data.get('proofreading_by', "")
+    if f"formatting_by_{book_id}" not in st.session_state:
+        st.session_state[f"formatting_by_{book_id}"] = current_data.get('formatting_by', "")
+    if f"front_cover_by_{book_id}" not in st.session_state:
+        st.session_state[f"front_cover_by_{book_id}"] = current_data.get('front_cover_by', "")
+    if f"back_cover_by_{book_id}" not in st.session_state:
+        st.session_state[f"back_cover_by_{book_id}"] = current_data.get('back_cover_by', "")
+
     # Define tabs for each operation
     tab1, tab2, tab3, tab4 = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
 
     # Writing Tab
     with tab1:
         with st.form(key=f"writing_form_{book_id}", border=False):
-
-            writing_by = st.text_input("Writing By", value=current_data.get('writing_by', ""), key=f"writing_by_{book_id}")
+            if writing_names:  # Only show pills if there are names
+                selected_writer = st.pills("Writers", options=writing_names, key=f"writing_pills_{book_id}")
+                if selected_writer:
+                    st.session_state[f"writing_by_{book_id}"] = selected_writer
+            else:
+                st.write("No writers available yet.")
+            
+            writing_by = st.text_input(
+                "Writing By", 
+                value=st.session_state[f"writing_by_{book_id}"], 
+                key=f"writing_by_input_{book_id}"
+            )
             col1, col2 = st.columns(2)
             with col1:
                 writing_start_date = st.date_input("Start Date", value=current_data.get('writing_start', None), key=f"writing_start_date_{book_id}")
@@ -1302,19 +1388,33 @@ def edit_operation_dialog(book_id):
             if st.form_submit_button("💾 Save Writing", use_container_width=True):
                 writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
                 writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
-                updates = {
-                    "writing_start": writing_start,
-                    "writing_end": writing_end,
-                    "writing_by": writing_by if writing_by else None
-                }
-                update_operation_details(book_id, updates)
-                st.success("✅ Updated Writing details")
+                if writing_start and writing_end and writing_start > writing_end:
+                    st.error("Start date/time must be before end date/time.")
+                else:
+                    updates = {
+                        "writing_start": writing_start,
+                        "writing_end": writing_end,
+                        "writing_by": writing_by if writing_by else None
+                    }
+                    update_operation_details(book_id, updates)
+                    st.session_state[f"writing_by_{book_id}"] = writing_by  # Update session state after save
+                    st.success("✅ Updated Writing details")
 
     # Proofreading Tab
     with tab2:
         with st.form(key=f"proofreading_form_{book_id}", border=False):
-            proofreading_by = st.text_input("Proofreading By", value=current_data.get('proofreading_by', ""), key=f"proofreading_by_{book_id}")
-
+            if proofreading_names:
+                selected_proofreader = st.pills("Proofreaders", options=proofreading_names, key=f"proofreading_pills_{book_id}")
+                if selected_proofreader:
+                    st.session_state[f"proofreading_by_{book_id}"] = selected_proofreader
+            else:
+                st.write("No proofreaders available yet.")
+            
+            proofreading_by = st.text_input(
+                "Proofreading By", 
+                value=st.session_state[f"proofreading_by_{book_id}"], 
+                key=f"proofreading_by_input_{book_id}"
+            )
             col1, col2 = st.columns(2)
             with col1:
                 proofreading_start_date = st.date_input("Start Date", value=current_data.get('proofreading_start', None), key=f"proofreading_start_date_{book_id}")
@@ -1325,18 +1425,33 @@ def edit_operation_dialog(book_id):
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
                 proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
                 proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
-                updates = {
-                    "proofreading_start": proofreading_start,
-                    "proofreading_end": proofreading_end,
-                    "proofreading_by": proofreading_by if proofreading_by else None
-                }
-                update_operation_details(book_id, updates)
-                st.success("✅ Updated Proofreading details")
+                if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
+                    st.error("Start date/time must be before end date/time.")
+                else:
+                    updates = {
+                        "proofreading_start": proofreading_start,
+                        "proofreading_end": proofreading_end,
+                        "proofreading_by": proofreading_by if proofreading_by else None
+                    }
+                    update_operation_details(book_id, updates)
+                    st.session_state[f"proofreading_by_{book_id}"] = proofreading_by  # Update session state after save
+                    st.success("✅ Updated Proofreading details")
 
     # Formatting Tab
     with tab3:
         with st.form(key=f"formatting_form_{book_id}", border=False):
-            formatting_by = st.text_input("Formatting By", value=current_data.get('formatting_by', ""), key=f"formatting_by_{book_id}")
+            if formatting_names:
+                selected_formatter = st.pills("Formatters", options=formatting_names, key=f"formatting_pills_{book_id}")
+                if selected_formatter:
+                    st.session_state[f"formatting_by_{book_id}"] = selected_formatter
+            else:
+                st.write("No formatters available yet.")
+            
+            formatting_by = st.text_input(
+                "Formatting By", 
+                value=st.session_state[f"formatting_by_{book_id}"], 
+                key=f"formatting_by_input_{book_id}"
+            )
             col1, col2 = st.columns(2)
             with col1:
                 formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start', None), key=f"formatting_start_date_{book_id}")
@@ -1347,21 +1462,35 @@ def edit_operation_dialog(book_id):
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                 formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
-                updates = {
-                    "formatting_start": formatting_start,
-                    "formatting_end": formatting_end,
-                    "formatting_by": formatting_by if formatting_by else None
-                }
-                update_operation_details(book_id, updates)
-                st.success("✅ Updated Formatting details")
+                if formatting_start and formatting_end and formatting_start > formatting_end:
+                    st.error("Start date/time must be before end date/time.")
+                else:
+                    updates = {
+                        "formatting_start": formatting_start,
+                        "formatting_end": formatting_end,
+                        "formatting_by": formatting_by if formatting_by else None
+                    }
+                    update_operation_details(book_id, updates)
+                    st.session_state[f"formatting_by_{book_id}"] = formatting_by  # Update session state after save
+                    st.success("✅ Updated Formatting details")
 
-    # Updated Book Cover Tab
+    # Book Cover Tab
     with tab4:
         with st.expander("📚 Front Cover Details", expanded=False):
-            # Front Cover Section
             st.subheader("Front Cover")
             with st.form(key=f"front_cover_form_{book_id}", border=False):
-                front_cover_by = st.text_input("Front Cover By", value=current_data.get('front_cover_by', ""), key=f"front_cover_by_{book_id}")
+                if front_cover_names:
+                    selected_front_cover = st.pills("Front Cover Designers", options=front_cover_names, key=f"front_cover_pills_{book_id}")
+                    if selected_front_cover:
+                        st.session_state[f"front_cover_by_{book_id}"] = selected_front_cover
+                else:
+                    st.write("No front cover designers available yet.")
+                
+                front_cover_by = st.text_input(
+                    "Front Cover By", 
+                    value=st.session_state[f"front_cover_by_{book_id}"], 
+                    key=f"front_cover_by_input_{book_id}"
+                )
                 col1, col2 = st.columns(2)
                 with col1:
                     front_cover_start_date = st.date_input("Front Start Date", value=current_data.get('front_cover_start', None), key=f"front_cover_start_date_{book_id}")
@@ -1372,10 +1501,20 @@ def edit_operation_dialog(book_id):
                 front_submit = st.form_submit_button("💾 Save Front Cover", use_container_width=True)
 
         with st.expander("📚 Back Cover Details", expanded=False):
-            # Back Cover Section
             st.subheader("Back Cover")
             with st.form(key=f"back_cover_form_{book_id}", border=False):
-                back_cover_by = st.text_input("Back Cover By", value=current_data.get('back_cover_by', ""), key=f"back_cover_by_{book_id}")
+                if back_cover_names:
+                    selected_back_cover = st.pills("Back Cover Designers", options=back_cover_names, key=f"back_cover_pills_{book_id}")
+                    if selected_back_cover:
+                        st.session_state[f"back_cover_by_{book_id}"] = selected_back_cover
+                else:
+                    st.write("No back cover designers available yet.")
+                
+                back_cover_by = st.text_input(
+                    "Back Cover By", 
+                    value=st.session_state[f"back_cover_by_{book_id}"], 
+                    key=f"back_cover_by_input_{book_id}"
+                )
                 col1, col2 = st.columns(2)
                 with col1:
                     back_cover_start_date = st.date_input("Back Start Date", value=current_data.get('back_cover_start', None), key=f"back_cover_start_date_{book_id}")
@@ -1389,25 +1528,32 @@ def edit_operation_dialog(book_id):
         if front_submit:
             front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
             front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
-            updates = {
-                "front_cover_start": front_cover_start,
-                "front_cover_end": front_cover_end,
-                "front_cover_by": front_cover_by if front_cover_by else None
-            }
-            update_operation_details(book_id, updates)
-            st.success("✅ Updated Front Cover details")
-            
+            if front_cover_start and front_cover_end and front_cover_start > front_cover_end:
+                    st.error("Start date/time must be before end date/time.")
+            else:
+                updates = {
+                    "front_cover_start": front_cover_start,
+                    "front_cover_end": front_cover_end,
+                    "front_cover_by": front_cover_by if front_cover_by else None
+                }
+                update_operation_details(book_id, updates)
+                st.session_state[f"front_cover_by_{book_id}"] = front_cover_by  # Update session state after save
+                st.success("✅ Updated Front Cover details")
 
         if back_submit:
             back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
             back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
-            updates = {
-                "back_cover_start": back_cover_start,
-                "back_cover_end": back_cover_end,
-                "back_cover_by": back_cover_by if back_cover_by else None
-            }
-            update_operation_details(book_id, updates)
-            st.success("✅ Updated Back Cover details")
+            if back_cover_start and back_cover_end and back_cover_start > back_cover_end:
+                    st.error("Start date/time must be before end date/time.")
+            else:
+                updates = {
+                    "back_cover_start": back_cover_start,
+                    "back_cover_end": back_cover_end,
+                    "back_cover_by": back_cover_by if back_cover_by else None
+                }
+                update_operation_details(book_id, updates)
+                st.session_state[f"back_cover_by_{book_id}"] = back_cover_by  # Update session state after save
+                st.success("✅ Updated Back Cover details")
 
 def update_operation_details(book_id, updates):
     """Update operation details in the books table."""
@@ -1955,9 +2101,6 @@ def update_inventory_delivery_details(book_id, updates, conn):
 # Group books by month (for display purposes only, not for pagination)
 grouped_books = books.groupby(pd.Grouper(key='date', freq='ME'))
 
-# Reverse the order of grouped months (for display purposes)
-reversed_grouped_books = reversed(list(grouped_books))
-
 # Query to get author count per book
 author_count_query = """
     SELECT book_id, COUNT(author_id) as author_count
@@ -1978,7 +2121,7 @@ st.markdown("""
         }
         /* Ensure the first element has minimal spacing */
         .block-container {
-            padding-top: 42px !important;  /* Small padding for breathing room */
+            padding-top: 25px !important;  /* Small padding for breathing room */
         }
 
         .data-row {
@@ -2085,49 +2228,87 @@ with srcol1:
 # Add filtering popover next to the Add New Book button
 with srcol2:
     with st.popover("Filter by Date", use_container_width=True):
-        # Extract unique days, months, and years from the dataset
-        unique_days = sorted(books['date'].dt.day.unique())
-        unique_months = sorted(books['date'].dt.month.unique())
+        # Extract unique years from the dataset
         unique_years = sorted(books['date'].dt.year.unique())
 
-        # Use session state to manage filter values (for clearing filters)
-        if 'day_filter' not in st.session_state:
-            st.session_state.day_filter = None
-        if 'month_filter' not in st.session_state:
-            st.session_state.month_filter = None
+        # Use session state to manage filter values
         if 'year_filter' not in st.session_state:
             st.session_state.year_filter = None
+        if 'month_filter' not in st.session_state:
+            st.session_state.month_filter = None
         if 'start_date_filter' not in st.session_state:
             st.session_state.start_date_filter = None
         if 'end_date_filter' not in st.session_state:
             st.session_state.end_date_filter = None
         if 'clear_filters_trigger' not in st.session_state:
-            st.session_state.clear_filters_trigger = False
+            st.session_state.clear_filters_trigger = 0  # Use a counter instead of boolean
 
-        # Day filter
-        st.session_state.day_filter = st.selectbox("Filter by Day", options=[None] + list(unique_days), 
-                                                   index=0 if st.session_state.day_filter is None else list(unique_days).index(st.session_state.day_filter) + 1)
+        # Year filter with pills
+        st.write("Filter by Year:")
+        year_options = [str(year) for year in unique_years]
+        selected_year = st.pills(
+            "Years",
+            options=year_options,
+            key=f"year_pills_{st.session_state.clear_filters_trigger}"  # Unique key for re-rendering
+            , label_visibility ='collapsed'
+        )
+        # Update session state only if a year is selected
+        if selected_year:
+            st.session_state.year_filter = int(selected_year)
+        elif selected_year is None and "year_pills_callback" not in st.session_state:
+            st.session_state.year_filter = None
 
-        # Month filter (convert month number to name for better readability)
-        month_names = {1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
-                       7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"}
-        st.session_state.month_filter = st.selectbox("Filter by Month", options=[None] + list(unique_months),
-                                                     index=0 if st.session_state.month_filter is None else list(unique_months).index(st.session_state.month_filter) + 1,
-                                                     format_func=lambda x: month_names.get(x, "None"))
-
-        # Year filter
-        st.session_state.year_filter = st.selectbox("Filter by Year", options=[None] + list(unique_years), 
-                                                    index=0 if st.session_state.year_filter is None else list(unique_years).index(st.session_state.year_filter) + 1)
+        # Month filter with pills (only shown if a year is selected)
+        if st.session_state.year_filter:
+            # Filter books by selected year to get available months
+            year_books = books[books['date'].dt.year == st.session_state.year_filter]
+            unique_months = sorted(year_books['date'].dt.month.unique())
+            
+            month_names = {
+                1: "January", 2: "February", 3: "March", 4: "April", 
+                5: "May", 6: "June", 7: "July", 8: "August", 
+                9: "September", 10: "October", 11: "November", 12: "December"
+            }
+            
+            st.write("Filter by Month:")
+            month_options = [month_names[month] for month in unique_months]
+            selected_month = st.pills(
+                "Months",
+                options=month_options,
+                key=f"month_pills_{st.session_state.clear_filters_trigger}"  # Unique key for re-rendering
+                ,label_visibility ='collapsed'
+            )
+            # Convert selected month name back to number
+            if selected_month:
+                st.session_state.month_filter = next(
+                    (num for num, name in month_names.items() if name == selected_month),
+                    None
+                )
+            elif selected_month is None and "month_pills_callback" not in st.session_state:
+                st.session_state.month_filter = None
+        else:
+            st.session_state.month_filter = None
 
         # Date range filter
         min_date = books['date'].min().date()
         max_date = books['date'].max().date()
 
-        # Use unique keys for date inputs to force re-rendering when clearing filters
-        start_date_key = "start_date" if not st.session_state.clear_filters_trigger else f"start_date_{st.session_state.clear_filters_trigger}"
-        end_date_key = "end_date" if not st.session_state.clear_filters_trigger else f"end_date_{st.session_state.clear_filters_trigger}"
-        st.session_state.start_date_filter = st.date_input("Start Date", value=st.session_state.start_date_filter, min_value=min_date, max_value=max_date, key=start_date_key)
-        st.session_state.end_date_filter = st.date_input("End Date", value=st.session_state.end_date_filter, min_value=min_date, max_value=max_date, key=end_date_key)
+        start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
+        end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
+        st.session_state.start_date_filter = st.date_input(
+            "Start Date", 
+            value=st.session_state.start_date_filter, 
+            min_value=min_date, 
+            max_value=max_date, 
+            key=start_date_key
+        )
+        st.session_state.end_date_filter = st.date_input(
+            "End Date", 
+            value=st.session_state.end_date_filter, 
+            min_value=min_date, 
+            max_value=max_date, 
+            key=end_date_key
+        )
 
         # Validate date range
         if st.session_state.start_date_filter and st.session_state.end_date_filter:
@@ -2138,8 +2319,6 @@ with srcol2:
 
         # Apply filters
         applied_filters = []
-        if st.session_state.day_filter:
-            applied_filters.append(f"Day={st.session_state.day_filter}")
         if st.session_state.month_filter:
             applied_filters.append(f"Month={month_names.get(st.session_state.month_filter)}")
         if st.session_state.year_filter:
@@ -2152,7 +2331,7 @@ with srcol2:
         if applied_filters:
             filtered_books = filter_books_by_date(
                 filtered_books, 
-                st.session_state.day_filter, 
+                None,  # No day filter
                 st.session_state.month_filter, 
                 st.session_state.year_filter, 
                 st.session_state.start_date_filter, 
@@ -2162,12 +2341,11 @@ with srcol2:
 
         # Clear filters button
         if st.button("Clear Filters", key="clear_filters"):
-            st.session_state.day_filter = None
-            st.session_state.month_filter = None
             st.session_state.year_filter = None
+            st.session_state.month_filter = None
             st.session_state.start_date_filter = None
             st.session_state.end_date_filter = None
-            st.session_state.clear_filters_trigger = not st.session_state.clear_filters_trigger
+            st.session_state.clear_filters_trigger += 1  # Increment counter to force re-render
             st.rerun()
 
 # Add page size selection
@@ -2205,7 +2383,7 @@ pagination_enabled = st.session_state.page_size == "All" and not (
 # Apply pagination or limit the number of books based on page size
 if pagination_enabled:
     # Pagination is enabled: Show all books with pagination
-    page_size = 100  # Default page size for pagination when "All" is selected
+    page_size = 50  # Default page size for pagination when "All" is selected
     total_books = len(filtered_books)
     total_pages = max(1, (total_books + page_size - 1) // page_size)
     st.session_state.current_page = min(st.session_state.current_page, total_pages)  # Ensure current page is valid
@@ -2284,7 +2462,7 @@ with cont:
                             edit_author_dialog(row['book_id'], conn)
                     with btn_col4:
                         if st.button(":material/manufacturing:", key=f"ops_{row['book_id']}", help="Edit Operations"):
-                            edit_operation_dialog(row['book_id'])
+                            edit_operation_dialog(row['book_id'], conn)
                     with btn_col5:
                         if st.button(":material/local_shipping:", key=f"delivery_{row['book_id']}", help="Edit Delivery"):
                             edit_inventory_delivery_dialog(row['book_id'], conn)
@@ -2322,7 +2500,6 @@ with cont:
         # Add informational message if pagination is disabled due to specific page size
         if not pagination_enabled and st.session_state.page_size != "All":
             st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
-
 
                 
 
