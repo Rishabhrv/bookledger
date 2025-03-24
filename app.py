@@ -5,6 +5,37 @@ from datetime import date
 import time
 from streamlit_extras.let_it_rain import rain
 import re
+import os
+import base64
+import json
+import hashlib
+import hmac
+
+
+# Set page configuration
+st.set_page_config(
+    menu_items={
+        'About': "AGPH",
+        'Get Help': None,
+        'Report a bug': None,   
+    },
+    layout="wide",  # Set layout to wide mode
+    initial_sidebar_state="collapsed",
+    page_title="AGPH Books",
+)
+
+# Inject CSS to remove the menu (optional)
+hide_menu_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    </style>
+"""
+
+st.markdown(hide_menu_style, unsafe_allow_html=True)
+
+# Use the same secret key as MasterSheet3
+SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-key') 
 
 st.cache_data.clear()
 
@@ -17,8 +48,51 @@ def connect_db():
         st.error(f"Error connecting to MySQL: {e}")
         st.stop()
 
+def validate_token():
+    # Store token in session_state if it is found in URL parameters
+    if 'token' not in st.session_state:
+        params = st.query_params
+        if 'token' in params:
+            st.session_state.token = params['token']
+        else:
+            st.error("Access Denied: Login Required")
+            st.stop()
+
+    token = st.session_state.token
+
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            raise ValueError("Invalid token format")
+
+        header = json.loads(base64.urlsafe_b64decode(parts[0] + '==').decode('utf-8'))
+        payload = json.loads(base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8'))
+
+        signature = base64.urlsafe_b64decode(parts[2] + '==')
+        expected_signature = hmac.new(
+            SECRET_KEY.encode(),
+            f"{parts[0]}.{parts[1]}".encode(),
+            hashlib.sha256
+        ).digest()
+
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("Invalid token signature")
+
+        if 'exp' in payload and payload['exp'] < time.time():
+            raise ValueError("Token has expired")
+
+        # Store validated user info in session_state
+        st.session_state.user = payload['user']
+        st.session_state.role = payload['role']
+
+    except ValueError as e:
+        st.error(f"Access Denied: {e}")
+        st.stop()
+
+validate_token()
+
 # Connect to MySQL
-conn = st.connection("mysql", type="sql")
+conn = connect_db()
 
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author FROM books"
@@ -39,7 +113,7 @@ if not pd.api.types.is_datetime64_any_dtype(books['date']):
 
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
-        return f"**<span style='color:#47b354; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
+        return f"**<span style='color:#47b354; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
     elif apply_isbn == 0:
         return f"**<span style='color:#eb7150; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
@@ -75,12 +149,10 @@ def get_status_pill(deliver_value):
 ###################################################################################################################################
 
 @st.dialog("Add Book and Authors", width="large")
-def add_book_dialog():
-    conn = connect_db()
+def add_book_dialog(conn):
 
     # --- Helper Function to Ensure Backward Compatibility ---
     def ensure_author_fields(author):
-        """Ensure all required fields, including corresponding_agent and publishing_consultant, are present in the author dict."""
         default_author = {
             "name": "",
             "email": "",
@@ -135,24 +207,41 @@ def add_book_dialog():
                     st.error(f"Error fetching authors: {e}")
                     return []
 
+        # Fetch unique corresponding agents and publishing consultants
+        def get_unique_agents_and_consultants(conn):
+            with conn.session as s:
+                try:
+                    agent_query = text("SELECT DISTINCT corresponding_agent FROM book_authors WHERE corresponding_agent IS NOT NULL AND corresponding_agent != '' ORDER BY corresponding_agent")
+                    agents = [row[0] for row in s.execute(agent_query).fetchall()]
+                    
+                    consultant_query = text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
+                    consultants = [row[0] for row in s.execute(consultant_query).fetchall()]
+                    
+                    return agents, consultants
+                except Exception as e:
+                    st.error(f"Error fetching agents/consultants: {e}")
+                    return [], []
+
         all_authors = get_all_authors(conn)
         author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+        unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+
+        # Add "Add New..." option to agent and consultant lists
+        agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
+        consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
 
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Author Details</h5>", unsafe_allow_html=True)
             
-            # Create tabs for each author
             tab_titles = [f"Author {i+1}" for i in range(4)]
             tabs = st.tabs(tab_titles)
 
             for i, tab in enumerate(tabs):
-                # Disable tabs for Authors 2, 3, and 4 if "Single Author" is toggled on
                 disabled = is_single_author and i > 0
                 with tab:
                     if disabled:
                         st.warning("Can't Add More Authors in 'Single Author' Mode")
                     else:
-                        # Author selection or new author
                         selected_author = st.selectbox(
                             f"Select Author {i+1}",
                             author_options,
@@ -170,7 +259,7 @@ def add_book_dialog():
                                 st.session_state.authors[i]["phone"] = selected_author_details.phone
                                 st.session_state.authors[i]["author_id"] = selected_author_details.author_id
                         elif selected_author == "Add New Author" and not disabled:
-                            st.session_state.authors[i]["author_id"] = None  # Reset for new author
+                            st.session_state.authors[i]["author_id"] = None
 
                         col1, col2 = st.columns(2)
                         st.session_state.authors[i]["name"] = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=f"name_{i}", placeholder="Enter Author name..", disabled=disabled)
@@ -190,8 +279,41 @@ def add_book_dialog():
                         st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
                         
                         col5, col6 = st.columns(2)
-                        st.session_state.authors[i]["corresponding_agent"] = col5.text_input(f"Corresponding Agent {i+1}", st.session_state.authors[i]["corresponding_agent"], key=f"agent_{i}", placeholder="Enter agent name..", disabled=disabled)
-                        st.session_state.authors[i]["publishing_consultant"] = col6.text_input(f"Publishing Consultant {i+1}", st.session_state.authors[i]["publishing_consultant"], key=f"consultant_{i}", placeholder="Enter consultant name..", disabled=disabled)
+                        # Replace Corresponding Agent Pills with Selectbox
+                        selected_agent = col5.selectbox(
+                            f"Corresponding Agent {i+1}",
+                            agent_options,
+                            index=agent_options.index(st.session_state.authors[i]["corresponding_agent"]) if st.session_state.authors[i]["corresponding_agent"] in unique_agents else 0,
+                            key=f"agent_select_{i}",
+                            disabled=disabled
+                        )
+                        if selected_agent == "Add New..." and not disabled:
+                            st.session_state.authors[i]["corresponding_agent"] = col5.text_input(
+                                f"New Agent Name {i+1}",
+                                value="",
+                                key=f"agent_input_{i}",
+                                placeholder="Enter new agent name..."
+                            )
+                        elif selected_agent != "Select Agent" and not disabled:
+                            st.session_state.authors[i]["corresponding_agent"] = selected_agent
+
+                        # Replace Publishing Consultant Pills with Selectbox
+                        selected_consultant = col6.selectbox(
+                            f"Publishing Consultant {i+1}",
+                            consultant_options,
+                            index=consultant_options.index(st.session_state.authors[i]["publishing_consultant"]) if st.session_state.authors[i]["publishing_consultant"] in unique_consultants else 0,
+                            key=f"consultant_select_{i}",
+                            disabled=disabled
+                        )
+                        if selected_consultant == "Add New..." and not disabled:
+                            st.session_state.authors[i]["publishing_consultant"] = col6.text_input(
+                                f"New Consultant Name {i+1}",
+                                value="",
+                                key=f"consultant_input_{i}",
+                                placeholder="Enter new consultant name..."
+                            )
+                        elif selected_consultant != "Select Consultant" and not disabled:
+                            st.session_state.authors[i]["publishing_consultant"] = selected_consultant
 
         return st.session_state.authors
 
@@ -327,40 +449,43 @@ from datetime import datetime
 # Separate function for ISBN dialog using @st.dialog
 @st.dialog("Manage ISBN")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    apply_isbn = st.checkbox("ISBN Applied?", value=bool(current_apply_isbn), key=f"apply_{book_id}")
-    receive_isbn = st.checkbox("ISBN Received?", value=bool(pd.notna(current_isbn)), key=f"receive_{book_id}", disabled=not apply_isbn)
-    
-    if apply_isbn and receive_isbn:
-        new_isbn = st.text_input("Enter ISBN", value=current_isbn if pd.notna(current_isbn) else "", key=f"isbn_input_{book_id}")
-        # Add a date picker for ISBN receive date
-        default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
-        isbn_receive_date = st.date_input("ISBN Receive Date", value=default_date, key=f"date_input_{book_id}")
-    else:
-        new_isbn = None
-        isbn_receive_date = None
 
-    if st.button("Save ISBN", key=f"save_isbn_{book_id}"):
-        with conn.session as s:
-            if apply_isbn and receive_isbn and new_isbn:
-                s.execute(
-                    text("UPDATE books SET apply_isbn = :apply_isbn, isbn = :isbn, isbn_receive_date = :isbn_receive_date WHERE book_id = :book_id"),
-                    {"apply_isbn": 1, "isbn": new_isbn, "isbn_receive_date": isbn_receive_date, "book_id": book_id}
-                )
-            elif apply_isbn and not receive_isbn:
-                # Clear isbn and isbn_receive_date if ISBN is not received
-                s.execute(
-                    text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
-                    {"apply_isbn": 1, "book_id": book_id}
-                )
-            else:
-                # Clear all ISBN-related fields if ISBN is not applied
-                s.execute(
-                    text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
-                    {"apply_isbn": 0, "book_id": book_id}
-                )
-            s.commit()
-        st.success("ISBN Updated Successfully")
-        st.rerun()
+    cntnr = st.container(border=True)
+    with cntnr:
+        apply_isbn = st.checkbox("ISBN Applied?", value=bool(current_apply_isbn), key=f"apply_{book_id}")
+        receive_isbn = st.checkbox("ISBN Received?", value=bool(pd.notna(current_isbn)), key=f"receive_{book_id}", disabled=not apply_isbn)
+        
+        if apply_isbn and receive_isbn:
+            new_isbn = st.text_input("Enter ISBN", value=current_isbn if pd.notna(current_isbn) else "", key=f"isbn_input_{book_id}")
+            # Add a date picker for ISBN receive date
+            default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
+            isbn_receive_date = st.date_input("ISBN Receive Date", value=default_date, key=f"date_input_{book_id}")
+        else:
+            new_isbn = None
+            isbn_receive_date = None
+
+        if st.button("Save ISBN", key=f"save_isbn_{book_id}"):
+            with conn.session as s:
+                if apply_isbn and receive_isbn and new_isbn:
+                    s.execute(
+                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = :isbn, isbn_receive_date = :isbn_receive_date WHERE book_id = :book_id"),
+                        {"apply_isbn": 1, "isbn": new_isbn, "isbn_receive_date": isbn_receive_date, "book_id": book_id}
+                    )
+                elif apply_isbn and not receive_isbn:
+                    # Clear isbn and isbn_receive_date if ISBN is not received
+                    s.execute(
+                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
+                        {"apply_isbn": 1, "book_id": book_id}
+                    )
+                else:
+                    # Clear all ISBN-related fields if ISBN is not applied
+                    s.execute(
+                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
+                        {"apply_isbn": 0, "book_id": book_id}
+                    )
+                s.commit()
+            st.success("ISBN Updated Successfully")
+            st.rerun()
 
 
 ###################################################################################################################################
@@ -373,16 +498,17 @@ def manage_price_dialog(book_id, current_price, conn):
     # Fetch book details for title
     book_details = fetch_book_details(book_id, conn)
     book_title = book_details.iloc[0]['title'] if not book_details.empty else "Unknown Title"
-    col1,col2 = st.columns([6,1])
+    col1, col2 = st.columns([6, 1])
     with col1:
         st.markdown(f"## {book_id} : {book_title}")
     with col2:
         if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
             st.cache_data.clear()
 
-    # CSS for payment status styling
+    # Updated Streamlit-aligned CSS with improved visuals
     st.markdown("""
         <style>
+                
         .payment-status {
             font-size: 12px;
             padding: 3px 8px;
@@ -393,292 +519,260 @@ def manage_price_dialog(book_id, current_price, conn):
         .status-paid { background-color: #e6ffe6; color: #006600; }
         .status-partial { background-color: #fff3e6; color: #cc6600; }
         .status-pending { background-color: #ffe6e6; color: #cc0000; }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Custom CSS for minimalist and professional styling
-    st.markdown("""
-        <style>
-        :root {
-            --primary: #007bff;
-            --success: #28a745;
-            --warning: #ffc107;
-            --danger: #dc3545;
-            --light: #f8f9fa;
-            --dark: #343a40;
-            --gray: #6c757d;
-        }
-        .dialog-container {
-            font-family: 'Arial', sans-serif;
+        .payment-box {
             padding: 10px;
+            border-radius: 6px;
+            margin: 0 4px 8px 0;
+            text-align: center;
+            font-size: 14px;
+            line-height: 1.5;
+            border: 1px solid #e0e0e0;
+            background-color: #ffffff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease, background-color 0.2s ease;
         }
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        .payment-box:hover {
+            background-color: #f9f9f9;
+            transform: translateY(-2px);
         }
-        .card:hover {
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
-            transition: box-shadow 0.2s ease;
+        .status-paid {
+            background-color: #f0f9eb;
+            border-color: #b7e1a1;
+            color: #2e7d32;
         }
-        .status-indicator {
+        .status-partial {
+            background-color: #fff4e6;
+            border-color: #ffd8a8;
+            color: #e65100;
+        }
+        .status-pending {
+            background-color: #f6f6f6;
+            border-color: #d9d9d9;
+            color: #666666;
+        }
+        .author-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .payment-text {
+            font-size: 14px;
+            font-weight: 400;
+        }
+        .agent-text {
+            font-size: 11px;
+            color: #888888;
+            margin-top: 6px;
+            font-style: italic;
+        }
+        .status-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
             display: inline-block;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.8em;
-            font-weight: bold;
+            margin-top: 4px;
         }
-        .status-paid { background: #e6ffe6; color: var(--success); }
-        .status-partial { background: #fff3e6; color: var(--warning); }
-        .status-pending { background: #ffe6e6; color: var(--danger); }
-        .progress-bar {
-            background: #e9ecef;
-            border-radius: 5px;
-            height: 8px;
-            margin-top: 10px;
-        }
-        .progress-fill {
-            height: 100%;
-            border-radius: 5px;
-        }
-        .progress-fill.status-paid { background: var(--success); }
-        .progress-fill.status-partial { background: var(--warning); }
-        .progress-fill.status-pending { background: var(--danger); }
-        .locked-field {
-            background: #f0f0f0;
-            padding: 8px;
-            border-radius: 5px;
-            color: var(--gray);
-            font-size: 0.9em;
-        }
-        .summary-box {
-            background: var(--light);
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .summary-box div {
-            font-size: 1.1em;
-            margin-bottom: 5px;
-        }
-        .highlight {
-            font-weight: bold;
-            color: var(--primary);
-        }
-        .tab-content {
-            padding: 15px;
-            background: white;
-            border-radius: 0 0 8px 8px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-        }
-
+        .status-paid .status-badge { background-color: #2e7d32; color: #ffffff; }
+        .status-partial .status-badge { background-color: #e65100; color: #ffffff; }
+        .status-pending .status-badge { background-color: #666666; color: #ffffff; }
         </style>
     """, unsafe_allow_html=True)
 
+    # Payment Status Overview
+    book_authors = fetch_book_authors(book_id, conn)
     
-    book_authors = fetch_book_authors(book_id,conn)
-    # Section 2: Payment Status Overview
-    st.markdown(' ## ₹ Payment Status Overview', unsafe_allow_html=True)
     if book_authors.empty:
         st.warning(f"No authors found for Book ID: {book_id}")
     else:
-        for _, row in book_authors.iterrows():
+        cols = st.columns(len(book_authors), gap="small")
+        for i, (_, row) in enumerate(book_authors.iterrows()):
             total_amount = int(row.get('total_amount', 0) or 0)
             emi1 = int(row.get('emi1', 0) or 0)
             emi2 = int(row.get('emi2', 0) or 0)
             emi3 = int(row.get('emi3', 0) or 0)
             amount_paid = emi1 + emi2 + emi3
-            corresponding_agent = row.get('corresponding_agent', 'Unknown Agent')
+            agent = row.get('corresponding_agent', 'Unknown Agent')
 
             # Determine payment status
             if amount_paid >= total_amount and total_amount > 0:
-                status = 'status-paid'
-                status_text = 'Fully Paid'
+                status_class = "status-paid"
+                status_text = f"₹{amount_paid}/₹{total_amount}"
+                badge_text = "Paid"
             elif amount_paid > 0:
-                status = 'status-partial'
-                status_text = 'Partially Paid'
+                status_class = "status-partial"
+                status_text = f"₹{amount_paid}/₹{total_amount}"
+                badge_text = "Partial"
             else:
-                status = 'status-pending'
-                status_text = 'Pending'
+                status_class = "status-pending"
+                status_text = "₹0/₹{total_amount}" if total_amount > 0 else "N/A"
+                badge_text = "Pending"
 
-            # Calculate payment progress percentage
-            progress_percentage = min((amount_paid / total_amount) * 100, 100) if total_amount > 0 else 0
+            with cols[i]:
+                html = f"""
+                    <div class="payment-box {status_class}">
+                        <div class="author-name">{row['name']}</div>
+                        <div class="payment-text">{status_text}</div>
+                        <div class="status-badge">{badge_text}</div>
+                        <div class="agent-text">{agent}</div>
+                    </div>
+                """
+                st.markdown(html, unsafe_allow_html=True)
 
-            # Display author payment details in a minimalist card
-            st.markdown(
-                f"""
-                <div class="card">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <strong>{row['name']}</strong> (ID: {row['author_id']} - {row['author_position']})
-                        <span class="status-indicator {status}">{status_text}</span>
-                    </div>
-                    <div style="margin-top: 10px; color: #666;">
-                        Total Amount: <span style="font-weight: bold;">₹{total_amount}</span> | 
-                        Paid: <span style="font-weight: bold; color: var(--success);">₹{amount_paid}</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill {status}" style="width: {progress_percentage}%"></div>
-                    </div>
-                    <div style="font-size: 0.85em; color: var(--gray); margin-top: 5px;">
-                        Corresponding Agent: {corresponding_agent}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-
+    contrn = st.container(border=True)
+    with contrn:
         # Section 1: Book Price
-    st.markdown("### 📖 Book Price")
-    price_str = st.text_input(
-        "Book Price (₹)",
-        value=str(int(current_price)) if pd.notna(current_price) else "",
-        key=f"price_{book_id}",
-        placeholder="Enter whole amount"
-    )
-    
-    if st.button("Save Book Price", key=f"save_price_{book_id}"):
-        try:
-            price = int(price_str) if price_str.strip() else None
-            if price is not None and price < 0:
-                st.error("Price cannot be negative")
-                return
-                
-            with conn.session as s:
-                s.execute(
-                    text("UPDATE books SET price = :price WHERE book_id = :book_id"),
-                    {"price": price, "book_id": book_id}
-                )
-                s.commit()
-            st.success("Book Price Updated Successfully")
-            st.rerun()
-        except ValueError:
-            st.error("Please enter a valid whole number")
-
-    # Section 2: Author Payments with Tabs
-    st.markdown("### 👤 Author Payments")
-    if not book_authors.empty:
-        total_author_amounts = 0
-        updated_authors = []
-
-        # Create tabs for each author
-        tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
-        tabs = st.tabs(tab_titles)
-
-        for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-            with tab:
-                # Fetch existing payment details
-                total_amount = int(row.get('total_amount', 0) or 0)
-                emi1 = int(row.get('emi1', 0) or 0)
-                emi2 = int(row.get('emi2', 0) or 0)
-                emi3 = int(row.get('emi3', 0) or 0)
-                emi1_date = row.get('emi1_date', None)
-                emi2_date = row.get('emi2_date', None)
-                emi3_date = row.get('emi3_date', None)
-                amount_paid = emi1 + emi2 + emi3
-
-                # Payment status inside tab
-                if amount_paid >= total_amount and total_amount > 0:
-                    status = '<span class="payment-status status-paid">Fully Paid</span>'
-                elif amount_paid > 0:
-                    status = '<span class="payment-status status-partial">Partially Paid</span>'
-                else:
-                    status = '<span class="payment-status status-pending">Pending</span>'
-                st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
-
-                # Total Amount Due
-                total_str = st.text_input(
-                    "Total Amount Due (₹)",
-                    value=str(total_amount) if total_amount > 0 else "",
-                    key=f"total_{row['id']}",
-                    placeholder="Enter whole amount"
-                )
-
-                # EMI Payments with Dates
-                st.markdown("#### EMI Details")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    emi1_str = st.text_input(
-                        "EMI 1 Amount (₹)",
-                        value=str(emi1) if emi1 > 0 else "",
-                        key=f"emi1_{row['id']}"
-                    )
-                    emi2_str = st.text_input(
-                        "EMI 2 Amount (₹)",
-                        value=str(emi2) if emi2 > 0 else "",
-                        key=f"emi2_{row['id']}"
-                    )
-                    emi3_str = st.text_input(
-                        "EMI 3 Amount (₹)",
-                        value=str(emi3) if emi3 > 0 else "",
-                        key=f"emi3_{row['id']}"
-                    )
-                
-                with col2:
-                    emi1_date_new = st.date_input(
-                        "EMI 1 Date",
-                        value=pd.to_datetime(emi1_date) if emi1_date else None,
-                        key=f"emi1_date_{row['id']}"
-                    )
-                    emi2_date_new = st.date_input(
-                        "EMI 2 Date",
-                        value=pd.to_datetime(emi2_date) if emi2_date else None,
-                        key=f"emi2_date_{row['id']}"
-                    )
-                    emi3_date_new = st.date_input(
-                        "EMI 3 Date",
-                        value=pd.to_datetime(emi3_date) if emi3_date else None,
-                        key=f"emi3_date_{row['id']}"
-                    )
-
-                # Calculate remaining balance
+        st.markdown("### 📖 Book Price")
+        col1,col2 = st.columns([1,1])
+        with col1:
+            price_str = st.text_input(
+                "Book Price (₹)",
+                value=str(int(current_price)) if pd.notna(current_price) else "",
+                key=f"price_{book_id}",
+                placeholder="Enter whole amount"
+            )
+            
+            if st.button("Save Book Price", key=f"save_price_{book_id}"):
                 try:
-                    new_total = int(total_str) if total_str.strip() else 0
-                    new_emi1 = int(emi1_str) if emi1_str.strip() else 0
-                    new_emi2 = int(emi2_str) if emi2_str.strip() else 0
-                    new_emi3 = int(emi3_str) if emi3_str.strip() else 0
-                    new_paid = new_emi1 + new_emi2 + new_emi3
-                    remaining = new_total - new_paid
-                    total_author_amounts += new_total
-                    updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
-                                          emi1_date_new, emi2_date_new, emi3_date_new))
+                    price = int(price_str) if price_str.strip() else None
+                    if price is not None and price < 0:
+                        st.error("Price cannot be negative")
+                        return
+                        
+                    with conn.session as s:
+                        s.execute(
+                            text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                            {"price": price, "book_id": book_id}
+                        )
+                        s.commit()
+                    st.success("Book Price Updated Successfully")
+                    st.rerun()
                 except ValueError:
-                    st.error("Please enter valid whole numbers for all fields")
-                    return
+                    st.error("Please enter a valid whole number")
 
-                st.markdown(f"**Total Paid:** ₹{new_paid} | **Remaining Balance:** ₹{remaining}")
+    cont = st.container(border=True)
+    with cont:
+        # Section 2: Author Payments with Tabs
+        st.markdown("### 👤 Author Payments")
+        if not book_authors.empty:
+            total_author_amounts = 0
+            updated_authors = []
 
-                # Save button
-                if st.button("Save Payment", key=f"save_payment_{row['id']}"):
-                    if new_paid > new_total:
-                        st.error("Total EMI payments cannot exceed total amount")
-                    elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
-                        st.error("Amounts cannot be negative")
+            # Create tabs for each author
+            tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
+            tabs = st.tabs(tab_titles)
+
+            for tab, (_, row) in zip(tabs, book_authors.iterrows()):
+                with tab:
+                    # Fetch existing payment details
+                    total_amount = int(row.get('total_amount', 0) or 0)
+                    emi1 = int(row.get('emi1', 0) or 0)
+                    emi2 = int(row.get('emi2', 0) or 0)
+                    emi3 = int(row.get('emi3', 0) or 0)
+                    emi1_date = row.get('emi1_date', None)
+                    emi2_date = row.get('emi2_date', None)
+                    emi3_date = row.get('emi3_date', None)
+                    amount_paid = emi1 + emi2 + emi3
+
+                    # Payment status inside tab
+                    if amount_paid >= total_amount and total_amount > 0:
+                        status = '<span class="payment-status status-paid">Fully Paid</span>'
+                    elif amount_paid > 0:
+                        status = '<span class="payment-status status-partial">Partially Paid</span>'
                     else:
-                        book_price = int(price_str) if price_str.strip() else current_price
-                        if pd.isna(book_price):
-                            st.error("Please set a book price first")
-                            return
-                        if total_author_amounts > book_price:
-                            st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
-                            return
+                        status = '<span class="payment-status status-pending">Pending</span>'
+                    st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
 
-                        updates = {
-                            "total_amount": new_total,
-                            "emi1": new_emi1,
-                            "emi2": new_emi2,
-                            "emi3": new_emi3,
-                            "emi1_date": emi1_date_new,
-                            "emi2_date": emi2_date_new,
-                            "emi3_date": emi3_date_new
-                        }
-                        update_book_authors(row['id'], updates, conn)
-                        st.success(f"Payment updated for {row['name']}")
-                        st.cache_data.clear()
-                        st.rerun()
+                    # Total Amount Due
+                    total_str = st.text_input(
+                        "Total Amount Due (₹)",
+                        value=str(total_amount) if total_amount > 0 else "",
+                        key=f"total_{row['id']}",
+                        placeholder="Enter whole amount"
+                    )
+
+                    # EMI Payments with Dates
+                    st.markdown("#### EMI Details")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        emi1_str = st.text_input(
+                            "EMI 1 Amount (₹)",
+                            value=str(emi1) if emi1 > 0 else "",
+                            key=f"emi1_{row['id']}"
+                        )
+                        emi2_str = st.text_input(
+                            "EMI 2 Amount (₹)",
+                            value=str(emi2) if emi2 > 0 else "",
+                            key=f"emi2_{row['id']}"
+                        )
+                        emi3_str = st.text_input(
+                            "EMI 3 Amount (₹)",
+                            value=str(emi3) if emi3 > 0 else "",
+                            key=f"emi3_{row['id']}"
+                        )
+                    
+                    with col2:
+                        emi1_date_new = st.date_input(
+                            "EMI 1 Date",
+                            value=pd.to_datetime(emi1_date) if emi1_date else None,
+                            key=f"emi1_date_{row['id']}"
+                        )
+                        emi2_date_new = st.date_input(
+                            "EMI 2 Date",
+                            value=pd.to_datetime(emi2_date) if emi2_date else None,
+                            key=f"emi2_date_{row['id']}"
+                        )
+                        emi3_date_new = st.date_input(
+                            "EMI 3 Date",
+                            value=pd.to_datetime(emi3_date) if emi3_date else None,
+                            key=f"emi3_date_{row['id']}"
+                        )
+
+                    # Calculate remaining balance
+                    try:
+                        new_total = int(total_str) if total_str.strip() else 0
+                        new_emi1 = int(emi1_str) if emi1_str.strip() else 0
+                        new_emi2 = int(emi2_str) if emi2_str.strip() else 0
+                        new_emi3 = int(emi3_str) if emi3_str.strip() else 0
+                        new_paid = new_emi1 + new_emi2 + new_emi3
+                        remaining = new_total - new_paid
+                        total_author_amounts += new_total
+                        updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
+                                            emi1_date_new, emi2_date_new, emi3_date_new))
+                    except ValueError:
+                        st.error("Please enter valid whole numbers for all fields")
+                        return
+
+                    st.markdown(f"**Total Paid:** ₹{new_paid} | **Remaining Balance:** ₹{remaining}")
+
+                    # Save button
+                    if st.button("Save Payment", key=f"save_payment_{row['id']}"):
+                        if new_paid > new_total:
+                            st.error("Total EMI payments cannot exceed total amount")
+                        elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
+                            st.error("Amounts cannot be negative")
+                        else:
+                            book_price = int(price_str) if price_str.strip() else current_price
+                            if pd.isna(book_price):
+                                st.error("Please set a book price first")
+                                return
+                            if total_author_amounts > book_price:
+                                st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
+                                return
+
+                            updates = {
+                                "total_amount": new_total,
+                                "emi1": new_emi1,
+                                "emi2": new_emi2,
+                                "emi3": new_emi3,
+                                "emi1_date": emi1_date_new,
+                                "emi2_date": emi2_date_new,
+                                "emi3_date": emi3_date_new
+                            }
+                            update_book_authors(row['id'], updates, conn)
+                            st.success(f"Payment updated for {row['name']}")
+                            st.cache_data.clear()
+                            st.rerun()
 
 
 ###################################################################################################################################
@@ -1286,7 +1380,7 @@ def edit_operation_dialog(book_id, conn):
                proofreading_start, proofreading_end, proofreading_by, 
                formatting_start, formatting_end, formatting_by, 
                front_cover_start, front_cover_end, front_cover_by,
-               back_cover_start, back_cover_end, back_cover_by
+               back_cover_start, back_cover_end, back_cover_by, book_pages
         FROM books WHERE book_id = {book_id}
     """
     book_operations = conn.query(query)
@@ -1437,7 +1531,7 @@ def edit_operation_dialog(book_id, conn):
                     st.session_state[f"proofreading_by_{book_id}"] = proofreading_by  # Update session state after save
                     st.success("✅ Updated Proofreading details")
 
-    # Formatting Tab
+        # Formatting Tab
     with tab3:
         with st.form(key=f"formatting_form_{book_id}", border=False):
             if formatting_names:
@@ -1452,6 +1546,7 @@ def edit_operation_dialog(book_id, conn):
                 value=st.session_state[f"formatting_by_{book_id}"], 
                 key=f"formatting_by_input_{book_id}"
             )
+            
             col1, col2 = st.columns(2)
             with col1:
                 formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start', None), key=f"formatting_start_date_{book_id}")
@@ -1459,19 +1554,31 @@ def edit_operation_dialog(book_id, conn):
             with col2:
                 formatting_end_date = st.date_input("End Date", value=current_data.get('formatting_end', None), key=f"formatting_end_date_{book_id}")
                 formatting_end_time = st.time_input("End Time", value=current_data.get('formatting_end', None), key=f"formatting_end_time_{book_id}")
+            
+            # Total Book Pages always visible and editable
+            book_pages = st.number_input(
+                "Total Book Pages",
+                min_value=0,
+                value=current_data.get('book_pages', 1) if current_data.get('book_pages') else 0,
+                step=1,
+                key=f"book_pages_{book_id}"
+            )
+            
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                 formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
+                
                 if formatting_start and formatting_end and formatting_start > formatting_end:
                     st.error("Start date/time must be before end date/time.")
                 else:
                     updates = {
                         "formatting_start": formatting_start,
                         "formatting_end": formatting_end,
-                        "formatting_by": formatting_by if formatting_by else None
+                        "formatting_by": formatting_by if formatting_by else None,
+                        "book_pages": book_pages  # Always include book_pages in updates
                     }
                     update_operation_details(book_id, updates)
-                    st.session_state[f"formatting_by_{book_id}"] = formatting_by  # Update session state after save
+                    st.session_state[f"formatting_by_{book_id}"] = formatting_by
                     st.success("✅ Updated Formatting details")
 
     # Book Cover Tab
@@ -1720,7 +1827,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 print_runs_data = conn.query(print_runs_query)
 
                 # Display existing print runs in an expander (collapsible)
-                with st.expander("View Existing Print Runs", expanded=False):
+                with st.expander("View Existing Print Runs", expanded=True):
                     if not print_runs_data.empty:
                         st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
                         # Table Header
@@ -1755,7 +1862,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                 # Add New Print Run Section
                 st.markdown('<div class="section-header">Add New Print Run</div>', unsafe_allow_html=True)
-                with st.container():
+                with st.container(border=True):
                     st.markdown('<div class="new-print-run-box">', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
                     
@@ -1939,7 +2046,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
             with st.form(key=f"new_inventory_form_{book_id}", border=False):
                 # Pricing Section
                 st.markdown('<div class="section-header">Pricing & Storage</div>', unsafe_allow_html=True)
-                with st.container():
+                with st.container(border = True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1,col2 = st.columns(2)
 
@@ -1960,7 +2067,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                 # Sales Tracking Section
                 st.markdown('<div class="section-header">Sales Tracking</div>', unsafe_allow_html=True)
-                with st.container():
+                with st.container(border = True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -1994,6 +2101,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 # Links and Reviews Section (Collapsible)
+                st.markdown('<div class="section-header">Links and Reviews</div>', unsafe_allow_html=True)
                 with st.expander("Links and Reviews", expanded=False):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
@@ -2243,8 +2351,21 @@ with srcol2:
         if 'clear_filters_trigger' not in st.session_state:
             st.session_state.clear_filters_trigger = 0  # Use a counter instead of boolean
 
-        # Year filter with pills
-        st.write("Filter by Year:")
+        
+        col1,  col2 = st.columns([3, 1])
+        with col1:
+            st.write("Filter by Year:")
+
+        with col2:
+            # Clear filters button
+            if st.button(":material/restart_alt: Reset", key="clear_filters", help="Clear all filters", use_container_width=True, type="tertiary"):
+                st.session_state.year_filter = None
+                st.session_state.month_filter = None
+                st.session_state.start_date_filter = None
+                st.session_state.end_date_filter = None
+                st.session_state.clear_filters_trigger += 1
+                st.rerun()
+
         year_options = [str(year) for year in unique_years]
         selected_year = st.pills(
             "Years",
@@ -2339,27 +2460,18 @@ with srcol2:
             )
             st.success(f"Filter {', '.join(applied_filters)}")
 
-        # Clear filters button
-        if st.button("Clear Filters", key="clear_filters"):
-            st.session_state.year_filter = None
-            st.session_state.month_filter = None
-            st.session_state.start_date_filter = None
-            st.session_state.end_date_filter = None
-            st.session_state.clear_filters_trigger += 1  # Increment counter to force re-render
-            st.rerun()
-
 # Add page size selection
 with srcol4:
-    page_size_options = [50, 100, "All"]
+    page_size_options = [40, 100, "All"]
     if 'page_size' not in st.session_state:
-        st.session_state.page_size = 50  # Default page size
+        st.session_state.page_size = page_size_options[0]  # Default page size
     st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
                                               label_visibility="collapsed")
 
 # Add New Book button
 with srcol3:
     if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
-        add_book_dialog()
+        add_book_dialog(conn)
 
 # Pagination Logic (Modified)
 if 'current_page' not in st.session_state:
@@ -2372,7 +2484,6 @@ filtered_books = filtered_books.sort_values(by='date', ascending=False)
 # Pagination is enabled only if page_size is "All" and no search/filter is applied
 pagination_enabled = st.session_state.page_size == "All" and not (
     search_query or any([
-        st.session_state.day_filter,
         st.session_state.month_filter,
         st.session_state.year_filter,
         st.session_state.start_date_filter,
@@ -2518,4 +2629,7 @@ with cont:
 #     )
 
 # example()
+
+
+
  

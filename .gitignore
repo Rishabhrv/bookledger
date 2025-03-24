@@ -183,3 +183,6 @@ pyvenv.cfg
 pip-selfcheck.json
 .streamlit
 notebook.ipynb
+tosql.ipynb
+databasedata
+default-secret-key.env
