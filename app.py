@@ -3,7 +3,6 @@ import pandas as pd
 from sqlalchemy import text
 from datetime import date
 import time
-from streamlit_extras.let_it_rain import rain
 import re
 import os
 import base64
@@ -36,17 +35,6 @@ st.markdown(hide_menu_style, unsafe_allow_html=True)
 
 # Use the same secret key as MasterSheet3
 SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-key') 
-
-st.cache_data.clear()
-
-# --- Database Connection ---
-def connect_db():
-    try:
-        conn = st.connection('mysql', type='sql')
-        return conn
-    except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
 
 def validate_token():
     # Store token in session_state if it is found in URL parameters
@@ -90,6 +78,17 @@ def validate_token():
         st.stop()
 
 validate_token()
+
+st.cache_data.clear()
+
+# --- Database Connection ---
+def connect_db():
+    try:
+        conn = st.connection('mysql', type='sql')
+        return conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
 
 # Connect to MySQL
 conn = connect_db()
