@@ -77,7 +77,7 @@ def validate_token():
         st.error(f"Access Denied: {e}")
         st.stop()
 
-#validate_token()
+validate_token()
 
 st.cache_data.clear()
 
