@@ -358,8 +358,6 @@ def add_book_dialog(conn):
                     errors.append(f"Author {i+1} email is required.")
                 if not author["phone"]:
                     errors.append(f"Author {i+1} phone is required.")
-                if not author["corresponding_agent"]:
-                    errors.append(f"Author {i+1} corresponding agent is required.")
                 if not author["publishing_consultant"]:
                     errors.append(f"Author {i+1} publishing consultant is required.")
                 if author["author_id"]:
@@ -444,45 +442,145 @@ def add_book_dialog(conn):
 ###################################################################################################################################
 
 from datetime import datetime
-# Separate function for ISBN dialog using @st.dialog
-@st.dialog("Manage ISBN")
+
+@st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
+    # Fetch current book details (title and date) from the database
+    book_details = fetch_book_details(book_id, conn)
+    if book_details.empty:
+        st.error("❌ Book not found in database.")
+        return
+    
+    # Extract current title and date from the DataFrame
+    current_title = book_details.iloc[0]['title']
+    current_date = book_details.iloc[0]['date']
 
-    cntnr = st.container(border=True)
-    with cntnr:
-        apply_isbn = st.checkbox("ISBN Applied?", value=bool(current_apply_isbn), key=f"apply_{book_id}")
-        receive_isbn = st.checkbox("ISBN Received?", value=bool(pd.notna(current_isbn)), key=f"receive_{book_id}", disabled=not apply_isbn)
-        
-        if apply_isbn and receive_isbn:
-            new_isbn = st.text_input("Enter ISBN", value=current_isbn if pd.notna(current_isbn) else "", key=f"isbn_input_{book_id}")
-            # Add a date picker for ISBN receive date
-            default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
-            isbn_receive_date = st.date_input("ISBN Receive Date", value=default_date, key=f"date_input_{book_id}")
-        else:
-            new_isbn = None
-            isbn_receive_date = None
+    # Main container
+    with st.container():
+        # Header with Book ID
+        st.markdown(f"### {book_id} - {current_title}", unsafe_allow_html=True)
 
-        if st.button("Save ISBN", key=f"save_isbn_{book_id}"):
+        st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown('<div class="info-box">', unsafe_allow_html=True)
+            col1, col2 = st.columns([3,1])
+            with col1:
+                new_title = st.text_input(
+                    "Book Title",
+                    value=current_title,
+                    key=f"title_{book_id}",
+                    help="Enter the book title"
+                )
+            with col2:
+                new_date = st.date_input(
+                    "Book Date",
+                    value=current_date if current_date else datetime.today(),
+                    key=f"date_{book_id}",
+                    help="Select the book date"
+                )
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
+        # ISBN Details Section
+        with st.container(border=True):
+            st.markdown('<div class="info-box">', unsafe_allow_html=True)
+            apply_isbn = st.checkbox(
+                "ISBN Applied?",
+                value=bool(current_apply_isbn),
+                key=f"apply_{book_id}",
+                help="Check if ISBN application has been made"
+            )
+            receive_isbn = st.checkbox(
+                "ISBN Received?",
+                value=bool(pd.notna(current_isbn)),
+                key=f"receive_{book_id}",
+                disabled=not apply_isbn,
+                help="Check if ISBN has been received (requires ISBN Applied)"
+            )
+            
+            if apply_isbn and receive_isbn:
+                col3, col4 = st.columns(2)
+                with col3:
+                    new_isbn = st.text_input(
+                        "ISBN",
+                        value=current_isbn if pd.notna(current_isbn) else "",
+                        key=f"isbn_input_{book_id}",
+                        help="Enter the ISBN number"
+                    )
+                with col4:
+                    default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
+                    isbn_receive_date = st.date_input(
+                        "ISBN Receive Date",
+                        value=default_date,
+                        key=f"date_input_{book_id}",
+                        help="Select the date ISBN was received"
+                    )
+            else:
+                new_isbn = None
+                isbn_receive_date = None
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Save Button
+        if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
             with conn.session as s:
                 if apply_isbn and receive_isbn and new_isbn:
                     s.execute(
-                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = :isbn, isbn_receive_date = :isbn_receive_date WHERE book_id = :book_id"),
-                        {"apply_isbn": 1, "isbn": new_isbn, "isbn_receive_date": isbn_receive_date, "book_id": book_id}
+                        text("""
+                            UPDATE books 
+                            SET apply_isbn = :apply_isbn, 
+                                isbn = :isbn, 
+                                isbn_receive_date = :isbn_receive_date, 
+                                title = :title, 
+                                date = :date 
+                            WHERE book_id = :book_id
+                        """),
+                        {
+                            "apply_isbn": 1, 
+                            "isbn": new_isbn, 
+                            "isbn_receive_date": isbn_receive_date, 
+                            "title": new_title, 
+                            "date": new_date, 
+                            "book_id": book_id
+                        }
                     )
                 elif apply_isbn and not receive_isbn:
-                    # Clear isbn and isbn_receive_date if ISBN is not received
                     s.execute(
-                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
-                        {"apply_isbn": 1, "book_id": book_id}
+                        text("""
+                            UPDATE books 
+                            SET apply_isbn = :apply_isbn, 
+                                isbn = NULL, 
+                                isbn_receive_date = NULL, 
+                                title = :title, 
+                                date = :date 
+                            WHERE book_id = :book_id
+                        """),
+                        {
+                            "apply_isbn": 1, 
+                            "title": new_title, 
+                            "date": new_date, 
+                            "book_id": book_id
+                        }
                     )
                 else:
-                    # Clear all ISBN-related fields if ISBN is not applied
                     s.execute(
-                        text("UPDATE books SET apply_isbn = :apply_isbn, isbn = NULL, isbn_receive_date = NULL WHERE book_id = :book_id"),
-                        {"apply_isbn": 0, "book_id": book_id}
+                        text("""
+                            UPDATE books 
+                            SET apply_isbn = :apply_isbn, 
+                                isbn = NULL, 
+                                isbn_receive_date = NULL, 
+                                title = :title, 
+                                date = :date 
+                            WHERE book_id = :book_id
+                        """),
+                        {
+                            "apply_isbn": 0, 
+                            "title": new_title, 
+                            "date": new_date, 
+                            "book_id": book_id
+                        }
                     )
                 s.commit()
-            st.success("ISBN Updated Successfully")
+            st.success("Book Details Updated Successfully")
             st.rerun()
 
 
@@ -858,6 +956,7 @@ def edit_author_dialog(book_id, conn):
         </style>
     """, unsafe_allow_html=True)
 
+
     # Fetch author details
     book_authors = fetch_book_authors(book_id, conn)
     if book_authors.empty:
@@ -1047,12 +1146,42 @@ def edit_author_dialog(book_id, conn):
                                 st.success(f"✅ Updated details for {row['name']} (Author ID: {row['author_id']})")
                         except Exception as e:
                             st.error(f"❌ Error updating author details: {e}")
-
-
+    
 
     # Fetch existing authors for this book
     book_authors = fetch_book_authors(book_id, conn)
     existing_author_count = len(book_authors)
+    # Determine if toggle should be editable
+    toggle_editable = existing_author_count <= 1  # Editable only if 0 or 1 author
+
+    # Add toggle for single/multiple authors
+    toggle_col1, toggle_col2 = st.columns([3, 4])
+    with toggle_col1:
+        new_is_single_author = st.toggle(
+            "Single Author?",
+            value=is_single_author,
+            key=f"single_author_toggle_{book_id}",
+            help="Toggle between single and multiple authors",
+            disabled=not toggle_editable  # Disable if more than 1 author
+        )
+
+   # If toggle state changes and is editable, update the database
+    if toggle_editable and new_is_single_author != is_single_author:
+        try:
+            with st.spinner("Updating author mode..."):
+                with conn.session as s:  # Use session context
+                    s.execute(
+                        text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
+                        {"is_single_author": int(new_is_single_author), "book_id": book_id}
+                    )
+                    s.commit()
+                st.success(f"✅ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
+                st.cache_data.clear()
+                is_single_author = new_is_single_author  # Update local variable
+        except Exception as e:
+            st.error(f"❌ Error updating author mode: {e}")
+
+
     available_slots = MAX_AUTHORS - existing_author_count
 
     # If is_single_author is True and there is already one author, prevent adding more
@@ -2690,7 +2819,7 @@ with cont:
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
                     with btn_col1:
-                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}", help="Edit ISBN"):
+                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
                             manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
                     with btn_col2:
                         if st.button(":material/currency_rupee:", key=f"price_btn_{row['book_id']}", help="Edit Price"):
