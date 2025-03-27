@@ -114,9 +114,9 @@ def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
         return f"**<span style='color:#47b354; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
     elif apply_isbn == 0:
-        return f"**<span style='color:#eb7150; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
+        return f"**<span style='color:#ed633e; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
-        return f"**<span style='color:#e0ab19; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
+        return f"**<span style='color:#606975; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
     return f"**<span style='color:#000000; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
 
@@ -458,6 +458,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
     # Main container
     with st.container():
         # Header with Book ID
+        #st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {current_title}</h3>", unsafe_allow_html=True)
         st.markdown(f"### {book_id} - {current_title}", unsafe_allow_html=True)
 
         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
@@ -596,7 +597,7 @@ def manage_price_dialog(book_id, current_price, conn):
     book_title = book_details.iloc[0]['title'] if not book_details.empty else "Unknown Title"
     col1, col2 = st.columns([6, 1])
     with col1:
-        st.markdown(f"## {book_id} : {book_title}")
+        st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
     with col2:
         if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
             st.cache_data.clear()
@@ -717,7 +718,7 @@ def manage_price_dialog(book_id, current_price, conn):
     contrn = st.container(border=True)
     with contrn:
         # Section 1: Book Price
-        st.markdown("### 📖 Book Price")
+        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
         col1,col2 = st.columns([1,1])
         with col1:
             price_str = st.text_input(
@@ -748,7 +749,7 @@ def manage_price_dialog(book_id, current_price, conn):
     cont = st.container(border=True)
     with cont:
         # Section 2: Author Payments with Tabs
-        st.markdown("### 👤 Author Payments")
+        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
         if not book_authors.empty:
             total_author_amounts = 0
             updated_authors = []
@@ -839,7 +840,7 @@ def manage_price_dialog(book_id, current_price, conn):
                         st.error("Please enter valid whole numbers for all fields")
                         return
 
-                    st.markdown(f"**Total Paid:** ₹{new_paid} | **Remaining Balance:** ₹{remaining}")
+                    st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
 
                     # Save button
                     if st.button("Save Payment", key=f"save_payment_{row['id']}"):
@@ -926,7 +927,7 @@ def edit_author_dialog(book_id, conn):
     print_status = book_details.iloc[0]['print_status']
     col1,col2 = st.columns([6,1])
     with col1:
-        st.markdown(f"## {book_id} : {book_title}")
+        st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
     with col2:
         if st.button(":material/refresh: Refresh", key="refresh_auhtor", type="tertiary"):
             st.cache_data.clear()
@@ -1154,32 +1155,34 @@ def edit_author_dialog(book_id, conn):
     # Determine if toggle should be editable
     toggle_editable = existing_author_count <= 1  # Editable only if 0 or 1 author
 
-    # Add toggle for single/multiple authors
-    toggle_col1, toggle_col2 = st.columns([3, 4])
-    with toggle_col1:
-        new_is_single_author = st.toggle(
-            "Single Author?",
-            value=is_single_author,
-            key=f"single_author_toggle_{book_id}",
-            help="Toggle between single and multiple authors",
-            disabled=not toggle_editable  # Disable if more than 1 author
-        )
 
-   # If toggle state changes and is editable, update the database
-    if toggle_editable and new_is_single_author != is_single_author:
-        try:
-            with st.spinner("Updating author mode..."):
-                with conn.session as s:  # Use session context
-                    s.execute(
-                        text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
-                        {"is_single_author": int(new_is_single_author), "book_id": book_id}
-                    )
-                    s.commit()
-                st.success(f"✅ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
-                st.cache_data.clear()
-                is_single_author = new_is_single_author  # Update local variable
-        except Exception as e:
-            st.error(f"❌ Error updating author mode: {e}")
+    if existing_author_count == 1:
+        # Add toggle for single/multiple authors
+        toggle_col1, toggle_col2 = st.columns([3, 4])
+        with toggle_col1:
+            new_is_single_author = st.toggle(
+                "Single Author?",
+                value=is_single_author,
+                key=f"single_author_toggle_{book_id}",
+                help="Toggle between single and multiple authors",
+                disabled=not toggle_editable  # Disable if more than 1 author
+            )
+
+    # If toggle state changes and is editable, update the database
+        if toggle_editable and new_is_single_author != is_single_author:
+            try:
+                with st.spinner("Updating author mode..."):
+                    with conn.session as s:  # Use session context
+                        s.execute(
+                            text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
+                            {"is_single_author": int(new_is_single_author), "book_id": book_id}
+                        )
+                        s.commit()
+                    st.success(f"✅ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
+                    st.cache_data.clear()
+                    is_single_author = new_is_single_author  # Update local variable
+            except Exception as e:
+                st.error(f"❌ Error updating author mode: {e}")
 
 
     available_slots = MAX_AUTHORS - existing_author_count
@@ -1332,7 +1335,8 @@ def edit_author_dialog(book_id, conn):
     # Render expanders
     for i in range(available_slots):
         with st.expander(f"New Author {i+1}", expanded=False):
-            with st.container(border=True):
+            with st.container(border=False):
+                #st.markdown(f"<h5 style='color: #4CAF50;'>New Author {i+1}</h5>", unsafe_allow_html=True)
                 st.markdown(f"#### New Author {i+1}", unsafe_allow_html=True)
 
                 # If is_single_author is True, disable all inputs if an author already exists
@@ -1514,7 +1518,8 @@ def edit_operation_dialog(book_id, conn):
         book_title = book_details.iloc[0]['title']
         col1, col2 = st.columns([6, 1])
         with col1:
-            st.markdown(f"## {book_id} : {book_title}")
+            st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
+            #st.markdown(f"### {book_id} : {book_title}")
         with col2:
             if st.button(":material/refresh: Refresh", key="refresh_operations", type="tertiary"):
                 st.cache_data.clear()
@@ -1921,7 +1926,8 @@ def edit_inventory_delivery_dialog(book_id, conn):
         book_title = book_details.iloc[0]['title']
         col1,col2 = st.columns([6,1])
         with col1:
-            st.markdown(f"## {book_id} : {book_title}")
+            st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
+            #st.markdown(f"## {book_id} : {book_title}")
         with col2:
             if st.button(":material/refresh: Refresh", key="refresh_inventory", type="tertiary"):
                 st.cache_data.clear()
@@ -2559,7 +2565,14 @@ def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, e
         filtered_df = filtered_df[filtered_df['date'] <= end_date]
     return filtered_df
 
-st.markdown("## 📚 Book List")
+c1,c2 = st.columns([14,1], vertical_alignment="bottom")
+
+with c1:
+    st.markdown("## 📚 Book List")
+
+with c2:
+    if st.button(":material/refresh: Refresh", key="refresh_books", type="tertiary"):
+        st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
 srcol1, srcol2, srcol3, srcol4 = st.columns([7, 4, 1, 1]) 
@@ -2765,6 +2778,43 @@ else:
         page_size = st.session_state.page_size
         paginated_books = filtered_books.head(page_size)
 
+
+# :material/done: (Simple check mark)
+# :material/task_alt: (Check mark in a circle, modern)
+# :material/verified: (Verified badge with check)
+# :material/check_box: (Checked box)
+# :material/thumb_up: (Thumbs up)
+# :material/star: (Star, for excellence)
+# :material/flag: (Flag, for reaching a goal)
+
+# :material/hourglass_empty: (Empty hourglass)
+# :material/pending: (Dots indicating waiting)
+# :material/aut renew: (Circular arrows, for "in progress")
+# :material/schedule: (Clock, for "time-based")
+# :material/build: (Wrench, for "under construction")
+# :material/sync: (Sync arrows)
+# :material/more_time: (Clock with plus sign)
+
+# price_icon = "✔️"
+# isbn_icon = "⏳"
+# author_icon = "❌"
+# ops_icon = "✔️"
+# delivery_icon = "⏳"
+
+#actual icons
+price_icon = ":material/currency_rupee:"
+isbn_icon = ":material/edit_document:"
+author_icon = ":material/manage_accounts:"
+ops_icon = ":material/manufacturing:"
+delivery_icon = ":material/local_shipping:"
+
+
+# price_icon = ":material/check_circle:"
+# isbn_icon = ":material/hourglass_top:"
+# author_icon = ":material/cancel:"
+# ops_icon = ":material/check_circle:"
+# delivery_icon = ":material/hourglass_top:"
+
 # Display the table
 column_size = [1, 4, 1, 1, 1, 2]
 
@@ -2819,19 +2869,19 @@ with cont:
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
                     with btn_col1:
-                        if st.button(":material/edit_document:", key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
+                        if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
                             manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
                     with btn_col2:
-                        if st.button(":material/currency_rupee:", key=f"price_btn_{row['book_id']}", help="Edit Price"):
+                        if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
                             manage_price_dialog(row['book_id'], row['price'],conn)
                     with btn_col3:
-                        if st.button(":material/manage_accounts:", key=f"edit_author_{row['book_id']}", help="Edit Authors"):
+                        if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
                             edit_author_dialog(row['book_id'], conn)
                     with btn_col4:
-                        if st.button(":material/manufacturing:", key=f"ops_{row['book_id']}", help="Edit Operations"):
+                        if st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations"):
                             edit_operation_dialog(row['book_id'], conn)
                     with btn_col5:
-                        if st.button(":material/local_shipping:", key=f"delivery_{row['book_id']}", help="Edit Delivery"):
+                        if st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery"):
                             edit_inventory_delivery_dialog(row['book_id'], conn)
                 st.markdown('</div>', unsafe_allow_html=True)
 
