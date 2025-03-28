@@ -759,6 +759,7 @@ def manage_price_dialog(book_id, current_price, conn):
             tabs = st.tabs(tab_titles)
 
             for tab, (_, row) in zip(tabs, book_authors.iterrows()):
+                # Inside the `for tab, (_, row) in zip(tabs, book_authors.iterrows()):` loop
                 with tab:
                     # Fetch existing payment details
                     total_amount = int(row.get('total_amount', 0) or 0)
@@ -768,9 +769,16 @@ def manage_price_dialog(book_id, current_price, conn):
                     emi1_date = row.get('emi1_date', None)
                     emi2_date = row.get('emi2_date', None)
                     emi3_date = row.get('emi3_date', None)
+                    # New fields for payment mode and transaction ID (now nullable in DB)
+                    emi1_payment_mode = row.get('emi1_payment_mode', None)  # Could be None
+                    emi2_payment_mode = row.get('emi2_payment_mode', None)  # Could be None
+                    emi3_payment_mode = row.get('emi3_payment_mode', None)  # Could be None
+                    emi1_transaction_id = row.get('emi1_transaction_id', '')
+                    emi2_transaction_id = row.get('emi2_transaction_id', '')
+                    emi3_transaction_id = row.get('emi3_transaction_id', '')
                     amount_paid = emi1 + emi2 + emi3
 
-                    # Payment status inside tab
+                    # Payment status (unchanged)
                     if amount_paid >= total_amount and total_amount > 0:
                         status = '<span class="payment-status status-paid">Fully Paid</span>'
                     elif amount_paid > 0:
@@ -779,7 +787,7 @@ def manage_price_dialog(book_id, current_price, conn):
                         status = '<span class="payment-status status-pending">Pending</span>'
                     st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
 
-                    # Total Amount Due
+                    # Total Amount Due (unchanged)
                     total_str = st.text_input(
                         "Total Amount Due (₹)",
                         value=str(total_amount) if total_amount > 0 else "",
@@ -787,43 +795,105 @@ def manage_price_dialog(book_id, current_price, conn):
                         placeholder="Enter whole amount"
                     )
 
-                    # EMI Payments with Dates
+                    # EMI Payments with Dates, Payment Mode, and Transaction ID
                     st.markdown("#### EMI Details")
-                    col1, col2 = st.columns(2)
-                    
+                    payment_modes = ["Cash", "UPI", "Bank Deposit"]
+
+                    # EMI 1
+                    st.markdown("**EMI 1**")
+                    col1, col2, col3 = st.columns([1, 1, 1])
                     with col1:
                         emi1_str = st.text_input(
-                            "EMI 1 Amount (₹)",
+                            "Amount (₹)",
                             value=str(emi1) if emi1 > 0 else "",
                             key=f"emi1_{row['id']}"
                         )
-                        emi2_str = st.text_input(
-                            "EMI 2 Amount (₹)",
-                            value=str(emi2) if emi2 > 0 else "",
-                            key=f"emi2_{row['id']}"
-                        )
-                        emi3_str = st.text_input(
-                            "EMI 3 Amount (₹)",
-                            value=str(emi3) if emi3 > 0 else "",
-                            key=f"emi3_{row['id']}"
-                        )
-                    
                     with col2:
                         emi1_date_new = st.date_input(
-                            "EMI 1 Date",
+                            "Date",
                             value=pd.to_datetime(emi1_date) if emi1_date else None,
                             key=f"emi1_date_{row['id']}"
                         )
+                    with col3:
+                        emi1_mode = st.selectbox(
+                            "Payment Mode",
+                            payment_modes,
+                            index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
+                            key=f"emi1_mode_{row['id']}"
+                        )
+                    if emi1_mode in ["UPI", "Bank Deposit"]:
+                        emi1_txn_id = st.text_input(
+                            "Transaction ID",
+                            value=emi1_transaction_id,
+                            key=f"emi1_txn_{row['id']}",
+                            placeholder="Enter Transaction ID"
+                        )
+                    else:
+                        emi1_txn_id = ""
+
+                    # EMI 2
+                    st.markdown("**EMI 2**")
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col1:
+                        emi2_str = st.text_input(
+                            "Amount (₹)",
+                            value=str(emi2) if emi2 > 0 else "",
+                            key=f"emi2_{row['id']}"
+                        )
+                    with col2:
                         emi2_date_new = st.date_input(
-                            "EMI 2 Date",
+                            "Date",
                             value=pd.to_datetime(emi2_date) if emi2_date else None,
                             key=f"emi2_date_{row['id']}"
                         )
+                    with col3:
+                        emi2_mode = st.selectbox(
+                            "Payment Mode",
+                            payment_modes,
+                            index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
+                            key=f"emi2_mode_{row['id']}"
+                        )
+                    if emi2_mode in ["UPI", "Bank Deposit"]:
+                        emi2_txn_id = st.text_input(
+                            "Transaction ID",
+                            value=emi2_transaction_id,
+                            key=f"emi2_txn_{row['id']}",
+                            placeholder="Enter Transaction ID"
+                        )
+                    else:
+                        emi2_txn_id = ""
+
+                    # EMI 3
+                    st.markdown("**EMI 3**")
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col1:
+                        emi3_str = st.text_input(
+                            "Amount (₹)",
+                            value=str(emi3) if emi3 > 0 else "",
+                            key=f"emi3_{row['id']}"
+                        )
+                    with col2:
                         emi3_date_new = st.date_input(
-                            "EMI 3 Date",
+                            "Date",
                             value=pd.to_datetime(emi3_date) if emi3_date else None,
                             key=f"emi3_date_{row['id']}"
                         )
+                    with col3:
+                        emi3_mode = st.selectbox(
+                            "Payment Mode",
+                            payment_modes,
+                            index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
+                            key=f"emi3_mode_{row['id']}"
+                        )
+                    if emi3_mode in ["UPI", "Bank Deposit"]:
+                        emi3_txn_id = st.text_input(
+                            "Transaction ID",
+                            value=emi3_transaction_id,
+                            key=f"emi3_txn_{row['id']}",
+                            placeholder="Enter Transaction ID"
+                        )
+                    else:
+                        emi3_txn_id = ""
 
                     # Calculate remaining balance
                     try:
@@ -835,7 +905,9 @@ def manage_price_dialog(book_id, current_price, conn):
                         remaining = new_total - new_paid
                         total_author_amounts += new_total
                         updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
-                                            emi1_date_new, emi2_date_new, emi3_date_new))
+                                                emi1_date_new, emi2_date_new, emi3_date_new,
+                                                emi1_mode, emi2_mode, emi3_mode,
+                                                emi1_txn_id, emi2_txn_id, emi3_txn_id))
                     except ValueError:
                         st.error("Please enter valid whole numbers for all fields")
                         return
@@ -864,7 +936,13 @@ def manage_price_dialog(book_id, current_price, conn):
                                 "emi3": new_emi3,
                                 "emi1_date": emi1_date_new,
                                 "emi2_date": emi2_date_new,
-                                "emi3_date": emi3_date_new
+                                "emi3_date": emi3_date_new,
+                                "emi1_payment_mode": emi1_mode,
+                                "emi2_payment_mode": emi2_mode,
+                                "emi3_payment_mode": emi3_mode,
+                                "emi1_transaction_id": emi1_txn_id,
+                                "emi2_transaction_id": emi2_txn_id,
+                                "emi3_transaction_id": emi3_txn_id
                             }
                             update_book_authors(row['id'], updates, conn)
                             st.success(f"Payment updated for {row['name']}")
@@ -889,7 +967,9 @@ def fetch_book_authors(book_id, conn):
            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
            ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
            ba.emi1_date, ba.emi2_date, ba.emi3_date,
-           ba.delivery_date, ba.tracking_id, ba.delivery_vendor
+           ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
+           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
+           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
