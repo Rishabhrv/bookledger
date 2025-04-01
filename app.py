@@ -95,7 +95,7 @@ conn = connect_db()
 
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author FROM books"
-books = conn.query(query)
+books = conn.query(query,show_spinner = False)
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
@@ -104,7 +104,7 @@ def fetch_book_details(book_id, conn):
     FROM books
     WHERE book_id = '{book_id}'
     """
-    return conn.query(query)
+    return conn.query(query,show_spinner = False)
 
 # Convert 'date' column to datetime objects if it's not already
 if not pd.api.types.is_datetime64_any_dtype(books['date']):
@@ -974,7 +974,7 @@ def fetch_book_authors(book_id, conn):
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
     """
-    return conn.query(query)
+    return conn.query(query, show_spinner = False)
 
 # Function to update book_authors table
 def update_book_authors(id, updates, conn):
@@ -1005,11 +1005,11 @@ def edit_author_dialog(book_id, conn):
     is_single_author = book_details.iloc[0]['is_single_author']
     num_copies = book_details.iloc[0]['num_copies']
     print_status = book_details.iloc[0]['print_status']
-    col1,col2 = st.columns([6,1])
+    col1, col2 = st.columns([6, 1])
     with col1:
         st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
     with col2:
-        if st.button(":material/refresh: Refresh", key="refresh_auhtor", type="tertiary"):
+        if st.button(":material/refresh: Refresh", key="refresh_author", type="tertiary"):
             st.cache_data.clear()
 
     # Custom CSS for better aesthetics
@@ -1037,7 +1037,6 @@ def edit_author_dialog(book_id, conn):
         </style>
     """, unsafe_allow_html=True)
 
-
     # Fetch author details
     book_authors = fetch_book_authors(book_id, conn)
     if book_authors.empty:
@@ -1046,9 +1045,26 @@ def edit_author_dialog(book_id, conn):
             st.rerun()
         return
 
+    # Initialize session state for expander states if not already set
+    if 'expander_states' not in st.session_state:
+        st.session_state.expander_states = {}
+
     for _, row in book_authors.iterrows():
-        # Wrap each author in an expander, collapsed by default
-        with st.expander(f"📖 {row['name']} (Author ID: {row['author_id']})", expanded=False):
+        author_id = row['author_id']
+        # Use session state to track whether this author's expander is open
+        expander_key = f"expander_{author_id}"
+        if expander_key not in st.session_state.expander_states:
+            st.session_state.expander_states[expander_key] = False  # Default to collapsed
+
+        # Wrap each author in an expander, preserving its state
+        with st.expander(f"📖 {row['name']} (Author ID: {author_id})", expanded=st.session_state.expander_states[expander_key]):
+            # Callback to update expander state when it's toggled
+            def update_expander_state():
+                st.session_state.expander_states[expander_key] = not st.session_state.expander_states[expander_key]
+
+            # This button is optional; you can use it to manually toggle if needed
+            # st.button("Toggle", on_click=update_expander_state, key=f"toggle_{author_id}")
+
             # Display author details in a styled box
             with st.container():
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
@@ -1079,20 +1095,20 @@ def edit_author_dialog(book_id, conn):
                                 available_positions,
                                 index=available_positions.index(row['author_position']) if row['author_position'] in available_positions else 0,
                                 help="Select the author's position in the book.",
-                                key=f"author_position_{row['id']}"  # Unique key
+                                key=f"author_position_{row['id']}"
                             )
                         with col4:
                             updates['corresponding_agent'] = st.text_input(
                                 "Corresponding Agent",
                                 value=row['corresponding_agent'] or "",
                                 help="Enter the name of the corresponding agent.",
-                                key=f"corresponding_agent_{row['id']}"  # Unique key
+                                key=f"corresponding_agent_{row['id']}"
                             )
                         updates['publishing_consultant'] = st.text_input(
                             "Publishing Consultant",
                             value=row['publishing_consultant'] or "",
                             help="Enter the name of the publishing consultant.",
-                            key=f"publishing_consultant_{row['id']}"  # Unique key
+                            key=f"publishing_consultant_{row['id']}"
                         )
 
                     # Tab 2: Checklists
@@ -1103,62 +1119,62 @@ def edit_author_dialog(book_id, conn):
                                 "✅ Welcome Mail Sent",
                                 value=bool(row['welcome_mail_sent']),
                                 help="Check if the welcome email has been sent.",
-                                key=f"welcome_mail_sent_{row['id']}"  # Unique key
+                                key=f"welcome_mail_sent_{row['id']}"
                             )
                             updates['digital_book_sent'] = st.checkbox(
                                 "📘 Digital Book Sent",
                                 value=bool(row['digital_book_sent']),
                                 help="Check if the digital book has been sent.",
-                                key=f"digital_book_sent_{row['id']}"  # Unique key
+                                key=f"digital_book_sent_{row['id']}"
                             )
                             updates['digital_book_approved'] = st.checkbox(
                                 "✔️ Digital Book Approved",
                                 value=bool(row['digital_book_approved']),
                                 help="Check if the digital book has been approved.",
-                                key=f"digital_book_approved_{row['id']}"  # Unique key
+                                key=f"digital_book_approved_{row['id']}"
                             )
                             updates['plagiarism_report'] = st.checkbox(
                                 "📝 Plagiarism Report",
                                 value=bool(row['plagiarism_report']),
                                 help="Check if the plagiarism report has been received.",
-                                key=f"plagiarism_report_{row['id']}"  # Unique key
+                                key=f"plagiarism_report_{row['id']}"
                             )
                             updates['photo_recive'] = st.checkbox(
                                 "📷 Photo Received",
                                 value=bool(row['photo_recive']),
                                 help="Check if the author's photo has been received.",
-                                key=f"photo_recive_{row['id']}"  # Unique key
+                                key=f"photo_recive_{row['id']}"
                             )
                         with col6:
                             updates['id_proof_recive'] = st.checkbox(
                                 "🆔 ID Proof Received",
                                 value=bool(row['id_proof_recive']),
                                 help="Check if the author's ID proof has been received.",
-                                key=f"id_proof_recive_{row['id']}"  # Unique key
+                                key=f"id_proof_recive_{row['id']}"
                             )
                             updates['author_details_sent'] = st.checkbox(
                                 "✉️ Author Details Sent",
                                 value=bool(row['author_details_sent']),
                                 help="Check if the author's details have been sent.",
-                                key=f"author_details_sent_{row['id']}"  # Unique key
+                                key=f"author_details_sent_{row['id']}"
                             )
                             updates['cover_agreement_sent'] = st.checkbox(
                                 "📜 Cover Agreement Sent",
                                 value=bool(row['cover_agreement_sent']),
                                 help="Check if the cover agreement has been sent.",
-                                key=f"cover_agreement_sent_{row['id']}"  # Unique key
+                                key=f"cover_agreement_sent_{row['id']}"
                             )
                             updates['agreement_received'] = st.checkbox(
                                 "✅ Agreement Received",
                                 value=bool(row['agreement_received']),
                                 help="Check if the agreement has been received.",
-                                key=f"agreement_received_{row['id']}"  # Unique key
+                                key=f"agreement_received_{row['id']}"
                             )
                             updates['printing_confirmation'] = st.checkbox(
                                 "🖨️ Printing Confirmation",
                                 value=bool(row['printing_confirmation']),
                                 help="Check if printing confirmation has been received.",
-                                key=f"printing_confirmation_{row['id']}"  # Unique key
+                                key=f"printing_confirmation_{row['id']}"
                             )
 
                     # Tab 3: Delivery (disabled if print_status is 0)
@@ -1173,13 +1189,13 @@ def edit_author_dialog(book_id, conn):
                                     value=row['delivery_address'] or "",
                                     height=100,
                                     help="Enter the delivery address.",
-                                    key=f"delivery_address_{row['id']}"  # Unique key
+                                    key=f"delivery_address_{row['id']}"
                                 )
                                 updates['delivery_date'] = st.date_input(
                                     "Delivery Date",
                                     value=row['delivery_date'],
                                     help="Enter the delivery date.",
-                                    key=f"delivery_date_{row['id']}"  # Unique key
+                                    key=f"delivery_date_{row['id']}"
                                 )
                             with col8:
                                 updates['delivery_charge'] = st.number_input(
@@ -1188,29 +1204,28 @@ def edit_author_dialog(book_id, conn):
                                     step=0.01,
                                     value=float(row['delivery_charge'] or 0.0),
                                     help="Enter the delivery charge in INR.",
-                                    key=f"delivery_charge_{row['id']}"  # Unique key
+                                    key=f"delivery_charge_{row['id']}"
                                 )
                                 updates['tracking_id'] = st.text_input(
                                     "Tracking ID",
                                     value=row['tracking_id'] or "",
                                     help="Enter the tracking ID for the delivery.",
-                                    key=f"tracking_id_{row['id']}"  # Unique key
+                                    key=f"tracking_id_{row['id']}"
                                 )
                             with col9:
-                                # Simplified number_of_books input without validation
                                 updates['number_of_books'] = st.number_input(
                                     "Number of Books",
                                     min_value=0,
                                     step=1,
                                     value=int(row['number_of_books'] or 0),
                                     help="Enter the number of books to deliver.",
-                                    key=f"number_of_books_{row['id']}"  # Unique key
+                                    key=f"number_of_books_{row['id']}"
                                 )
                                 updates['delivery_vendor'] = st.text_input(
                                     "Delivery Vendor",
                                     value=row['delivery_vendor'] or "",
                                     help="Enter the name of the delivery vendor.",
-                                    key=f"delivery_vendor_{row['id']}"  # Unique key
+                                    key=f"delivery_vendor_{row['id']}"
                                 )
 
                     # Submit button
@@ -1588,7 +1603,7 @@ def insert_author(conn, name, email, phone):
 @st.cache_data
 def fetch_unique_names(column):
     query = f"SELECT DISTINCT {column} AS name FROM books WHERE {column} IS NOT NULL AND {column} != ''"
-    return sorted(conn.query(query)['name'].tolist())
+    return sorted(conn.query(query,show_spinner = False)['name'].tolist())
 
 @st.dialog("Edit Operation Details", width='large')
 def edit_operation_dialog(book_id, conn):
@@ -1647,7 +1662,7 @@ def edit_operation_dialog(book_id, conn):
                back_cover_start, back_cover_end, back_cover_by, book_pages
         FROM books WHERE book_id = {book_id}
     """
-    book_operations = conn.query(query)
+    book_operations = conn.query(query,show_spinner = False)
     
     if book_operations.empty:
         st.warning(f"No operation details found for Book ID: {book_id}")
@@ -2103,7 +2118,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                google_link, agph_link, google_review, book_mrp
         FROM books WHERE book_id = {book_id}
     """
-    book_data = conn.query(query)
+    book_data = conn.query(query,show_spinner = False)
     
     if book_data.empty:
         st.warning(f"No inventory details found for Book ID: {book_id}")
@@ -2146,7 +2161,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     WHERE book_id = {book_id}
                     ORDER BY print_date DESC
                 """
-                print_runs_data = conn.query(print_runs_query)
+                print_runs_data = conn.query(print_runs_query,show_spinner = False)
 
                 # Display existing print runs in an expander (collapsible)
                 with st.expander("View Existing Print Runs", expanded=True):
@@ -2297,7 +2312,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 WHERE book_id = {book_id}
                 ORDER BY print_date
             """
-            print_runs_data = conn.query(print_runs_query)
+            print_runs_data = conn.query(print_runs_query,show_spinner = False)
             
             # Fetch existing inventory details (assuming you have an inventory table)
             inventory_query = f"""
@@ -2305,7 +2320,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 FROM inventory 
                 WHERE book_id = {book_id}
             """
-            inventory_data = conn.query(inventory_query)
+            inventory_data = conn.query(inventory_query,show_spinner = False)
             
             inventory_current = inventory_data.iloc[0] if not inventory_data.empty else {
                 'rack_number': '', 'amazon_sales': 0, 'flipkart_sales': 0, 'website_sales': 0, 'direct_sales': 0
@@ -2320,7 +2335,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 FROM book_authors 
                 WHERE book_id = {book_id}
             """
-            author_copies_data = conn.query(author_copies_query)
+            author_copies_data = conn.query(author_copies_query,show_spinner = False)
             copies_sent_to_authors = int(author_copies_data.iloc[0]['total_author_copies'] or 0) if not author_copies_data.empty else 0
 
             total_sales = int(inventory_current.get('amazon_sales', 0) + 
@@ -2537,7 +2552,7 @@ author_count_query = """
     FROM book_authors
     GROUP BY book_id
 """
-author_counts = conn.query(author_count_query)
+author_counts = conn.query(author_count_query,show_spinner = False)
 # Convert to dictionary for easy lookup
 author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_count']))
 
