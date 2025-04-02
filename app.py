@@ -84,7 +84,8 @@ st.cache_data.clear()
 # --- Database Connection ---
 def connect_db():
     try:
-        conn = st.connection('mysql', type='sql')
+        with st.spinner("Connecting to MySQL..."):
+            conn = st.connection('mysql', type='sql')
         return conn
     except Exception as e:
         st.error(f"Error connecting to MySQL: {e}")
@@ -2633,15 +2634,36 @@ st.markdown("""
 
 # Function to filter books based on search query
 def filter_books(df, query):
-    if not query:
+    if not query or not query.strip():  # Handle empty or whitespace-only queries
         return df
-    query = query.lower()
-    return df[
-        df['title'].str.lower().str.contains(query, na=False) |
-        df['book_id'].astype(str).str.lower().str.contains(query, na=False) |
-        df['isbn'].astype(str).str.lower().str.contains(query, na=False) |
-        df['date'].astype(str).str.contains(query, na=False)
-    ]
+    
+    query = query.strip()  # Remove leading/trailing whitespace
+    
+    # Check if query is a number (for book_id)
+    if query.isdigit():
+        query_len = len(query)
+        if 1 <= query_len <= 4:  # Book ID (1-4 digits)
+            return df[df['book_id'].astype(str) == query]
+    
+    # Check if query matches ISBN format (e.g., 978-81-970707-9-2)
+    elif re.match(r'^\d{3}-\d{2}-\d{5,7}-\d{1,2}-\d$', query):
+        # Compare directly with ISBN as stored (with hyphens)
+        return df[df['isbn'].astype(str) == query]
+    
+    # Check if query matches date format (YYYY-MM-DD)
+    elif re.match(r'^\d{4}-\d{2}-\d{2}$', query):
+        try:
+            # Validate date by converting to datetime
+            pd.to_datetime(query)
+            return df[df['date'].astype(str) == query]
+        except ValueError:
+            # If date is invalid, return empty dataframe
+            return df[df['book_id'].isna()]  # Returns empty df
+    
+    # Default case: search in title (partial match)
+    else:
+        query = query.lower()
+        return df[df['title'].str.lower().str.contains(query, na=False)]
 
 # Function to filter books based on day, month, year, and date range
 def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, end_date=None):
@@ -2826,7 +2848,7 @@ with srcol2:
 
 # Add page size selection
 with srcol4:
-    page_size_options = [50, 100, "All"]
+    page_size_options = [40, 100, "All"]
     if 'page_size' not in st.session_state:
         st.session_state.page_size = page_size_options[0]  # Default page size
     st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
@@ -2858,7 +2880,7 @@ pagination_enabled = st.session_state.page_size == "All" and not (
 # Apply pagination or limit the number of books based on page size
 if pagination_enabled:
     # Pagination is enabled: Show all books with pagination
-    page_size = 50  # Default page size for pagination when "All" is selected
+    page_size = 40  # Default page size for pagination when "All" is selected
     total_books = len(filtered_books)
     total_pages = max(1, (total_books + page_size - 1) // page_size)
     st.session_state.current_page = min(st.session_state.current_page, total_pages)  # Ensure current page is valid
@@ -3009,9 +3031,9 @@ with cont:
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        # Add informational message if pagination is disabled due to specific page size
-        if not pagination_enabled and st.session_state.page_size != "All":
-            st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
+        # # Add informational message if pagination is disabled due to specific page size
+        # if not pagination_enabled and st.session_state.page_size != "All":
+        #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
 
                 
 
