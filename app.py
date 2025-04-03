@@ -389,7 +389,7 @@ def add_book_dialog(conn):
             else:
                 with conn.session as s:
                     try:
-                        # Insert book (include is_single_author)
+                        # Insert book
                         s.execute(text("""
                             INSERT INTO books (title, date, is_single_author)
                             VALUES (:title, :date, :is_single_author)
@@ -404,7 +404,12 @@ def add_book_dialog(conn):
                                 author_id_to_link = author["author_id"]
                             else:
                                 # Insert new author
-                                author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+                                s.execute(text("""
+                                    INSERT INTO authors (name, email, phone)
+                                    VALUES (:name, :email, :phone)
+                                    ON DUPLICATE KEY UPDATE name=name
+                                """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
+                                author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
                             if book_id and author_id_to_link:
                                 s.execute(text("""
@@ -419,12 +424,12 @@ def add_book_dialog(conn):
                                 })
                         s.commit()
                         st.success("Book and Authors Saved Successfully!", icon="✅")
-                        time.sleep(1)  # Give user time to see the success message
+                        time.sleep(1)
                         st.session_state.authors = [
                             {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                             for i in range(4)
-                        ]  # Reset authors
-                        st.rerun()  # Close the dialog by rerunning the app
+                        ]
+                        st.rerun()
                     except Exception as db_error:
                         s.rollback()
                         st.error(f"Database error during save: {db_error}", icon="❌")
@@ -1245,15 +1250,11 @@ def edit_author_dialog(book_id, conn):
                             st.error(f"❌ Error updating author details: {e}")
     
 
-    # Fetch existing authors for this book
     book_authors = fetch_book_authors(book_id, conn)
     existing_author_count = len(book_authors)
-    # Determine if toggle should be editable
     toggle_editable = existing_author_count <= 1  # Editable only if 0 or 1 author
 
-
     if existing_author_count == 1:
-        # Add toggle for single/multiple authors
         toggle_col1, toggle_col2 = st.columns([3, 4])
         with toggle_col1:
             new_is_single_author = st.toggle(
@@ -1261,14 +1262,13 @@ def edit_author_dialog(book_id, conn):
                 value=is_single_author,
                 key=f"single_author_toggle_{book_id}",
                 help="Toggle between single and multiple authors",
-                disabled=not toggle_editable  # Disable if more than 1 author
+                disabled=not toggle_editable
             )
 
-    # If toggle state changes and is editable, update the database
         if toggle_editable and new_is_single_author != is_single_author:
             try:
                 with st.spinner("Updating author mode..."):
-                    with conn.session as s:  # Use session context
+                    with conn.session as s:
                         s.execute(
                             text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
                             {"is_single_author": int(new_is_single_author), "book_id": book_id}
@@ -1276,21 +1276,19 @@ def edit_author_dialog(book_id, conn):
                         s.commit()
                     st.success(f"✅ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
                     st.cache_data.clear()
-                    is_single_author = new_is_single_author  # Update local variable
+                    is_single_author = new_is_single_author
             except Exception as e:
                 st.error(f"❌ Error updating author mode: {e}")
 
-
     available_slots = MAX_AUTHORS - existing_author_count
+    # st.write(f"Debug: Available slots = {available_slots}")  # Debug statement
 
-    # If is_single_author is True and there is already one author, prevent adding more
     if is_single_author and existing_author_count >= 1:
         st.warning("⚠️ This book is marked as 'Single Author'. No additional authors can be added.")
         if st.button("Close"):
             st.rerun()
         return
 
-    # If the maximum number of authors is already reached (regardless of is_single_author)
     if existing_author_count >= MAX_AUTHORS:
         st.warning("⚠️ This book already has the maximum number of authors (4). No more authors can be added.")
         if st.button("Close"):
@@ -1300,30 +1298,29 @@ def edit_author_dialog(book_id, conn):
     if existing_author_count == 0:
         st.warning(f"⚠️ No authors found for Book ID: {book_id}")
 
-    # Helper function to ensure backward compatibility
+    # Helper functions (unchanged for brevity)
     def ensure_author_fields(author):
-        """Ensure all required fields are present in the author dict."""
         default_author = {
-            "name": "",
-            "email": "",
-            "phone": "",
-            "author_id": None,
-            "author_position": None,
-            "corresponding_agent": "",
-            "publishing_consultant": ""
+            "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+            "corresponding_agent": "", "publishing_consultant": ""
         }
         for key, default_value in default_author.items():
             if key not in author:
                 author[key] = default_value
         return author
 
-    # Initialize or reinitialize session state for new authors
     def initialize_new_authors(slots):
-        """Initialize or reinitialize st.session_state.new_authors with the correct number of slots."""
         return [
-            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None, "corresponding_agent": "", "publishing_consultant": ""}
+            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+            "corresponding_agent": "", "publishing_consultant": ""}
             for _ in range(slots)
         ]
+
+    # Initialize session state
+    if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
+        st.session_state.new_authors = initialize_new_authors(available_slots)
+    else:
+        st.session_state.new_authors = [ensure_author_fields(author) for author in st.session_state.new_authors]
 
     # Check if new_authors exists and has the correct length; reinitialize if not
     if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
@@ -1416,10 +1413,6 @@ def edit_author_dialog(book_id, conn):
 
         return True, ""
 
-    # Get existing positions and author IDs to prevent duplicates
-    existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
-    existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
-
     # Author selection and form
     st.markdown(f"### Add Up to {available_slots} New Authors")
     all_authors = get_all_authors(conn)
@@ -1428,19 +1421,18 @@ def edit_author_dialog(book_id, conn):
     agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
     consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
 
+    existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
+    existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
+
     # Render expanders
     for i in range(available_slots):
         with st.expander(f"New Author {i+1}", expanded=False):
             with st.container(border=False):
-                #st.markdown(f"<h5 style='color: #4CAF50;'>New Author {i+1}</h5>", unsafe_allow_html=True)
-                st.markdown(f"#### New Author {i+1}", unsafe_allow_html=True)
-
-                # If is_single_author is True, disable all inputs if an author already exists
+                st.markdown(f"#### New Author {i+1}")
                 disabled = is_single_author and existing_author_count >= 1
                 if disabled and i == 0:
                     st.warning("⚠️ This section is disabled because the book is marked as 'Single Author' and already has one author.")
 
-                # Author selection or new author
                 selected_author = st.selectbox(
                     f"Select Author {i+1}",
                     author_options,
@@ -1453,10 +1445,12 @@ def edit_author_dialog(book_id, conn):
                     selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
                     selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
                     if selected_author_details:
-                        st.session_state.new_authors[i]["name"] = selected_author_details.name
-                        st.session_state.new_authors[i]["email"] = selected_author_details.email
-                        st.session_state.new_authors[i]["phone"] = selected_author_details.phone
-                        st.session_state.new_authors[i]["author_id"] = selected_author_details.author_id
+                        st.session_state.new_authors[i].update({
+                            "name": selected_author_details.name,
+                            "email": selected_author_details.email,
+                            "phone": selected_author_details.phone,
+                            "author_id": selected_author_details.author_id
+                        })
                 elif selected_author == "Add New Author" and not disabled:
                     st.session_state.new_authors[i]["author_id"] = None
 
@@ -1465,7 +1459,6 @@ def edit_author_dialog(book_id, conn):
                     f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
                     placeholder="Enter author name..", help="Enter the full name of the author.", disabled=disabled
                 )
-                # Dynamically update available positions for this author
                 current_new_positions = [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]]
                 all_taken_positions = existing_positions + current_new_positions
                 available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in all_taken_positions]
@@ -1529,16 +1522,12 @@ def edit_author_dialog(book_id, conn):
                 elif selected_consultant != "Select Consultant" and not disabled:
                     st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
 
-    return st.session_state.new_authors
-
-    # Single button to save all new authors
+    # Button section
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
             errors = []
-            # Only consider authors that are complete (all required fields filled)
             active_authors = [author for author in st.session_state.new_authors if is_author_complete(author)]
-
             if not active_authors:
                 st.error("❌ Please fill in the details for at least one author to proceed.")
             else:
@@ -1546,14 +1535,13 @@ def edit_author_dialog(book_id, conn):
                     is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, st.session_state.new_authors, i, is_single_author)
                     if not is_valid:
                         errors.append(f"Author {i+1}: {error_message}")
-
                 if errors:
                     for error in errors:
                         st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
                 else:
                     try:
                         for author in active_authors:
-                            if is_author_complete(author):  # Double-check completeness
+                            if is_author_complete(author):
                                 author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
                                 if book_id and author_id_to_link:
                                     with conn.session as s:
@@ -1573,14 +1561,14 @@ def edit_author_dialog(book_id, conn):
                                         s.commit()
                         st.cache_data.clear()
                         st.success("✅ New authors added successfully!")
-                        del st.session_state.new_authors  # Reset state
+                        del st.session_state.new_authors
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Error adding authors: {e}")
 
     with col2:
         if st.button("Cancel", key="cancel_add_authors", type="secondary"):
-            del st.session_state.new_authors  # Reset state
+            del st.session_state.new_authors
             st.rerun()
 
 def insert_author(conn, name, email, phone):
