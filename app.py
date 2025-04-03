@@ -227,8 +227,8 @@ def add_book_dialog(conn):
         unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
 
         # Add "Add New..." option to agent and consultant lists
-        agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
-        consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
+        agent_options = ["Select Agent"] + ["Add New..."] + unique_agents 
+        consultant_options = ["Select Consultant"] + ["Add New..."] + unique_consultants 
 
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Author Details</h5>", unsafe_allow_html=True)
@@ -1057,19 +1057,14 @@ def edit_author_dialog(book_id, conn):
 
     for _, row in book_authors.iterrows():
         author_id = row['author_id']
+        author_position = row['author_position']
         # Use session state to track whether this author's expander is open
         expander_key = f"expander_{author_id}"
         if expander_key not in st.session_state.expander_states:
             st.session_state.expander_states[expander_key] = False  # Default to collapsed
 
         # Wrap each author in an expander, preserving its state
-        with st.expander(f"📖 {row['name']} (Author ID: {author_id})", expanded=st.session_state.expander_states[expander_key]):
-            # Callback to update expander state when it's toggled
-            def update_expander_state():
-                st.session_state.expander_states[expander_key] = not st.session_state.expander_states[expander_key]
-
-            # This button is optional; you can use it to manually toggle if needed
-            # st.button("Toggle", on_click=update_expander_state, key=f"toggle_{author_id}")
+        with st.expander(f"📖 {row['name']} (ID: {author_id}) Position: {author_position}", expanded=st.session_state.expander_states[expander_key]):
 
             # Display author details in a styled box
             with st.container():
