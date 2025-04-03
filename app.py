@@ -84,8 +84,15 @@ st.cache_data.clear()
 # --- Database Connection ---
 def connect_db():
     try:
-        with st.spinner("Connecting to MySQL..."):
-            conn = st.connection('mysql', type='sql')
+        # Use st.cache_resource to only connect once
+        @st.cache_resource
+        def get_connection():
+            return st.connection('mysql', type='sql')
+        conn = get_connection()
+        #Optional: Ping connection to check liveness
+        # with conn.session as s:
+        #     s.execute(text('SELECT 1'))
+        # st.toast("Database Connected.", icon="✅") # Optional feedback
         return conn
     except Exception as e:
         st.error(f"Error connecting to MySQL: {e}")
@@ -142,6 +149,128 @@ def get_status_pill(deliver_value):
         text_color = "#e0ab19"  
 
     return f"<span style='{pill_style} color: {text_color};'>{status}</span>"
+
+
+###################################################################################################################################
+##################################--------------- Edit Auhtor Details ----------------------------##################################
+###################################################################################################################################
+
+
+@st.dialog("Manage Authors", width="large")
+def edit_author_detail(conn):
+    # Fetch all authors from database
+    with conn.session as s:
+        authors = s.execute(
+            text("SELECT author_id, name, email, phone FROM authors ORDER BY name")
+        ).fetchall()
+    
+    if not authors:
+        st.error("❌ No authors found in database.")
+        return
+
+    # Convert to dictionary for easier handling
+    author_dict = {f"{author.name} (ID: {author.author_id})": author for author in authors}
+    author_options = list(author_dict.keys())
+
+    st.markdown("### Author List", unsafe_allow_html=True)
+    with st.container(border=True):
+        # Author selection
+        selected_author_name = st.selectbox(
+            "Select Author",
+            options=author_options,
+            key="author_select",
+            help="Select an author to edit or delete"
+        )
+        
+        selected_author = author_dict[selected_author_name]
+        # Highlight author ID with green color
+        st.markdown(
+            f"#### Selected ID: <span style='color: #2196F3; font-weight: bold;'>{selected_author.author_id}</span>",
+            unsafe_allow_html=True
+        )
+
+    # Highlight author name with blue color
+    st.markdown(
+        f"### Editing: <span style='color: #4CAF50;'>{selected_author.name}</span>",
+        unsafe_allow_html=True
+    )
+    with st.container(border=True):
+        # Edit fields with NULL handling
+        new_name = st.text_input(
+            "Author Name",
+            value=selected_author.name,
+            key=f"name_{selected_author.author_id}"
+        )
+        new_email = st.text_input(
+            "Email",
+            value=selected_author.email if selected_author.email is not None else "",
+            key=f"email_{selected_author.author_id}"
+        )
+        new_phone = st.text_input(
+            "Phone",
+            value=selected_author.phone if selected_author.phone is not None else "",
+            key=f"phone_{selected_author.author_id}"
+        )
+
+        # Action buttons in a single container
+        with st.container():
+            if st.button("Save Changes", 
+                        key=f"save_{selected_author.author_id}", 
+                        type="primary",
+                        use_container_width=True):
+                with st.spinner("Saving changes...", show_time=True):
+                    time.sleep(1)
+                    with conn.session as s:
+                        s.execute(
+                            text("""
+                                UPDATE authors 
+                                SET name = :name, 
+                                    email = :email, 
+                                    phone = :phone 
+                                WHERE author_id = :author_id
+                            """),
+                            {
+                                "name": new_name,
+                                "email": new_email if new_email else None,
+                                "phone": new_phone if new_phone else None,
+                                "author_id": selected_author.author_id
+                            }
+                        )
+                        s.commit()
+                    st.success("Author Updated Successfully!", icon="✔️")
+
+        # with btn_col2:
+        #     delete_key = f"delete_{selected_author.author_id}"
+        #     if "confirm_delete" not in st.session_state:
+        #         st.session_state["confirm_delete"] = False
+
+        #     if st.button("Delete Author", 
+        #                 key=delete_key, 
+        #                 type="primary",
+        #                 use_container_width=True):
+        #         st.session_state["confirm_delete"] = True
+
+        #     # Confirmation dialog
+        #     if st.session_state["confirm_delete"]:
+        #         st.warning(f"Are you sure you want to delete {selected_author.name} (ID: {selected_author.author_id})?")
+        #         confirm_col1, confirm_col2 = st.columns(2)
+        #         with confirm_col1:
+        #             if st.button("Cancel", key=f"cancel_{delete_key}"):
+        #                 st.session_state["confirm_delete"] = False
+        #         with confirm_col2:
+        #             if st.button("Confirm Delete", key=f"confirm_{delete_key}", type="primary"):
+        #                 with st.spinner("Deleting author...", show_time=True):
+        #                     time.sleep(2)
+        #                     with conn.session as s:
+        #                         s.execute(
+        #                             text("DELETE FROM authors WHERE author_id = :author_id"),
+        #                             {"author_id": selected_author.author_id}
+        #                         )
+        #                         s.commit()
+        #                     st.success("Author Deleted Successfully!", icon="✔️")
+        #                     st.session_state["confirm_delete"] = False
+
+
 
 
 ###################################################################################################################################
@@ -316,16 +445,6 @@ def add_book_dialog(conn):
 
         return st.session_state.authors
 
-    def insert_author(conn, name, email, phone):
-        with conn.session as s:
-            s.execute(text("""
-                INSERT INTO authors (name, email, phone)
-                VALUES (:name, :email, :phone)
-                ON DUPLICATE KEY UPDATE name=name
-            """), params={"name": name, "email": email, "phone": phone})
-            s.commit()
-            return s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
-
     def is_author_active(author):
         """Check if an author is 'active' (i.e., has at least one non-empty field)."""
         return bool(author["name"] or author["email"] or author["phone"] or author["corresponding_agent"] or author["publishing_consultant"])
@@ -387,52 +506,53 @@ def add_book_dialog(conn):
             if errors:
                 st.error("\n".join(errors), icon="🚨")
             else:
-                with conn.session as s:
-                    try:
-                        # Insert book
-                        s.execute(text("""
-                            INSERT INTO books (title, date, is_single_author)
-                            VALUES (:title, :date, :is_single_author)
-                        """), params={"title": book_data["title"], "date": book_data["date"], "is_single_author": book_data["is_single_author"]})
-                        book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                with st.spinner("Saving...", show_time=True):
+                    time.sleep(2)
+                    with conn.session as s:
+                        try:
+                            # Insert book
+                            s.execute(text("""
+                                INSERT INTO books (title, date, is_single_author)
+                                VALUES (:title, :date, :is_single_author)
+                            """), params={"title": book_data["title"], "date": book_data["date"], "is_single_author": book_data["is_single_author"]})
+                            book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                        # Process only active authors
-                        active_authors = [a for a in author_data if is_author_active(a)]
-                        for author in active_authors:
-                            if author["author_id"]:
-                                # Use existing author
-                                author_id_to_link = author["author_id"]
-                            else:
-                                # Insert new author
-                                s.execute(text("""
-                                    INSERT INTO authors (name, email, phone)
-                                    VALUES (:name, :email, :phone)
-                                    ON DUPLICATE KEY UPDATE name=name
-                                """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
-                                author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                            # Process only active authors
+                            active_authors = [a for a in author_data if is_author_active(a)]
+                            for author in active_authors:
+                                if author["author_id"]:
+                                    # Use existing author
+                                    author_id_to_link = author["author_id"]
+                                else:
+                                    # Insert new author
+                                    s.execute(text("""
+                                        INSERT INTO authors (name, email, phone)
+                                        VALUES (:name, :email, :phone)
+                                        ON DUPLICATE KEY UPDATE name=name
+                                    """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
+                                    author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                            if book_id and author_id_to_link:
-                                s.execute(text("""
-                                    INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                    VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                """), params={
-                                    "book_id": book_id,
-                                    "author_id": author_id_to_link,
-                                    "author_position": author["author_position"],
-                                    "corresponding_agent": author["corresponding_agent"],
-                                    "publishing_consultant": author["publishing_consultant"]
-                                })
-                        s.commit()
-                        st.success("Book and Authors Saved Successfully!", icon="✅")
-                        time.sleep(1)
-                        st.session_state.authors = [
-                            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
-                            for i in range(4)
-                        ]
-                        st.rerun()
-                    except Exception as db_error:
-                        s.rollback()
-                        st.error(f"Database error during save: {db_error}", icon="❌")
+                                if book_id and author_id_to_link:
+                                    s.execute(text("""
+                                        INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                        VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                    """), params={
+                                        "book_id": book_id,
+                                        "author_id": author_id_to_link,
+                                        "author_position": author["author_position"],
+                                        "corresponding_agent": author["corresponding_agent"],
+                                        "publishing_consultant": author["publishing_consultant"]
+                                    })
+                            s.commit()
+                            st.success("Book and Authors Saved Successfully!", icon="✔️")
+                            st.session_state.authors = [
+                                {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
+                                for i in range(4)
+                            ]
+                            st.rerun()
+                        except Exception as db_error:
+                            s.rollback()
+                            st.error(f"Database error during save: {db_error}", icon="❌")
 
     with col2:
         if st.button("Cancel", key="dialog_cancel", type="secondary"):
@@ -529,66 +649,67 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
 
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
-            with conn.session as s:
-                if apply_isbn and receive_isbn and new_isbn:
-                    s.execute(
-                        text("""
-                            UPDATE books 
-                            SET apply_isbn = :apply_isbn, 
-                                isbn = :isbn, 
-                                isbn_receive_date = :isbn_receive_date, 
-                                title = :title, 
-                                date = :date 
-                            WHERE book_id = :book_id
-                        """),
-                        {
-                            "apply_isbn": 1, 
-                            "isbn": new_isbn, 
-                            "isbn_receive_date": isbn_receive_date, 
-                            "title": new_title, 
-                            "date": new_date, 
-                            "book_id": book_id
-                        }
-                    )
-                elif apply_isbn and not receive_isbn:
-                    s.execute(
-                        text("""
-                            UPDATE books 
-                            SET apply_isbn = :apply_isbn, 
-                                isbn = NULL, 
-                                isbn_receive_date = NULL, 
-                                title = :title, 
-                                date = :date 
-                            WHERE book_id = :book_id
-                        """),
-                        {
-                            "apply_isbn": 1, 
-                            "title": new_title, 
-                            "date": new_date, 
-                            "book_id": book_id
-                        }
-                    )
-                else:
-                    s.execute(
-                        text("""
-                            UPDATE books 
-                            SET apply_isbn = :apply_isbn, 
-                                isbn = NULL, 
-                                isbn_receive_date = NULL, 
-                                title = :title, 
-                                date = :date 
-                            WHERE book_id = :book_id
-                        """),
-                        {
-                            "apply_isbn": 0, 
-                            "title": new_title, 
-                            "date": new_date, 
-                            "book_id": book_id
-                        }
-                    )
-                s.commit()
-            st.success("Book Details Updated Successfully")
-            st.rerun()
+            with st.spinner("Saving changes...", show_time=True):
+                time.sleep(2) 
+                with conn.session as s:
+                    if apply_isbn and receive_isbn and new_isbn:
+                        s.execute(
+                            text("""
+                                UPDATE books 
+                                SET apply_isbn = :apply_isbn, 
+                                    isbn = :isbn, 
+                                    isbn_receive_date = :isbn_receive_date, 
+                                    title = :title, 
+                                    date = :date 
+                                WHERE book_id = :book_id
+                            """),
+                            {
+                                "apply_isbn": 1, 
+                                "isbn": new_isbn, 
+                                "isbn_receive_date": isbn_receive_date, 
+                                "title": new_title, 
+                                "date": new_date, 
+                                "book_id": book_id
+                            }
+                        )
+                    elif apply_isbn and not receive_isbn:
+                        s.execute(
+                            text("""
+                                UPDATE books 
+                                SET apply_isbn = :apply_isbn, 
+                                    isbn = NULL, 
+                                    isbn_receive_date = NULL, 
+                                    title = :title, 
+                                    date = :date 
+                                WHERE book_id = :book_id
+                            """),
+                            {
+                                "apply_isbn": 1, 
+                                "title": new_title, 
+                                "date": new_date, 
+                                "book_id": book_id
+                            }
+                        )
+                    else:
+                        s.execute(
+                            text("""
+                                UPDATE books 
+                                SET apply_isbn = :apply_isbn, 
+                                    isbn = NULL, 
+                                    isbn_receive_date = NULL, 
+                                    title = :title, 
+                                    date = :date 
+                                WHERE book_id = :book_id
+                            """),
+                            {
+                                "apply_isbn": 0, 
+                                "title": new_title, 
+                                "date": new_date, 
+                                "book_id": book_id
+                            }
+                        )
+                    s.commit()
+                st.success("Book Details Updated Successfully!", icon="✔️")
 
 
 ###################################################################################################################################
@@ -735,22 +856,23 @@ def manage_price_dialog(book_id, current_price, conn):
             )
             
             if st.button("Save Book Price", key=f"save_price_{book_id}"):
-                try:
-                    price = int(price_str) if price_str.strip() else None
-                    if price is not None and price < 0:
-                        st.error("Price cannot be negative")
-                        return
-                        
-                    with conn.session as s:
-                        s.execute(
-                            text("UPDATE books SET price = :price WHERE book_id = :book_id"),
-                            {"price": price, "book_id": book_id}
-                        )
-                        s.commit()
-                    st.success("Book Price Updated Successfully")
-                    st.rerun()
-                except ValueError:
-                    st.error("Please enter a valid whole number")
+                with st.spinner("Saving...", show_time=True):
+                    time.sleep(2)
+                    try:
+                        price = int(price_str) if price_str.strip() else None
+                        if price is not None and price < 0:
+                            st.error("Price cannot be negative")
+                            return
+                            
+                        with conn.session as s:
+                            s.execute(
+                                text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                                {"price": price, "book_id": book_id}
+                            )
+                            s.commit()
+                        st.success("Book Price Updated Successfully", icon="✔️")
+                    except ValueError:
+                        st.error("Please enter a valid whole number", icon="🚨")
 
     cont = st.container(border=True)
     with cont:
@@ -922,38 +1044,39 @@ def manage_price_dialog(book_id, current_price, conn):
 
                     # Save button
                     if st.button("Save Payment", key=f"save_payment_{row['id']}"):
-                        if new_paid > new_total:
-                            st.error("Total EMI payments cannot exceed total amount")
-                        elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
-                            st.error("Amounts cannot be negative")
-                        else:
-                            book_price = int(price_str) if price_str.strip() else current_price
-                            if pd.isna(book_price):
-                                st.error("Please set a book price first")
-                                return
-                            if total_author_amounts > book_price:
-                                st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
-                                return
+                        with st.spinner("Saving Payment...", show_time=True):
+                            time.sleep(2)
+                            if new_paid > new_total:
+                                st.error("Total EMI payments cannot exceed total amount")
+                            elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
+                                st.error("Amounts cannot be negative")
+                            else:
+                                book_price = int(price_str) if price_str.strip() else current_price
+                                if pd.isna(book_price):
+                                    st.error("Please set a book price first")
+                                    return
+                                if total_author_amounts > book_price:
+                                    st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
+                                    return
 
-                            updates = {
-                                "total_amount": new_total,
-                                "emi1": new_emi1,
-                                "emi2": new_emi2,
-                                "emi3": new_emi3,
-                                "emi1_date": emi1_date_new,
-                                "emi2_date": emi2_date_new,
-                                "emi3_date": emi3_date_new,
-                                "emi1_payment_mode": emi1_mode,
-                                "emi2_payment_mode": emi2_mode,
-                                "emi3_payment_mode": emi3_mode,
-                                "emi1_transaction_id": emi1_txn_id,
-                                "emi2_transaction_id": emi2_txn_id,
-                                "emi3_transaction_id": emi3_txn_id
-                            }
-                            update_book_authors(row['id'], updates, conn)
-                            st.success(f"Payment updated for {row['name']}")
-                            st.cache_data.clear()
-                            st.rerun()
+                                updates = {
+                                    "total_amount": new_total,
+                                    "emi1": new_emi1,
+                                    "emi2": new_emi2,
+                                    "emi3": new_emi3,
+                                    "emi1_date": emi1_date_new,
+                                    "emi2_date": emi2_date_new,
+                                    "emi3_date": emi3_date_new,
+                                    "emi1_payment_mode": emi1_mode,
+                                    "emi2_payment_mode": emi2_mode,
+                                    "emi3_payment_mode": emi3_mode,
+                                    "emi1_transaction_id": emi1_txn_id,
+                                    "emi2_transaction_id": emi2_txn_id,
+                                    "emi3_transaction_id": emi3_txn_id
+                                }
+                                update_book_authors(row['id'], updates, conn)
+                                st.success(f"Payment updated for {row['name']}", icon="✔️")
+                                st.cache_data.clear()
 
 
 ###################################################################################################################################
@@ -990,6 +1113,13 @@ def update_book_authors(id, updates, conn):
     params["id"] = int(id)
     with conn.session as session:
         session.execute(text(query), params)
+        session.commit()
+
+# Function to delete a book_author entry
+def delete_book_author(id, conn):
+    query = "DELETE FROM book_authors WHERE id = :id"
+    with conn.session as session:
+        session.execute(text(query), {"id": int(id)})
         session.commit()
 
 # Constants
@@ -1117,7 +1247,7 @@ def edit_author_dialog(book_id, conn):
                         col5, col6 = st.columns(2)
                         with col5:
                             updates['welcome_mail_sent'] = st.checkbox(
-                                "✅ Welcome Mail Sent",
+                                "✔️ Welcome Mail Sent",
                                 value=bool(row['welcome_mail_sent']),
                                 help="Check if the welcome email has been sent.",
                                 key=f"welcome_mail_sent_{row['id']}"
@@ -1166,7 +1296,7 @@ def edit_author_dialog(book_id, conn):
                                 key=f"cover_agreement_sent_{row['id']}"
                             )
                             updates['agreement_received'] = st.checkbox(
-                                "✅ Agreement Received",
+                                "✔️ Agreement Received",
                                 value=bool(row['agreement_received']),
                                 help="Check if the agreement has been received.",
                                 key=f"agreement_received_{row['id']}"
@@ -1229,20 +1359,52 @@ def edit_author_dialog(book_id, conn):
                                     key=f"delivery_vendor_{row['id']}"
                                 )
 
-                    # Submit button
-                    if st.form_submit_button("💾 Save Changes", use_container_width=True, type="primary"):
-                        # Convert boolean values to integers for database
-                        for key in updates:
-                            if isinstance(updates[key], bool):
-                                updates[key] = int(updates[key])
+                   # Submit and Remove buttons
+                    col_submit, col_remove = st.columns([8, 1])
+                    with col_submit:
+                        if st.form_submit_button("💾 Save Changes", use_container_width=True, type="primary"):
+                            # Convert boolean values to integers for database
+                            for key in updates:
+                                if isinstance(updates[key], bool):
+                                    updates[key] = int(updates[key])
 
-                        try:
-                            with st.spinner("Saving changes..."):
-                                update_book_authors(row['id'], updates, conn)
-                                st.cache_data.clear()
-                                st.success(f"✅ Updated details for {row['name']} (Author ID: {row['author_id']})")
-                        except Exception as e:
-                            st.error(f"❌ Error updating author details: {e}")
+                            try:
+                                with st.spinner("Saving changes...", show_time=True):
+                                    time.sleep(2)
+                                    update_book_authors(row['id'], updates, conn)
+                                    st.cache_data.clear()
+                                    st.success(f"✔️ Updated details for {row['name']} (Author ID: {row['author_id']})")
+                            except Exception as e:
+                                st.error(f"❌ Error updating author details: {e}")
+
+                    with col_remove:
+                        # Initialize session state for confirmation
+                        confirmation_key = f"confirm_remove_{row['id']}"
+                        if confirmation_key not in st.session_state:
+                            st.session_state[confirmation_key] = False
+
+                        if st.form_submit_button("🗑️", use_container_width=True, type="secondary", help = f"Remove {row['name']} from this book"):
+                            st.session_state[confirmation_key] = True
+
+                # Confirmation form outside the main form
+                if st.session_state[confirmation_key]:
+                    with st.form(f"confirm_form_{row['id']}", border=False):
+                        st.warning(f"Are you sure you want to remove {row['name']} (Author ID: {row['author_id']}) from Book ID: {book_id}?")
+                        col_confirm, col_cancel = st.columns(2)
+                        with col_confirm:
+                            if st.form_submit_button("Yes, Remove", use_container_width=True, type="primary"):
+                                try:
+                                    with st.spinner("Removing author...", show_time=True):
+                                        time.sleep(2)
+                                        delete_book_author(row['id'], conn)
+                                        st.cache_data.clear()
+                                        st.success(f"✔️ Removed {row['name']} (Author ID: {row['author_id']}) from this book")
+                                        st.session_state[confirmation_key] = False  # Reset confirmation state
+                                except Exception as e:
+                                    st.error(f"❌ Error removing author: {e}")
+                        with col_cancel:
+                            if st.form_submit_button("Cancel", use_container_width=True):
+                                st.session_state[confirmation_key] = False  # Reset confirmation state
     
 
     book_authors = fetch_book_authors(book_id, conn)
@@ -1262,14 +1424,15 @@ def edit_author_dialog(book_id, conn):
 
         if toggle_editable and new_is_single_author != is_single_author:
             try:
-                with st.spinner("Updating author mode..."):
+                with st.spinner("Updating author mode...", show_time=True):
                     with conn.session as s:
+                        time.sleep(2)
                         s.execute(
                             text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
                             {"is_single_author": int(new_is_single_author), "book_id": book_id}
                         )
                         s.commit()
-                    st.success(f"✅ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
+                    st.success(f"✔️ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
                     st.cache_data.clear()
                     is_single_author = new_is_single_author
             except Exception as e:
@@ -1555,7 +1718,7 @@ def edit_author_dialog(book_id, conn):
                                         )
                                         s.commit()
                         st.cache_data.clear()
-                        st.success("✅ New authors added successfully!")
+                        st.success("✔️ New authors added successfully!")
                         del st.session_state.new_authors
                         st.rerun()
                     except Exception as e:
@@ -1761,19 +1924,21 @@ def edit_operation_dialog(book_id, conn):
                 writing_end_date = st.date_input("End Date", value=current_data.get('writing_end', None), key=f"writing_end_date_{book_id}")
                 writing_end_time = st.time_input("End Time", value=current_data.get('writing_end', None), key=f"writing_end_time_{book_id}")
             if st.form_submit_button("💾 Save Writing", use_container_width=True):
-                writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
-                writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
-                if writing_start and writing_end and writing_start > writing_end:
-                    st.error("Start date/time must be before end date/time.")
-                else:
-                    updates = {
-                        "writing_start": writing_start,
-                        "writing_end": writing_end,
-                        "writing_by": writing_by if writing_by else None
-                    }
-                    update_operation_details(book_id, updates)
-                    st.session_state[f"writing_by_{book_id}"] = writing_by
-                    st.success("✅ Updated Writing details")
+                with st.spinner("Saving Writing details...", show_time=True):
+                    time.sleep(2)
+                    writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
+                    writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
+                    if writing_start and writing_end and writing_start > writing_end:
+                        st.error("Start date/time must be before end date/time.")
+                    else:
+                        updates = {
+                            "writing_start": writing_start,
+                            "writing_end": writing_end,
+                            "writing_by": writing_by if writing_by else None
+                        }
+                        update_operation_details(book_id, updates)
+                        st.session_state[f"writing_by_{book_id}"] = writing_by
+                        st.success("✔️ Updated Writing details")
 
     # Proofreading Tab
     with tab2:
@@ -1808,19 +1973,21 @@ def edit_operation_dialog(book_id, conn):
                 proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end', None), key=f"proofreading_end_date_{book_id}")
                 proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end', None), key=f"proofreading_end_time_{book_id}")
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
-                proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
-                proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
-                if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
-                    st.error("Start date/time must be before end date/time.")
-                else:
-                    updates = {
-                        "proofreading_start": proofreading_start,
-                        "proofreading_end": proofreading_end,
-                        "proofreading_by": proofreading_by if proofreading_by else None
-                    }
-                    update_operation_details(book_id, updates)
-                    st.session_state[f"proofreading_by_{book_id}"] = proofreading_by
-                    st.success("✅ Updated Proofreading details")
+                with st.spinner("Saving Proofreading details...", show_time=True):
+                    time.sleep(2)
+                    proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
+                    proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
+                    if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
+                        st.error("Start date/time must be before end date/time.")
+                    else:
+                        updates = {
+                            "proofreading_start": proofreading_start,
+                            "proofreading_end": proofreading_end,
+                            "proofreading_by": proofreading_by if proofreading_by else None
+                        }
+                        update_operation_details(book_id, updates)
+                        st.session_state[f"proofreading_by_{book_id}"] = proofreading_by
+                        st.success("✔️ Updated Proofreading details")
 
     # Formatting Tab
     with tab3:
@@ -1864,20 +2031,22 @@ def edit_operation_dialog(book_id, conn):
             )
             
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
-                formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
-                formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
-                if formatting_start and formatting_end and formatting_start > formatting_end:
-                    st.error("Start date/time must be before end date/time.")
-                else:
-                    updates = {
-                        "formatting_start": formatting_start,
-                        "formatting_end": formatting_end,
-                        "formatting_by": formatting_by if formatting_by else None,
-                        "book_pages": book_pages
-                    }
-                    update_operation_details(book_id, updates)
-                    st.session_state[f"formatting_by_{book_id}"] = formatting_by
-                    st.success("✅ Updated Formatting details")
+                with st.spinner("Saving Formatting details...", show_time=True):
+                    time.sleep(2)
+                    formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
+                    formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
+                    if formatting_start and formatting_end and formatting_start > formatting_end:
+                        st.error("Start date/time must be before end date/time.")
+                    else:
+                        updates = {
+                            "formatting_start": formatting_start,
+                            "formatting_end": formatting_end,
+                            "formatting_by": formatting_by if formatting_by else None,
+                            "book_pages": book_pages
+                        }
+                        update_operation_details(book_id, updates)
+                        st.session_state[f"formatting_by_{book_id}"] = formatting_by
+                        st.success("✔️ Updated Formatting details")
 
     # Book Cover Tab
     with tab4:
@@ -1953,34 +2122,38 @@ def edit_operation_dialog(book_id, conn):
 
         # Handle form submissions
         if front_submit:
-            front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
-            front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
-            if front_cover_start and front_cover_end and front_cover_start > front_cover_end:
-                    st.error("Start date/time must be before end date/time.")
-            else:
-                updates = {
-                    "front_cover_start": front_cover_start,
-                    "front_cover_end": front_cover_end,
-                    "front_cover_by": front_cover_by if front_cover_by else None
-                }
-                update_operation_details(book_id, updates)
-                st.session_state[f"front_cover_by_{book_id}"] = front_cover_by  # Update session state after save
-                st.success("✅ Updated Front Cover details")
+            with st.spinner("Saving Front Cover details...", show_time=True):
+                time.sleep(2)
+                front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
+                front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
+                if front_cover_start and front_cover_end and front_cover_start > front_cover_end:
+                        st.error("Start date/time must be before end date/time.")
+                else:
+                    updates = {
+                        "front_cover_start": front_cover_start,
+                        "front_cover_end": front_cover_end,
+                        "front_cover_by": front_cover_by if front_cover_by else None
+                    }
+                    update_operation_details(book_id, updates)
+                    st.session_state[f"front_cover_by_{book_id}"] = front_cover_by  # Update session state after save
+                    st.success("✔️ Updated Front Cover details")
 
         if back_submit:
-            back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
-            back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
-            if back_cover_start and back_cover_end and back_cover_start > back_cover_end:
-                    st.error("Start date/time must be before end date/time.")
-            else:
-                updates = {
-                    "back_cover_start": back_cover_start,
-                    "back_cover_end": back_cover_end,
-                    "back_cover_by": back_cover_by if back_cover_by else None
-                }
-                update_operation_details(book_id, updates)
-                st.session_state[f"back_cover_by_{book_id}"] = back_cover_by  # Update session state after save
-                st.success("✅ Updated Back Cover details")
+            with st.spinner("Saving Back Cover details...", show_time=True):
+                time.sleep(2)
+                back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
+                back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
+                if back_cover_start and back_cover_end and back_cover_start > back_cover_end:
+                        st.error("Start date/time must be before end date/time.")
+                else:
+                    updates = {
+                        "back_cover_start": back_cover_start,
+                        "back_cover_end": back_cover_end,
+                        "back_cover_by": back_cover_by if back_cover_by else None
+                    }
+                    update_operation_details(book_id, updates)
+                    st.session_state[f"back_cover_by_{book_id}"] = back_cover_by  # Update session state after save
+                    st.success("✔️ Updated Back Cover details")
 
 def update_operation_details(book_id, updates):
     """Update operation details in the books table."""
@@ -2246,42 +2419,44 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
             # Handle form submission (moved inside the form context)
             if save_printing:
-                try:
-                    # Fetch values from session state to ensure latest form inputs
-                    ready_to_print_value = st.session_state[f"ready_to_print_{book_id}"]
-                    print_status_value = st.session_state[f"print_status_{book_id}"]
-                    
-                    updates = {
-                        "ready_to_print": ready_to_print_value,
-                        "print_status": print_status_value,
-                    }
-                    update_inventory_delivery_details(book_id, updates, conn)
+                with st.spinner("Saving Printing details...", show_time=True):
+                    time.sleep(2)
+                    try:
+                        # Fetch values from session state to ensure latest form inputs
+                        ready_to_print_value = st.session_state[f"ready_to_print_{book_id}"]
+                        print_status_value = st.session_state[f"print_status_{book_id}"]
+                        
+                        updates = {
+                            "ready_to_print": ready_to_print_value,
+                            "print_status": print_status_value,
+                        }
+                        update_inventory_delivery_details(book_id, updates, conn)
 
-                    # Save new print run if applicable
-                    if print_status_value and st.session_state[f"new_num_copies_{book_id}"] > 0:
-                        with conn.session as session:
-                            session.execute(
-                                text("""
-                                    INSERT INTO print_runs (book_id, print_date, num_copies, print_by, print_cost, print_type, binding, book_size)
-                                    VALUES (:book_id, :print_date, :num_copies, :print_by, :print_cost, :print_type, :binding, :book_size)
-                                """),
-                                {
-                                    "book_id": book_id, 
-                                    "print_date": st.session_state[f"new_print_date_{book_id}"], 
-                                    "num_copies": st.session_state[f"new_num_copies_{book_id}"],
-                                    "print_by": st.session_state[f"print_by_{book_id}"] if st.session_state[f"print_by_{book_id}"] else None,
-                                    "print_cost": float(st.session_state[f"print_cost_{book_id}"]) if st.session_state[f"print_cost_{book_id}"] else None,
-                                    "print_type": st.session_state[f"print_type_{book_id}"],
-                                    "binding": st.session_state[f"binding_{book_id}"],
-                                    "book_size": st.session_state[f"book_size_{book_id}"]
-                                }
-                            )
-                            session.commit()
+                        # Save new print run if applicable
+                        if print_status_value and st.session_state[f"new_num_copies_{book_id}"] > 0:
+                            with conn.session as session:
+                                session.execute(
+                                    text("""
+                                        INSERT INTO print_runs (book_id, print_date, num_copies, print_by, print_cost, print_type, binding, book_size)
+                                        VALUES (:book_id, :print_date, :num_copies, :print_by, :print_cost, :print_type, :binding, :book_size)
+                                    """),
+                                    {
+                                        "book_id": book_id, 
+                                        "print_date": st.session_state[f"new_print_date_{book_id}"], 
+                                        "num_copies": st.session_state[f"new_num_copies_{book_id}"],
+                                        "print_by": st.session_state[f"print_by_{book_id}"] if st.session_state[f"print_by_{book_id}"] else None,
+                                        "print_cost": float(st.session_state[f"print_cost_{book_id}"]) if st.session_state[f"print_cost_{book_id}"] else None,
+                                        "print_type": st.session_state[f"print_type_{book_id}"],
+                                        "binding": st.session_state[f"binding_{book_id}"],
+                                        "book_size": st.session_state[f"book_size_{book_id}"]
+                                    }
+                                )
+                                session.commit()
 
-                    st.success("✅ Updated Printing details")
-                    st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"❌ Error saving printing details: {str(e)}")
+                        st.success("✔️ Updated Printing details")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"❌ Error saving printing details: {str(e)}")
 
     # Inventory Tab
     with tab2:
@@ -2464,47 +2639,49 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                 # Handle form submission (moved inside the form context)
                 if save_inventory:
-                    try:
-                        # Update books table for links, reviews, and MRP
-                        book_updates = {
-                            "book_mrp": float(st.session_state[f"book_mrp_{book_id}"]) if st.session_state[f"book_mrp_{book_id}"] else None,
-                            "amazon_link": st.session_state[f"amazon_link_{book_id}"] if st.session_state[f"amazon_link_{book_id}"] else None,
-                            "flipkart_link": st.session_state[f"flipkart_link_{book_id}"] if st.session_state[f"flipkart_link_{book_id}"] else None,
-                            "google_link": st.session_state[f"google_link_{book_id}"] if st.session_state[f"google_link_{book_id}"] else None,
-                            "agph_link": st.session_state[f"agph_link_{book_id}"] if st.session_state[f"agph_link_{book_id}"] else None,
-                            "google_review": st.session_state[f"google_review_{book_id}"] if st.session_state[f"google_review_{book_id}"] else None
-                        }
-                        update_inventory_delivery_details(book_id, book_updates, conn)
+                    with st.spinner("Saving Inventory details...", show_time=True):
+                        time.sleep(2)
+                        try:
+                            # Update books table for links, reviews, and MRP
+                            book_updates = {
+                                "book_mrp": float(st.session_state[f"book_mrp_{book_id}"]) if st.session_state[f"book_mrp_{book_id}"] else None,
+                                "amazon_link": st.session_state[f"amazon_link_{book_id}"] if st.session_state[f"amazon_link_{book_id}"] else None,
+                                "flipkart_link": st.session_state[f"flipkart_link_{book_id}"] if st.session_state[f"flipkart_link_{book_id}"] else None,
+                                "google_link": st.session_state[f"google_link_{book_id}"] if st.session_state[f"google_link_{book_id}"] else None,
+                                "agph_link": st.session_state[f"agph_link_{book_id}"] if st.session_state[f"agph_link_{book_id}"] else None,
+                                "google_review": st.session_state[f"google_review_{book_id}"] if st.session_state[f"google_review_{book_id}"] else None
+                            }
+                            update_inventory_delivery_details(book_id, book_updates, conn)
 
-                        # Update inventory details (using MariaDB/MySQL syntax)
-                        inventory_updates = {
-                            "book_id": book_id,
-                            "rack_number": st.session_state[f"rack_number_{book_id}"] if st.session_state[f"rack_number_{book_id}"] else None,
-                            "amazon_sales": st.session_state[f"amazon_sales_{book_id}"],
-                            "flipkart_sales": st.session_state[f"flipkart_sales_{book_id}"],
-                            "website_sales": st.session_state[f"website_sales_{book_id}"],
-                            "direct_sales": st.session_state[f"direct_sales_{book_id}"]
-                        }
-                        with conn.session as session:
-                            session.execute(
-                                text("""
-                                    INSERT INTO inventory (book_id, rack_number, amazon_sales, flipkart_sales, website_sales, direct_sales)
-                                    VALUES (:book_id, :rack_number, :amazon_sales, :flipkart_sales, :website_sales, :direct_sales)
-                                    ON DUPLICATE KEY UPDATE 
-                                        rack_number = VALUES(rack_number),
-                                        amazon_sales = VALUES(amazon_sales),
-                                        flipkart_sales = VALUES(flipkart_sales),
-                                        website_sales = VALUES(website_sales),
-                                        direct_sales = VALUES(direct_sales)
-                                """),
-                                inventory_updates
-                            )
-                            session.commit()
-                        
-                        st.success("✅ Updated Inventory details")
-                        st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"❌ Error saving inventory details: {str(e)}")
+                            # Update inventory details (using MariaDB/MySQL syntax)
+                            inventory_updates = {
+                                "book_id": book_id,
+                                "rack_number": st.session_state[f"rack_number_{book_id}"] if st.session_state[f"rack_number_{book_id}"] else None,
+                                "amazon_sales": st.session_state[f"amazon_sales_{book_id}"],
+                                "flipkart_sales": st.session_state[f"flipkart_sales_{book_id}"],
+                                "website_sales": st.session_state[f"website_sales_{book_id}"],
+                                "direct_sales": st.session_state[f"direct_sales_{book_id}"]
+                            }
+                            with conn.session as session:
+                                session.execute(
+                                    text("""
+                                        INSERT INTO inventory (book_id, rack_number, amazon_sales, flipkart_sales, website_sales, direct_sales)
+                                        VALUES (:book_id, :rack_number, :amazon_sales, :flipkart_sales, :website_sales, :direct_sales)
+                                        ON DUPLICATE KEY UPDATE 
+                                            rack_number = VALUES(rack_number),
+                                            amazon_sales = VALUES(amazon_sales),
+                                            flipkart_sales = VALUES(flipkart_sales),
+                                            website_sales = VALUES(website_sales),
+                                            direct_sales = VALUES(direct_sales)
+                                    """),
+                                    inventory_updates
+                                )
+                                session.commit()
+                            
+                            st.success("✔️ Updated Inventory details!")
+                            st.cache_data.clear()
+                        except Exception as e:
+                            st.error(f"❌ Error saving inventory details: {str(e)}")
 
 def update_inventory_delivery_details(book_id, updates, conn):
     """Update inventory and delivery details in the books table."""
@@ -2675,7 +2852,7 @@ with c2:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol2, srcol3, srcol4 = st.columns([7, 4, 1, 1]) 
+srcol1, srcol2, srcol3, srcol4, srcol5 = st.columns([7, 4, 1.1, 1, 1], gap="small") 
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, or date...", key="search_bar",
@@ -2830,7 +3007,7 @@ with srcol2:
             st.success(f"Filter {', '.join(applied_filters)}")
 
 # Add page size selection
-with srcol4:
+with srcol5:
     page_size_options = [40, 100, "All"]
     if 'page_size' not in st.session_state:
         st.session_state.page_size = page_size_options[0]  # Default page size
@@ -2841,6 +3018,11 @@ with srcol4:
 with srcol3:
     if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
         add_book_dialog(conn)
+
+with srcol4:
+    with st.popover("More", use_container_width=True, help = "More Options"):
+        if st.button("Edit Authors", key="edit_author_btn", type ="tertiary", icon = "✏️"):
+            edit_author_detail(conn)
 
 # Pagination Logic (Modified)
 if 'current_page' not in st.session_state:
@@ -3017,10 +3199,6 @@ with cont:
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
         #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
-
-                
-
-
 
                 
 
