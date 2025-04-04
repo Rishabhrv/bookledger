@@ -218,7 +218,7 @@ def edit_author_detail(conn):
                         key=f"save_{selected_author.author_id}", 
                         type="primary",
                         use_container_width=True):
-                with st.spinner("Saving changes...", show_time=True):
+                with st.spinner("Saving changes..."):
                     time.sleep(1)
                     with conn.session as s:
                         s.execute(
@@ -506,7 +506,7 @@ def add_book_dialog(conn):
             if errors:
                 st.error("\n".join(errors), icon="🚨")
             else:
-                with st.spinner("Saving...", show_time=True):
+                with st.spinner("Saving..."):
                     time.sleep(2)
                     with conn.session as s:
                         try:
@@ -649,7 +649,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
 
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
-            with st.spinner("Saving changes...", show_time=True):
+            with st.spinner("Saving changes..."):
                 time.sleep(2) 
                 with conn.session as s:
                     if apply_isbn and receive_isbn and new_isbn:
@@ -856,7 +856,7 @@ def manage_price_dialog(book_id, current_price, conn):
             )
             
             if st.button("Save Book Price", key=f"save_price_{book_id}"):
-                with st.spinner("Saving...", show_time=True):
+                with st.spinner("Saving..."):
                     time.sleep(2)
                     try:
                         price = int(price_str) if price_str.strip() else None
@@ -1044,7 +1044,7 @@ def manage_price_dialog(book_id, current_price, conn):
 
                     # Save button
                     if st.button("Save Payment", key=f"save_payment_{row['id']}"):
-                        with st.spinner("Saving Payment...", show_time=True):
+                        with st.spinner("Saving Payment..."):
                             time.sleep(2)
                             if new_paid > new_total:
                                 st.error("Total EMI payments cannot exceed total amount")
@@ -1369,7 +1369,7 @@ def edit_author_dialog(book_id, conn):
                                     updates[key] = int(updates[key])
 
                             try:
-                                with st.spinner("Saving changes...", show_time=True):
+                                with st.spinner("Saving changes..."):
                                     time.sleep(2)
                                     update_book_authors(row['id'], updates, conn)
                                     st.cache_data.clear()
@@ -1394,7 +1394,7 @@ def edit_author_dialog(book_id, conn):
                         with col_confirm:
                             if st.form_submit_button("Yes, Remove", use_container_width=True, type="primary"):
                                 try:
-                                    with st.spinner("Removing author...", show_time=True):
+                                    with st.spinner("Removing author..."):
                                         time.sleep(2)
                                         delete_book_author(row['id'], conn)
                                         st.cache_data.clear()
@@ -1424,7 +1424,7 @@ def edit_author_dialog(book_id, conn):
 
         if toggle_editable and new_is_single_author != is_single_author:
             try:
-                with st.spinner("Updating author mode...", show_time=True):
+                with st.spinner("Updating author mode..."):
                     with conn.session as s:
                         time.sleep(2)
                         s.execute(
@@ -1924,7 +1924,7 @@ def edit_operation_dialog(book_id, conn):
                 writing_end_date = st.date_input("End Date", value=current_data.get('writing_end', None), key=f"writing_end_date_{book_id}")
                 writing_end_time = st.time_input("End Time", value=current_data.get('writing_end', None), key=f"writing_end_time_{book_id}")
             if st.form_submit_button("💾 Save Writing", use_container_width=True):
-                with st.spinner("Saving Writing details...", show_time=True):
+                with st.spinner("Saving Writing details..."):
                     time.sleep(2)
                     writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
                     writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
@@ -1973,7 +1973,7 @@ def edit_operation_dialog(book_id, conn):
                 proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end', None), key=f"proofreading_end_date_{book_id}")
                 proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end', None), key=f"proofreading_end_time_{book_id}")
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
-                with st.spinner("Saving Proofreading details...", show_time=True):
+                with st.spinner("Saving Proofreading details..."):
                     time.sleep(2)
                     proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
                     proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
@@ -2031,7 +2031,7 @@ def edit_operation_dialog(book_id, conn):
             )
             
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
-                with st.spinner("Saving Formatting details...", show_time=True):
+                with st.spinner("Saving Formatting details..."):
                     time.sleep(2)
                     formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                     formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
@@ -2122,7 +2122,7 @@ def edit_operation_dialog(book_id, conn):
 
         # Handle form submissions
         if front_submit:
-            with st.spinner("Saving Front Cover details...", show_time=True):
+            with st.spinner("Saving Front Cover details..."):
                 time.sleep(2)
                 front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
                 front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
@@ -2139,7 +2139,7 @@ def edit_operation_dialog(book_id, conn):
                     st.success("✔️ Updated Front Cover details")
 
         if back_submit:
-            with st.spinner("Saving Back Cover details...", show_time=True):
+            with st.spinner("Saving Back Cover details..."):
                 time.sleep(2)
                 back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
                 back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
@@ -2419,7 +2419,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
             # Handle form submission (moved inside the form context)
             if save_printing:
-                with st.spinner("Saving Printing details...", show_time=True):
+                with st.spinner("Saving Printing details..."):
                     time.sleep(2)
                     try:
                         # Fetch values from session state to ensure latest form inputs
@@ -2639,7 +2639,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                 # Handle form submission (moved inside the form context)
                 if save_inventory:
-                    with st.spinner("Saving Inventory details...", show_time=True):
+                    with st.spinner("Saving Inventory details..."):
                         time.sleep(2)
                         try:
                             # Update books table for links, reviews, and MRP
@@ -2799,8 +2799,28 @@ def filter_books(df, query):
     
     query = query.strip()  # Remove leading/trailing whitespace
     
+    # Author search (starts with @)
+    if query.startswith('@'):
+        author_query = query[1:].lower()  # Remove @ and convert to lowercase
+        # Query to get book_ids associated with the author
+        author_book_ids_query = """
+            SELECT DISTINCT ba.book_id
+            FROM book_authors ba
+            JOIN authors a ON ba.author_id = a.author_id
+            WHERE LOWER(a.name) LIKE :author_query
+        """
+        # Fetch book IDs matching the author
+        author_book_ids = conn.query(
+            author_book_ids_query,
+            params={"author_query": f"%{author_query}%"},
+            show_spinner=False
+        )
+        # Filter the original DataFrame using these book IDs
+        matching_book_ids = author_book_ids['book_id'].tolist()
+        return df[df['book_id'].isin(matching_book_ids)]
+    
     # Check if query is a number (for book_id)
-    if query.isdigit():
+    elif query.isdigit():
         query_len = len(query)
         if 1 <= query_len <= 4:  # Book ID (1-4 digits)
             return df[df['book_id'].astype(str) == query]
@@ -2855,7 +2875,7 @@ with c2:
 srcol1, srcol2, srcol3, srcol4, srcol5 = st.columns([7, 4, 1.1, 1, 1], gap="small") 
 
 with srcol1:
-    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, or date...", key="search_bar",
+    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @author...", key="search_bar",
                                  label_visibility="collapsed")
     filtered_books = filter_books(books, search_query)
 
@@ -2965,9 +2985,9 @@ with srcol2:
                 st.session_state.start_date_filter = None
                 st.session_state.end_date_filter = None
 
-        # Status filter with pills (Delivered or On Going, single selection)
+        # Status filter with pills (Delivered, On Going, Pending Payment, single selection)
         st.write("Filter by Status:")
-        status_options = ["Delivered", "On Going"]
+        status_options = ["Delivered", "On Going", "Pending Payment"]
         selected_status = st.pills(
             "Status",
             options=status_options,
@@ -3001,10 +3021,24 @@ with srcol2:
             )
             # Apply status filter
             if st.session_state.status_filter:
-                status_mapping = {"Delivered": 1, "On Going": 0}
-                selected_status_value = status_mapping[st.session_state.status_filter]
-                filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
+                if st.session_state.status_filter == "Pending Payment":
+                    # Query to get book_ids with partial payments
+                    pending_payment_query = """
+                        SELECT DISTINCT book_id
+                        FROM book_authors
+                        WHERE total_amount > 0 
+                        AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
+                    """
+                    pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
+                    matching_book_ids = pending_book_ids['book_id'].tolist()
+                    filtered_books = filtered_books[filtered_books['book_id'].isin(matching_book_ids)]
+                else:
+                    # Existing status filter for Delivered and On Going
+                    status_mapping = {"Delivered": 1, "On Going": 0}
+                    selected_status_value = status_mapping[st.session_state.status_filter]
+                    filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
             st.success(f"Filter {', '.join(applied_filters)}")
+
 
 # Add page size selection
 with srcol5:
@@ -3023,6 +3057,7 @@ with srcol4:
     with st.popover("More", use_container_width=True, help = "More Options"):
         if st.button("Edit Authors", key="edit_author_btn", type ="tertiary", icon = "✏️"):
             edit_author_detail(conn)
+    
 
 # Pagination Logic (Modified)
 if 'current_page' not in st.session_state:
@@ -3098,7 +3133,7 @@ delivery_icon = ":material/local_shipping:"
 # delivery_icon = ":material/hourglass_top:"
 
 # Display the table
-column_size = [1, 4, 1, 1, 1, 2]
+column_size = [0.5, 4, 1, 1, 1, 2]
 
 cont = st.container(border=False)
 with cont:
@@ -3199,20 +3234,6 @@ with cont:
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
         #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
-
-                
-
-
-
-# def example():
-#     rain(
-#         emoji="🎈",
-#         font_size=50,
-#         falling_speed=2,
-#         animation_length="infinite",
-#     )
-
-# example()
 
 
 
