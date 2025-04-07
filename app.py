@@ -89,10 +89,6 @@ def connect_db():
         def get_connection():
             return st.connection('mysql', type='sql')
         conn = get_connection()
-        #Optional: Ping connection to check liveness
-        # with conn.session as s:
-        #     s.execute(text('SELECT 1'))
-        # st.toast("Database Connected.", icon="✅") # Optional feedback
         return conn
     except Exception as e:
         st.error(f"Error connecting to MySQL: {e}")
@@ -102,13 +98,13 @@ def connect_db():
 conn = connect_db()
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, is_publish_only FROM books"
 books = conn.query(query,show_spinner = False)
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, num_copies, print_status
+    SELECT title, date, apply_isbn, isbn, is_single_author, num_copies, print_status,is_publish_only
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -305,14 +301,20 @@ def add_book_dialog(conn):
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
             
+            # Columns for toggles
+            col3, col4 = st.columns(2)
             # Add the "Single Author" toggle (default is off, meaning multiple authors allowed)
-            is_single_author = st.toggle("Single Author Book?", value=False, key="single_author_toggle",
+            is_single_author = col3.toggle("Single Author Book?", value=False, key="single_author_toggle",
                                          help="Enable this to restrict the book to a single author.")
+            # Add the "Publish Only" toggle
+            is_publish_only = col4.toggle("Publish Only?", value=False, key="publish_only_toggle",
+                                        help="Enable this to mark the book as publish only.")
             
             return {
                 "title": book_title,
                 "date": book_date,
-                "is_single_author": is_single_author  # Add this to book_data
+                "is_single_author": is_single_author,
+                "is_publish_only": is_publish_only  # Add this to book_data
             }
 
     def author_details_section(conn, is_single_author):
@@ -510,11 +512,16 @@ def add_book_dialog(conn):
                     time.sleep(2)
                     with conn.session as s:
                         try:
-                            # Insert book
+                            # Insert book with is_publish_only
                             s.execute(text("""
-                                INSERT INTO books (title, date, is_single_author)
-                                VALUES (:title, :date, :is_single_author)
-                            """), params={"title": book_data["title"], "date": book_data["date"], "is_single_author": book_data["is_single_author"]})
+                                INSERT INTO books (title, date, is_single_author, is_publish_only)
+                                VALUES (:title, :date, :is_single_author, :is_publish_only)
+                            """), params={
+                                "title": book_data["title"], 
+                                "date": book_data["date"], 
+                                "is_single_author": book_data["is_single_author"],
+                                "is_publish_only": book_data["is_publish_only"]
+                            })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
                             # Process only active authors
@@ -545,6 +552,7 @@ def add_book_dialog(conn):
                                     })
                             s.commit()
                             st.success("Book and Authors Saved Successfully!", icon="✔️")
+                            time.sleep(1)
                             st.session_state.authors = [
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
@@ -552,7 +560,6 @@ def add_book_dialog(conn):
                             st.rerun()
                         except Exception as db_error:
                             s.rollback()
-                            st.error(f"Database error during save: {db_error}", icon="❌")
 
     with col2:
         if st.button("Cancel", key="dialog_cancel", type="secondary"):
@@ -571,26 +578,26 @@ from datetime import datetime
 
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    # Fetch current book details (title and date) from the database
+    # Fetch current book details (title, date, and is_publish_only) from the database
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
         st.error("❌ Book not found in database.")
         return
     
-    # Extract current title and date from the DataFrame
+    # Extract current title, date, and is_publish_only from the DataFrame
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
+    current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Default to False if not present
 
     # Main container
     with st.container():
         # Header with Book ID
-        #st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {current_title}</h3>", unsafe_allow_html=True)
         st.markdown(f"### {book_id} - {current_title}", unsafe_allow_html=True)
 
         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="info-box">', unsafe_allow_html=True)
-            col1, col2 = st.columns([3,1])
+            col1, col2 = st.columns([3, 1])
             with col1:
                 new_title = st.text_input(
                     "Book Title",
@@ -605,6 +612,13 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                     key=f"date_{book_id}",
                     help="Select the book date"
                 )
+            # Add is_publish_only toggle
+            new_is_publish_only = st.toggle(
+                "Publish Only?",
+                value=current_is_publish_only,
+                key=f"is_publish_only_{book_id}",
+                help="Enable this to mark the book as publish only (disables writing operations)"
+            )
             st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
@@ -660,7 +674,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     isbn = :isbn, 
                                     isbn_receive_date = :isbn_receive_date, 
                                     title = :title, 
-                                    date = :date 
+                                    date = :date,
+                                    is_publish_only = :is_publish_only
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -668,7 +683,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                 "isbn": new_isbn, 
                                 "isbn_receive_date": isbn_receive_date, 
                                 "title": new_title, 
-                                "date": new_date, 
+                                "date": new_date,
+                                "is_publish_only": 1 if new_is_publish_only else 0,
                                 "book_id": book_id
                             }
                         )
@@ -680,13 +696,15 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     isbn = NULL, 
                                     isbn_receive_date = NULL, 
                                     title = :title, 
-                                    date = :date 
+                                    date = :date,
+                                    is_publish_only = :is_publish_only
                                 WHERE book_id = :book_id
                             """),
                             {
                                 "apply_isbn": 1, 
                                 "title": new_title, 
-                                "date": new_date, 
+                                "date": new_date,
+                                "is_publish_only": 1 if new_is_publish_only else 0,
                                 "book_id": book_id
                             }
                         )
@@ -698,18 +716,21 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     isbn = NULL, 
                                     isbn_receive_date = NULL, 
                                     title = :title, 
-                                    date = :date 
+                                    date = :date,
+                                    is_publish_only = :is_publish_only
                                 WHERE book_id = :book_id
                             """),
                             {
                                 "apply_isbn": 0, 
                                 "title": new_title, 
-                                "date": new_date, 
+                                "date": new_date,
+                                "is_publish_only": 1 if new_is_publish_only else 0,
                                 "book_id": book_id
                             }
                         )
                     s.commit()
                 st.success("Book Details Updated Successfully!", icon="✔️")
+
 
 
 ###################################################################################################################################
@@ -1754,14 +1775,15 @@ def fetch_unique_names(column):
 
 @st.dialog("Edit Operation Details", width='large')
 def edit_operation_dialog(book_id, conn):
-    # Fetch book details for title
+    # Fetch book details for title and is_publish_only
     book_details = fetch_book_details(book_id, conn)
+    is_publish_only = False
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
+        is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Check if publish only
         col1, col2 = st.columns([6, 1])
         with col1:
             st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
-            #st.markdown(f"### {book_id} : {book_title}")
         with col2:
             if st.button(":material/refresh: Refresh", key="refresh_operations", type="tertiary"):
                 st.cache_data.clear()
@@ -1809,7 +1831,7 @@ def edit_operation_dialog(book_id, conn):
                back_cover_start, back_cover_end, back_cover_by, book_pages
         FROM books WHERE book_id = {book_id}
     """
-    book_operations = conn.query(query,show_spinner = False)
+    book_operations = conn.query(query, show_spinner=False)
     
     if book_operations.empty:
         st.warning(f"No operation details found for Book ID: {book_id}")
@@ -1853,9 +1875,7 @@ def edit_operation_dialog(book_id, conn):
             """
             st.markdown(html, unsafe_allow_html=True)
 
-    # Your existing tab code would follow here...
-
-   # Fetch unique names for each role
+    # Fetch unique names for each role
     writing_names = fetch_unique_names("writing_by")
     proofreading_names = fetch_unique_names("proofreading_by")
     formatting_names = fetch_unique_names("formatting_by")
@@ -1893,37 +1913,62 @@ def edit_operation_dialog(book_id, conn):
 
     # Writing Tab
     with tab1:
+        if is_publish_only:
+            st.warning("Writing section is disabled because this book is in 'Publish Only' mode.")
         with st.form(key=f"writing_form_{book_id}", border=False):
             selected_writer = st.selectbox(
                 "Writer",
                 writing_options,
                 index=writing_options.index(st.session_state[f"writing_by_{book_id}"]) if st.session_state[f"writing_by_{book_id}"] in writing_names else 0,
                 key=f"writing_select_{book_id}",
-                help="Select an existing writer or 'Add New...' to enter a new one."
+                help="Select an existing writer or 'Add New...' to enter a new one.",
+                disabled=is_publish_only
             )
-            if selected_writer == "Add New...":
+            if selected_writer == "Add New..." and not is_publish_only:
                 st.session_state[f"writing_by_{book_id}"] = st.text_input(
                     "New Writer Name",
                     value="",
                     key=f"writing_new_input_{book_id}",
-                    placeholder="Enter new writer name..."
+                    placeholder="Enter new writer name...",
+                    disabled=is_publish_only
                 )
-            elif selected_writer != "Select Writer":
+            elif selected_writer != "Select Writer" and not is_publish_only:
                 st.session_state[f"writing_by_{book_id}"] = selected_writer
 
             writing_by = st.text_input(
                 "Writing By",
                 value=st.session_state[f"writing_by_{book_id}"],
-                key=f"writing_by_input_{book_id}"
+                key=f"writing_by_input_{book_id}",
+                disabled=is_publish_only
             )
             col1, col2 = st.columns(2)
             with col1:
-                writing_start_date = st.date_input("Start Date", value=current_data.get('writing_start', None), key=f"writing_start_date_{book_id}")
-                writing_start_time = st.time_input("Start Time", value=current_data.get('writing_start', None), key=f"writing_start_time_{book_id}")
+                writing_start_date = st.date_input(
+                    "Start Date", 
+                    value=current_data.get('writing_start', None), 
+                    key=f"writing_start_date_{book_id}",
+                    disabled=is_publish_only
+                )
+                writing_start_time = st.time_input(
+                    "Start Time", 
+                    value=current_data.get('writing_start', None), 
+                    key=f"writing_start_time_{book_id}",
+                    disabled=is_publish_only
+                )
             with col2:
-                writing_end_date = st.date_input("End Date", value=current_data.get('writing_end', None), key=f"writing_end_date_{book_id}")
-                writing_end_time = st.time_input("End Time", value=current_data.get('writing_end', None), key=f"writing_end_time_{book_id}")
-            if st.form_submit_button("💾 Save Writing", use_container_width=True):
+                writing_end_date = st.date_input(
+                    "End Date", 
+                    value=current_data.get('writing_end', None), 
+                    key=f"writing_end_date_{book_id}",
+                    disabled=is_publish_only
+                )
+                writing_end_time = st.time_input(
+                    "End Time", 
+                    value=current_data.get('writing_end', None), 
+                    key=f"writing_end_time_{book_id}",
+                    disabled=is_publish_only
+                )
+            if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
                 with st.spinner("Saving Writing details..."):
                     time.sleep(2)
                     writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
@@ -3162,19 +3207,24 @@ with cont:
                     author_count = author_count_dict.get(row['book_id'], 0)
                     badge_content = ""
                     badge_style = ""
+                    publish_badge = ""
                     
+                    # Handle the author count/single badge
                     if row['is_single_author'] == 1:
                         # For single-author books, show "Single" in a pill-shaped badge
                         badge_content = "Single"
                         badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
                     else:
-                        # For multi-author books, show the author count as before
+                        # For multi-author books, show the author count
                         badge_content = str(author_count)
                         badge_style = "color: #2aba25; font-size:14px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;"
                     
-                    # Display the title and the appropriate badge
+                    if row['is_publish_only'] == 1:  # Using .get() for safety if column doesn't exist yet
+                        publish_badge = '<span style="color: #ff9800; font-size: 12px; background-color: #fff3e0; padding: 2px 6px; border-radius: 12px; margin-left: 5px;">Publish Only</span>'
+                    
+                    # Display the title with both badges
                     st.markdown(
-                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>",
+                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}",
                         unsafe_allow_html=True
                     )
                 with col3:
@@ -3203,6 +3253,7 @@ with cont:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
+
 
         # Pagination Controls (only show if pagination is enabled)
         if pagination_enabled:
