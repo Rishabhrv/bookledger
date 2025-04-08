@@ -730,6 +730,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                         )
                     s.commit()
                 st.success("Book Details Updated Successfully!", icon="✔️")
+                time.sleep(1)
+                st.rerun()
 
 
 
@@ -2221,10 +2223,9 @@ def edit_inventory_delivery_dialog(book_id, conn):
     book_details = fetch_book_details(book_id, conn)
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
-        col1,col2 = st.columns([6,1])
+        col1, col2 = st.columns([6,1])
         with col1:
             st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
-            #st.markdown(f"## {book_id} : {book_title}")
         with col2:
             if st.button(":material/refresh: Refresh", key="refresh_inventory", type="tertiary"):
                 st.cache_data.clear()
@@ -2232,53 +2233,79 @@ def edit_inventory_delivery_dialog(book_id, conn):
         st.markdown(f"### Inventory & Delivery for Book ID: {book_id}")
         st.warning("Book title not found.")
 
-    # Custom CSS for better aesthetics
+    # Fetch current inventory details
+    query = f"""
+        SELECT ready_to_print, print_status, amazon_link, flipkart_link, 
+               google_link, agph_link, google_review, book_mrp
+        FROM books WHERE book_id = {book_id}
+    """
+    book_data = conn.query(query, show_spinner=False)
+    
+    if book_data.empty:
+        st.warning(f"No inventory details found for Book ID: {book_id}")
+        current_data = {}
+    else:
+        current_data = book_data.iloc[0].to_dict()
+
+    # Define tabs for Printing and Inventory
+    tab1, tab2 = st.tabs(["📚 Printing", "📦 Inventory"])
+
+
     st.markdown("""
         <style>
-        .info-box { 
-            background-color: #f9f9f9; 
-            border-radius: 8px; 
-            margin-bottom: 10px; 
-            box-shadow: 2px 2px 10px rgba(0,0,0,0.1); 
-        }
-        .section-header {
-            font-size: 18px;
-            font-weight: bold;
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-        .print-run-box, .new-print-run-box, .inventory-box {
-            background-color: #ffffff;
-            border-radius: 5px;
-            margin-bottom: 10px;
-        }
         .print-run-table {
-            background-color: #ffffff;
+            font-size: 11px;
             border-radius: 5px;
-            margin-bottom: 10px;
+            overflow-x: auto;
+            margin-bottom: 8px;
         }
-        .print-run-table-header {
-            display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            font-weight: bold;
-            color: #2c3e50;
-            padding: 8px;
-            background-color: #f1f3f5;
-            border-bottom: 1px solid #e0e0e0;
-            border-radius: 5px 5px 0 0;
-        }
+
+        .print-run-table-header,
         .print-run-table-row {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            padding: 8px;
-            border-bottom: 1px solid #e0e0e0;
+            grid-template-columns: 0.5fr 1fr 1fr 0.6fr 1fr 0.8fr 0.7fr 0.7fr 0.7fr 0.8fr;
+            padding: 4px 6px;
+            align-items: center;
+            box-sizing: border-box;
+            min-width: 100%;
         }
+
+        .print-run-table-header {
+            background-color: #f1f3f5;
+            font-weight: 600;
+            font-size: 12px;
+            color: #2c3e50;
+            border-bottom: 1px solid #dcdcdc;
+            border-radius: 5px 5px 0 0;
+        }
+
+        .print-run-table-row {
+            border-bottom: 1px solid #e0e0e0;
+            background-color: #fff;
+        }
+
         .print-run-table-row:last-child {
             border-bottom: none;
         }
+
         .print-run-table-row:hover {
             background-color: #f9f9f9;
         }
+
+        .status-received, .status-sent, .status-pending {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            text-align: center;
+            font-size: 10px;
+            color: #fff;
+            min-width: 60px;
+        }
+
+        .status-received { background-color: #27ae60; }
+        .status-sent { background-color: #e67e22; }
+        .status-pending { background-color: #7f8c8d; }
+                
         .inventory-summary {
             background-color: #e8f4f8;
             border: 1px solid #b3d4fc;
@@ -2314,194 +2341,296 @@ def edit_inventory_delivery_dialog(book_id, conn):
         </style>
     """, unsafe_allow_html=True)
 
-    # Fetch current inventory details from the books table (only fields we need)
-    query = f"""
-        SELECT ready_to_print, print_status, amazon_link, flipkart_link, 
-               google_link, agph_link, google_review, book_mrp
-        FROM books WHERE book_id = {book_id}
-    """
-    book_data = conn.query(query,show_spinner = False)
-    
-    if book_data.empty:
-        st.warning(f"No inventory details found for Book ID: {book_id}")
-        current_data = {}
-    else:
-        current_data = book_data.iloc[0].to_dict()
-
-    # Define tabs for Printing and Inventory
-    tab1, tab2 = st.tabs(["📚 Printing", "📦 Inventory"])
-
     # Printing Tab
     with tab1:
-        with st.form(key=f"inventory_form_{book_id}", border=False):
-            # Checkboxes (Compact and aligned)
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                ready_to_print = st.checkbox(
-                    "Ready to Print?", 
-                    value=current_data.get('ready_to_print', False), 
-                    key=f"ready_to_print_{book_id}",
-                    help="Check if the book is ready for printing."
-                )
-            with col2:
-                print_status = st.checkbox(
-                    "Printed?", 
-                    value=current_data.get('print_status', False), 
-                    key=f"print_status_{book_id}",
-                    disabled=not ready_to_print,
-                    help="Check if the book has been printed. Requires 'Ready to Print' to be checked."
-                )
+        # Independent Checkbox with instant save
+        def save_ready_to_print():
+            updates = {"ready_to_print": st.session_state[f"ready_to_print_{book_id}"]}
+            update_inventory_delivery_details(book_id, updates, conn)
+            st.cache_data.clear()
 
-            # Print Runs Section (Visible only if 'Printed' is checked)
-            if print_status:
-                st.markdown('<div class="section-header">Print Runs</div>', unsafe_allow_html=True)
+        col1, _ = st.columns([1, 3])
+        with col1:
+            ready_to_print = st.checkbox(
+                label="Ready to Print?",
+                value=current_data.get('ready_to_print', False),
+                key=f"ready_to_print_{book_id}",
+                help="Check if the book is ready for printing.",
+                on_change=save_ready_to_print
+            )
+
+        # Fetch print runs data (always shown, but edit/add only if ready_to_print is True)
+        st.markdown('<div class="section-header">Print Runs</div>', unsafe_allow_html=True)
+        print_runs_query = f"""
+            SELECT id, print_sent_date, print_received_date, num_copies, print_by, 
+                print_cost, print_type, binding, book_size
+            FROM print_runs 
+            WHERE book_id = {book_id}
+            ORDER BY print_sent_date DESC
+        """
+        print_runs_data = conn.query(print_runs_query, show_spinner=False)
+
+        # 1. Print Run Table Expander
+        with st.expander("View Existing Print Runs", expanded=True):
+            if not print_runs_data.empty:
+                st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
+                st.markdown("""
+                    <div class="print-run-table-header">
+                        <div>ID</div>
+                        <div>Sent Date</div>
+                        <div>Received Date</div>
+                        <div>Copies</div>
+                        <div>Print By</div>
+                        <div>Cost</div>
+                        <div>Type</div>
+                        <div>Binding</div>
+                        <div>Size</div>
+                        <div>Status</div>
+                    </div>
+                """, unsafe_allow_html=True)
                 
-                # Fetch existing print runs
-                print_runs_query = f"""
-                    SELECT print_date, num_copies, print_by, print_cost, print_type, binding, book_size
-                    FROM print_runs 
-                    WHERE book_id = {book_id}
-                    ORDER BY print_date DESC
-                """
-                print_runs_data = conn.query(print_runs_query,show_spinner = False)
-
-                # Display existing print runs in an expander (collapsible)
-                with st.expander("View Existing Print Runs", expanded=True):
-                    if not print_runs_data.empty:
-                        st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
-                        # Table Header
-                        st.markdown("""
-                            <div class="print-run-table-header">
-                                <div>Date</div>
-                                <div>Copies</div>
-                                <div>Print By</div>
-                                <div>Cost</div>
-                                <div>Type</div>
-                                <div>Binding</div>
-                                <div>Size</div>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                        # Table Rows
-                        for idx, row in print_runs_data.iterrows():
-                            st.markdown(f"""
-                                <div class="print-run-table-row">
-                                    <div>{row['print_date']}</div>
-                                    <div>{int(row['num_copies'])}</div>
-                                    <div>{row['print_by'] or 'N/A'}</div>
-                                    <div>{row['print_cost'] or 'N/A'}</div>
-                                    <div>{row['print_type']}</div>
-                                    <div>{row['binding']}</div>
-                                    <div>{row['book_size']}</div>
-                                </div>
-                            """, unsafe_allow_html=True)
-                        st.markdown('</div>', unsafe_allow_html=True)
-                    else:
-                        st.info("No print runs found. Add a new print run below.")
-
-                # Add New Print Run Section
-                st.markdown('<div class="section-header">Add New Print Run</div>', unsafe_allow_html=True)
-                with st.container(border=True):
-                    st.markdown('<div class="new-print-run-box">', unsafe_allow_html=True)
-                    col1, col2 = st.columns(2)
+                for idx, row in print_runs_data.iterrows():
+                    status = ("Received" if row['print_received_date'] 
+                            else "Sent" if row['print_sent_date'] 
+                            else "Pending")
+                    status_class = f"status-{status.lower()}"
                     
+                    st.markdown(f"""
+                        <div class="print-run-table-row">
+                            <div>{row['id']}</div>
+                            <div>{row['print_sent_date'] or 'N/A'}</div>
+                            <div>{row['print_received_date'] or 'N/A'}</div>
+                            <div>{int(row['num_copies'])}</div>
+                            <div>{row['print_by'] or 'N/A'}</div>
+                            <div>{row['print_cost'] or 'N/A'}</div>
+                            <div>{row['print_type']}</div>
+                            <div>{row['binding']}</div>
+                            <div>{row['book_size']}</div>
+                            <div><div class="{status_class}">{status.capitalize()}</div></div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("No print runs found. Add a new print run below if ready.")
+
+        # 2. Edit Existing Print Run Expander (only if ready_to_print and data exists)
+        if ready_to_print and not print_runs_data.empty:
+            with st.expander("Edit Existing Print Run", expanded=False):
+                selected_print_run_id = st.selectbox(
+                    "Select Print Run to Edit",
+                    options=print_runs_data['id'].tolist(),
+                    format_func=lambda x: f"ID {x} - Sent {print_runs_data[print_runs_data['id'] == x]['print_sent_date'].iloc[0]}",
+                    key=f"select_print_run_{book_id}"
+                )
+
+                if selected_print_run_id:
+                    edit_row = print_runs_data[print_runs_data['id'] == selected_print_run_id].iloc[0]
+                    
+                    with st.form(key=f"edit_form_{book_id}_{selected_print_run_id}", border=False):
+                        edit_num_copies = st.number_input(
+                            "Number of Copies",
+                            min_value=0,
+                            step=1,
+                            value=int(edit_row['num_copies']),
+                            key=f"edit_num_copies_{book_id}_{selected_print_run_id}"
+                        )
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            edit_print_sent_date = st.date_input(
+                                "Print Sent Date",
+                                value=edit_row['print_sent_date'],
+                                key=f"edit_print_sent_date_{book_id}_{selected_print_run_id}"
+                            )
+                            edit_print_cost = st.text_input(
+                                "Print Cost",
+                                value=str(edit_row['print_cost'] or ""),
+                                key=f"edit_print_cost_{book_id}_{selected_print_run_id}"
+                            )
+                        with col2:
+                            edit_print_received_date = st.date_input(
+                                "Print Received Date",
+                                value=edit_row['print_received_date'],
+                                key=f"edit_print_received_date_{book_id}_{selected_print_run_id}"
+                            )
+                            edit_print_by = st.text_input(
+                                "Print By",
+                                value=edit_row['print_by'] or "",
+                                key=f"edit_print_by_{book_id}_{selected_print_run_id}"
+                            )
+                        print_col1, print_col2, print_col3 = st.columns(3)
+                        with print_col1:
+                            edit_print_type = st.selectbox(
+                                "Print Type",
+                                options=["B&W", "Color"],
+                                index=["B&W", "Color"].index(edit_row['print_type']),
+                                key=f"edit_print_type_{book_id}_{selected_print_run_id}"
+                            )
+                        with print_col2:
+                            edit_binding = st.selectbox(
+                                "Binding",
+                                options=["Paperback", "Hardcover"],
+                                index=["Paperback", "Hardcover"].index(edit_row['binding']),
+                                key=f"edit_binding_{book_id}_{selected_print_run_id}"
+                            )
+                        with print_col3:
+                            edit_book_size = st.selectbox(
+                                "Book Size",
+                                options=["6x9", "A4"],
+                                index=["6x9", "A4"].index(edit_row['book_size']),
+                                key=f"edit_book_size_{book_id}_{selected_print_run_id}"
+                            )
+
+                        save_edit = st.form_submit_button("💾 Save Edited Print Run", use_container_width=True)
+
+                        if save_edit:
+                            with st.spinner("Saving edited print run..."):
+                                time.sleep(2)
+                                try:
+                                    with conn.session as session:
+                                        # Update print_runs table
+                                        session.execute(
+                                            text("""
+                                                UPDATE print_runs 
+                                                SET print_sent_date = :print_sent_date, 
+                                                    print_received_date = :print_received_date, 
+                                                    num_copies = :num_copies, 
+                                                    print_by = :print_by, 
+                                                    print_cost = :print_cost, 
+                                                    print_type = :print_type, 
+                                                    binding = :binding, 
+                                                    book_size = :book_size
+                                                WHERE id = :id
+                                            """),
+                                            {
+                                                "id": selected_print_run_id,
+                                                "print_sent_date": edit_print_sent_date,
+                                                "print_received_date": edit_print_received_date,
+                                                "num_copies": edit_num_copies,
+                                                "print_by": edit_print_by,
+                                                "print_cost": float(edit_print_cost) if edit_print_cost else None,
+                                                "print_type": edit_print_type,
+                                                "binding": edit_binding,
+                                                "book_size": edit_book_size
+                                            }
+                                        )
+                                        
+                                        # If print_received_date is set, update print_status in books table
+                                        if edit_print_received_date is not None:
+                                            session.execute(
+                                                text("""
+                                                    UPDATE books 
+                                                    SET print_status = 1 
+                                                    WHERE book_id = :book_id
+                                                """),
+                                                {"book_id": book_id}
+                                            )
+                                        
+                                        session.commit()
+                                    st.success("✔️ Updated Print Run")
+                                    st.cache_data.clear()
+                                except Exception as e:
+                                    st.error(f"❌ Error saving print run: {str(e)}")
+
+        # 3. Add New Print Run Expander (only if ready_to_print is True)
+        if ready_to_print:
+            with st.expander("Add New Print Run", expanded=False):
+                with st.form(key=f"new_print_form_{book_id}", border=False):
+                    new_num_copies = st.number_input(
+                        label="Number of Copies",
+                        min_value=0,
+                        step=1,
+                        value=0,
+                        key=f"new_num_copies_{book_id}"
+                    )
+                    col1, col2 = st.columns(2)
                     with col1:
-                        new_print_date = st.date_input(
-                            "Print Date", 
-                            value=date.today(), 
-                            key=f"new_print_date_{book_id}"
+                        new_print_sent_date = st.date_input(
+                            "Print Sent Date",
+                            value=date.today(),
+                            key=f"new_print_sent_date_{book_id}"
                         )
                         print_cost = st.text_input(
-                            "Print Cost", 
+                            "Print Cost",
                             key=f"print_cost_{book_id}"
                         )
                     with col2:
-                        new_num_copies = st.number_input(
-                            "Number of Copies", 
-                            min_value=0, 
-                            step=1, 
-                            key=f"new_num_copies_{book_id}"
+                        new_print_received_date = st.date_input(
+                            "Print Received Date",
+                            value=None,
+                            key=f"new_print_received_date_{book_id}"
                         )
                         print_by = st.text_input(
-                            "Print By", 
+                            "Print By",
                             key=f"print_by_{book_id}"
                         )
-
                     print_col1, print_col2, print_col3 = st.columns(3)
-
                     with print_col1:
                         print_type = st.selectbox(
-                            "Print Type", 
-                            options=["B&W", "Color"], 
+                            "Print Type",
+                            options=["B&W", "Color"],
                             key=f"print_type_{book_id}"
                         )
                     with print_col2:
                         binding = st.selectbox(
-                            "Binding", 
-                            options=["Paperback", "Hardcover"], 
+                            "Binding",
+                            options=["Paperback", "Hardcover"],
                             key=f"binding_{book_id}"
                         )
                     with print_col3:
                         book_size = st.selectbox(
-                            "Book Size", 
-                            options=["6x9","A4"], 
+                            "Book Size",
+                            options=["6x9", "A4"],
                             key=f"book_size_{book_id}"
                         )
-                    st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                print_by = None
-                print_cost = None
-                print_type = None
-                binding = None
-                book_size = None
 
-            # Submit Button (Compact and aligned)
-            save_printing = st.form_submit_button(
-                "💾 Save Printing", 
-                use_container_width=True,
-                help="Click to save changes to printing details."
-            )
+                    save_new_print = st.form_submit_button("💾 Save New Print Run", use_container_width=True)
 
-            # Handle form submission (moved inside the form context)
-            if save_printing:
-                with st.spinner("Saving Printing details..."):
-                    time.sleep(2)
-                    try:
-                        # Fetch values from session state to ensure latest form inputs
-                        ready_to_print_value = st.session_state[f"ready_to_print_{book_id}"]
-                        print_status_value = st.session_state[f"print_status_{book_id}"]
-                        
-                        updates = {
-                            "ready_to_print": ready_to_print_value,
-                            "print_status": print_status_value,
-                        }
-                        update_inventory_delivery_details(book_id, updates, conn)
-
-                        # Save new print run if applicable
-                        if print_status_value and st.session_state[f"new_num_copies_{book_id}"] > 0:
-                            with conn.session as session:
-                                session.execute(
-                                    text("""
-                                        INSERT INTO print_runs (book_id, print_date, num_copies, print_by, print_cost, print_type, binding, book_size)
-                                        VALUES (:book_id, :print_date, :num_copies, :print_by, :print_cost, :print_type, :binding, :book_size)
-                                    """),
-                                    {
-                                        "book_id": book_id, 
-                                        "print_date": st.session_state[f"new_print_date_{book_id}"], 
-                                        "num_copies": st.session_state[f"new_num_copies_{book_id}"],
-                                        "print_by": st.session_state[f"print_by_{book_id}"] if st.session_state[f"print_by_{book_id}"] else None,
-                                        "print_cost": float(st.session_state[f"print_cost_{book_id}"]) if st.session_state[f"print_cost_{book_id}"] else None,
-                                        "print_type": st.session_state[f"print_type_{book_id}"],
-                                        "binding": st.session_state[f"binding_{book_id}"],
-                                        "book_size": st.session_state[f"book_size_{book_id}"]
-                                    }
-                                )
-                                session.commit()
-
-                        st.success("✔️ Updated Printing details")
-                        st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"❌ Error saving printing details: {str(e)}")
+                    if save_new_print:
+                        with st.spinner("Saving new print run..."):
+                            time.sleep(2)
+                            try:
+                                if st.session_state[f"new_num_copies_{book_id}"] > 0:
+                                    with conn.session as session:
+                                        # Insert into print_runs table
+                                        session.execute(
+                                            text("""
+                                                INSERT INTO print_runs (book_id, print_sent_date, print_received_date, 
+                                                    num_copies, print_by, print_cost, print_type, binding, book_size)
+                                                VALUES (:book_id, :print_sent_date, :print_received_date, :num_copies, 
+                                                    :print_by, :print_cost, :print_type, :binding, :book_size)
+                                            """),
+                                            {
+                                                "book_id": book_id,
+                                                "print_sent_date": st.session_state[f"new_print_sent_date_{book_id}"],
+                                                "print_received_date": st.session_state[f"new_print_received_date_{book_id}"],
+                                                "num_copies": st.session_state[f"new_num_copies_{book_id}"],
+                                                "print_by": st.session_state[f"print_by_{book_id}"],
+                                                "print_cost": (float(st.session_state[f"print_cost_{book_id}"]) 
+                                                            if st.session_state[f"print_cost_{book_id}"] else None),
+                                                "print_type": st.session_state[f"print_type_{book_id}"],
+                                                "binding": st.session_state[f"binding_{book_id}"],
+                                                "book_size": st.session_state[f"book_size_{book_id}"]
+                                            }
+                                        )
+                                        
+                                        # If print_received_date is set, update print_status in books table
+                                        if st.session_state[f"new_print_received_date_{book_id}"] is not None:
+                                            session.execute(
+                                                text("""
+                                                    UPDATE books 
+                                                    SET print_status = 1 
+                                                    WHERE book_id = :book_id
+                                                """),
+                                                {"book_id": book_id}
+                                            )
+                                        
+                                        session.commit()
+                                    st.success("✔️ Added New Print Run")
+                                    st.cache_data.clear()
+                                else:
+                                    st.warning("Please enter a number of copies greater than 0.")
+                            except Exception as e:
+                                st.error(f"❌ Error saving new print run: {str(e)}") 
 
     # Inventory Tab
     with tab2:
@@ -3288,4 +3417,3 @@ with cont:
 
 
 
- 
