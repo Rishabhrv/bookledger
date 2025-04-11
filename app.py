@@ -342,7 +342,7 @@ def add_book_dialog(conn):
             )
             
             if not toggles_enabled:
-                st.info("Single Author and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
+                st.warning("Single Author and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
             
             return {
                 "title": book_title,
@@ -3097,8 +3097,9 @@ with srcol1:
 
 # Add filtering popover next to the Add New Book button
 with srcol2:
-    with st.popover("Filter by Date & Status", use_container_width=True):
-        # Extract unique years from the dataset
+    with st.popover("Filter by Date, Status & Publisher", use_container_width=True):
+        # Extract unique publishers and years from the dataset
+        unique_publishers = sorted(books['publisher'].dropna().unique())
         unique_years = sorted(books['date'].dt.year.unique())
 
         # Use session state to manage filter values
@@ -3111,13 +3112,15 @@ with srcol2:
         if 'end_date_filter' not in st.session_state:
             st.session_state.end_date_filter = None
         if 'status_filter' not in st.session_state:
-            st.session_state.status_filter = None  # Default: no status filter applied (single value, not a list)
+            st.session_state.status_filter = None
+        if 'publisher_filter' not in st.session_state:
+            st.session_state.publisher_filter = None  # New filter for publisher
         if 'clear_filters_trigger' not in st.session_state:
-            st.session_state.clear_filters_trigger = 0  # Use a counter instead of boolean
+            st.session_state.clear_filters_trigger = 0
 
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.write("Filter by Year:")
+            st.write("Filter by Publisher:")
 
         with col2:
             # Clear filters button
@@ -3126,9 +3129,32 @@ with srcol2:
                 st.session_state.month_filter = None
                 st.session_state.start_date_filter = None
                 st.session_state.end_date_filter = None
-                st.session_state.status_filter = None  # Reset status filter to None
+                st.session_state.status_filter = None
+                st.session_state.publisher_filter = None  # Reset publisher filter
                 st.session_state.clear_filters_trigger += 1
                 st.rerun()
+
+        # Publisher filter with pills
+        publisher_options = unique_publishers
+        selected_publisher = st.pills(
+            "Publishers",
+            options=publisher_options,
+            key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
+            label_visibility='collapsed'
+        )
+        # Update session state for publisher filter
+        if selected_publisher:
+            st.session_state.publisher_filter = selected_publisher
+        elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
+            st.session_state.publisher_filter = None
+
+        # Year filter
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.write("Filter by Year:")
+
+        with col2:
+            pass  # Clear button is already above
 
         year_options = [str(year) for year in unique_years]
         selected_year = st.pills(
@@ -3215,6 +3241,8 @@ with srcol2:
 
         # Apply filters
         applied_filters = []
+        if st.session_state.publisher_filter:
+            applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
         if st.session_state.month_filter:
             applied_filters.append(f"Month={month_names.get(st.session_state.month_filter)}")
         if st.session_state.year_filter:
@@ -3227,6 +3255,11 @@ with srcol2:
             applied_filters.append(f"Status={st.session_state.status_filter}")
 
         if applied_filters:
+            # Apply publisher filter first
+            if st.session_state.publisher_filter:
+                filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
+            
+            # Apply date filters
             filtered_books = filter_books_by_date(
                 filtered_books, 
                 None,  # No day filter
@@ -3235,6 +3268,7 @@ with srcol2:
                 st.session_state.start_date_filter, 
                 st.session_state.end_date_filter
             )
+            
             # Apply status filter
             if st.session_state.status_filter:
                 if st.session_state.status_filter == "Pending Payment":
