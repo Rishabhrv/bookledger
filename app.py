@@ -98,7 +98,7 @@ def connect_db():
 conn = connect_db()
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, is_publish_only FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, is_publish_only, publisher FROM books"
 books = conn.query(query,show_spinner = False)
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
@@ -208,63 +208,69 @@ def edit_author_detail(conn):
             key=f"phone_{selected_author.author_id}"
         )
 
-        # Action buttons in a single container
-        with st.container():
-            if st.button("Save Changes", 
-                        key=f"save_{selected_author.author_id}", 
-                        type="primary",
+        btn_col1, btn_col2 = st.columns([3, 1])
+
+        with btn_col1:
+            with st.container():
+                if st.button("Save Changes", 
+                            key=f"save_{selected_author.author_id}", 
+                            type="primary",
+                            use_container_width=True):
+                    with st.spinner("Saving changes..."):
+                        time.sleep(1)
+                        with conn.session as s:
+                            s.execute(
+                                text("""
+                                    UPDATE authors 
+                                    SET name = :name, 
+                                        email = :email, 
+                                        phone = :phone 
+                                    WHERE author_id = :author_id
+                                """),
+                                {
+                                    "name": new_name,
+                                    "email": new_email if new_email else None,
+                                    "phone": new_phone if new_phone else None,
+                                    "author_id": selected_author.author_id
+                                }
+                            )
+                            s.commit()
+                        st.success("Author Updated Successfully!", icon="✔️")
+
+        with btn_col2:
+            delete_key = f"delete_{selected_author.author_id}"
+            if "confirm_delete" not in st.session_state:
+                st.session_state["confirm_delete"] = False
+
+            if st.button("🗑️", 
+                        key=delete_key, 
+                        type="secondary",
+                        help = f"Delete {selected_author.name}",
                         use_container_width=True):
-                with st.spinner("Saving changes..."):
-                    time.sleep(1)
-                    with conn.session as s:
-                        s.execute(
-                            text("""
-                                UPDATE authors 
-                                SET name = :name, 
-                                    email = :email, 
-                                    phone = :phone 
-                                WHERE author_id = :author_id
-                            """),
-                            {
-                                "name": new_name,
-                                "email": new_email if new_email else None,
-                                "phone": new_phone if new_phone else None,
-                                "author_id": selected_author.author_id
-                            }
-                        )
-                        s.commit()
-                    st.success("Author Updated Successfully!", icon="✔️")
+                st.session_state["confirm_delete"] = True
 
-        # with btn_col2:
-        #     delete_key = f"delete_{selected_author.author_id}"
-        #     if "confirm_delete" not in st.session_state:
-        #         st.session_state["confirm_delete"] = False
+        # Move confirmation dialog outside the column layout
+        if st.session_state["confirm_delete"]:
+            st.warning(f"Are you sure you want to delete {selected_author.name} (ID: {selected_author.author_id})?")
 
-        #     if st.button("Delete Author", 
-        #                 key=delete_key, 
-        #                 type="primary",
-        #                 use_container_width=True):
-        #         st.session_state["confirm_delete"] = True
+            # Full-width confirmation buttons
+            confirm_col1, confirm_col2 = st.columns([4, 1])
+            with confirm_col1:
+                if st.button("❌ Cancel", key=f"cancel_{delete_key}"):
+                    st.session_state["confirm_delete"] = False
+            with confirm_col2:
+                if st.button("✔️ Confirm", key=f"confirm_{delete_key}"):
+                    with st.spinner("Deleting author..."):
+                        time.sleep(2)
+                        with conn.session as s:
+                            s.execute(
+                                text("DELETE FROM authors WHERE author_id = :author_id"),
+                                {"author_id": selected_author.author_id}
+                            )
+                            s.commit()
+                        st.success("Author Deleted Successfully!", icon="✔️")
+                        st.session_state["confirm_delete"] = False
 
-        #     # Confirmation dialog
-        #     if st.session_state["confirm_delete"]:
-        #         st.warning(f"Are you sure you want to delete {selected_author.name} (ID: {selected_author.author_id})?")
-        #         confirm_col1, confirm_col2 = st.columns(2)
-        #         with confirm_col1:
-        #             if st.button("Cancel", key=f"cancel_{delete_key}"):
-        #                 st.session_state["confirm_delete"] = False
-        #         with confirm_col2:
-        #             if st.button("Confirm Delete", key=f"confirm_{delete_key}", type="primary"):
-        #                 with st.spinner("Deleting author...", show_time=True):
-        #                     time.sleep(2)
-        #                     with conn.session as s:
-        #                         s.execute(
-        #                             text("DELETE FROM authors WHERE author_id = :author_id"),
-        #                             {"author_id": selected_author.author_id}
-        #                         )
-        #                         s.commit()
-        #                     st.success("Author Deleted Successfully!", icon="✔️")
-        #                     st.session_state["confirm_delete"] = False
 
 
 
@@ -294,30 +300,62 @@ def add_book_dialog(conn):
         return author
 
     # --- UI Components Inside Dialog ---
-    def book_details_section():
+    def publisher_section():
+        with st.container(border=True):
+            st.markdown("<h5 style='color: #4CAF50;'>Publisher</h5>", unsafe_allow_html=True)
+            publisher = st.radio(
+                "Select Publisher",
+                ["AGPH", "Cipher", "AG Classics", "AG Kids", "NEET/JEE"],
+                key="publisher_select",
+                horizontal=True,
+                help="Select the publisher for this book."
+            )
+            return publisher
+
+    def book_details_section(publisher):
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
             col1, col2 = st.columns(2)
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
             
+            # Determine if toggles should be enabled based on publisher
+            toggles_enabled = publisher in ["AGPH", "Cipher", "AG Classics"]
+            
             # Columns for toggles
             col3, col4 = st.columns(2)
             # Add the "Single Author" toggle (default is off, meaning multiple authors allowed)
-            is_single_author = col3.toggle("Single Author Book?", value=False, key="single_author_toggle",
-                                         help="Enable this to restrict the book to a single author.")
+            is_single_author = col3.toggle(
+                "Single Author Book?",
+                value=False,
+                key="single_author_toggle",
+                help="Enable this to restrict the book to a single author.",
+                disabled=not toggles_enabled
+            )
             # Add the "Publish Only" toggle
-            is_publish_only = col4.toggle("Publish Only?", value=False, key="publish_only_toggle",
-                                        help="Enable this to mark the book as publish only.")
+            is_publish_only = col4.toggle(
+                "Publish Only?",
+                value=False,
+                key="publish_only_toggle",
+                help="Enable this to mark the book as publish only.",
+                disabled=not toggles_enabled
+            )
+            
+            if not toggles_enabled:
+                st.info("Single Author and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
             
             return {
                 "title": book_title,
                 "date": book_date,
-                "is_single_author": is_single_author,
-                "is_publish_only": is_publish_only  # Add this to book_data
+                "is_single_author": is_single_author if toggles_enabled else False,
+                "is_publish_only": is_publish_only if toggles_enabled else False,
+                "publisher": publisher
             }
 
-    def author_details_section(conn, is_single_author):
+    def author_details_section(conn, is_single_author, publisher):
+        # Check if author section should be disabled
+        author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
+
         if "authors" not in st.session_state:
             # Initialize exactly 4 authors with default positions
             st.session_state.authors = [
@@ -363,6 +401,10 @@ def add_book_dialog(conn):
 
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Author Details</h5>", unsafe_allow_html=True)
+            
+            if author_section_disabled:
+                st.warning("Author details are disabled for AG Kids and NEET/JEE publishers.")
+                return st.session_state.authors
             
             tab_titles = [f"Author {i+1}" for i in range(4)]
             tabs = st.tabs(tab_titles)
@@ -451,7 +493,7 @@ def add_book_dialog(conn):
         """Check if an author is 'active' (i.e., has at least one non-empty field)."""
         return bool(author["name"] or author["email"] or author["phone"] or author["corresponding_agent"] or author["publishing_consultant"])
 
-    def validate_form(book_data, author_data, is_single_author):
+    def validate_form(book_data, author_data, is_single_author, publisher):
         """Validate that all required fields are filled for book and active authors, and positions are unique."""
         errors = []
 
@@ -460,51 +502,57 @@ def add_book_dialog(conn):
             errors.append("Book title is required.")
         if not book_data["date"]:
             errors.append("Book date is required.")
+        if not book_data["publisher"]:
+            errors.append("Publisher is required.")
 
-        # Validate author details (only for active authors)
-        active_authors = [a for a in author_data if is_author_active(a)]
-        if not active_authors:
-            errors.append("At least one author must be provided.")
+        # Skip author validation if publisher is AG Kids or NEET/JEE (author section disabled)
+        if publisher not in ["AG Kids", "NEET/JEE"]:
+            # Validate author details (only for active authors)
+            active_authors = [a for a in author_data if is_author_active(a)]
+            if not active_authors:
+                errors.append("At least one author must be provided.")
 
-        # If "Single Author" is toggled on, ensure exactly one author is active
-        if is_single_author and len(active_authors) > 1:
-            errors.append("Only one author is allowed when 'Single Author' is selected.")
+            # If "Single Author" is toggled on, ensure exactly one author is active
+            if is_single_author and len(active_authors) > 1:
+                errors.append("Only one author is allowed when 'Single Author' is selected.")
 
-        # Track existing author IDs to prevent duplicates
-        existing_author_ids = set()
-        for i, author in enumerate(author_data):
-            if is_author_active(author):
-                if not author["name"]:
-                    errors.append(f"Author {i+1} name is required.")
-                if not author["email"]:
-                    errors.append(f"Author {i+1} email is required.")
-                if not author["phone"]:
-                    errors.append(f"Author {i+1} phone is required.")
-                if not author["publishing_consultant"]:
-                    errors.append(f"Author {i+1} publishing consultant is required.")
-                if author["author_id"]:
-                    if author["author_id"] in existing_author_ids:
-                        errors.append(f"Author {i+1} (ID: {author['author_id']}) is already added. Please remove duplicates.")
-                    existing_author_ids.add(author["author_id"])
+            # Track existing author IDs to prevent duplicates
+            existing_author_ids = set()
+            for i, author in enumerate(author_data):
+                if is_author_active(author):
+                    if not author["name"]:
+                        errors.append(f"Author {i+1} name is required.")
+                    if not author["email"]:
+                        errors.append(f"Author {i+1} email is required.")
+                    if not author["phone"]:
+                        errors.append(f"Author {i+1} phone is required.")
+                    if not author["publishing_consultant"]:
+                        errors.append(f"Author {i+1} publishing consultant is required.")
+                    if author["author_id"]:
+                        if author["author_id"] in existing_author_ids:
+                            errors.append(f"Author {i+1} (ID: {author['author_id']}) is already added. Please remove duplicates.")
+                        existing_author_ids.add(author["author_id"])
 
-        # Validate unique positions for active authors
-        active_positions = [author["author_position"] for author in active_authors]
-        if len(active_positions) != len(set(active_positions)):
-            errors.append("All active authors must have unique positions.")
+            # Validate unique positions for active authors
+            active_positions = [author["author_position"] for author in active_authors]
+            if len(active_positions) != len(set(active_positions)):
+                errors.append("All active authors must have unique positions.")
 
         return errors
 
     # --- Combined Container Inside Dialog ---
     with st.container():
-        book_data = book_details_section()
+        publisher = publisher_section()
         st.markdown(" ")
-        author_data = author_details_section(conn, book_data["is_single_author"])
+        book_data = book_details_section(publisher)
+        st.markdown(" ")
+        author_data = author_details_section(conn, book_data["is_single_author"], publisher)
 
     # --- Save, Clear, and Cancel Buttons ---
     col1, col2 = st.columns([7,1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            errors = validate_form(book_data, author_data, book_data["is_single_author"])
+            errors = validate_form(book_data, author_data, book_data["is_single_author"], publisher)
             if errors:
                 st.error("\n".join(errors), icon="🚨")
             else:
@@ -512,44 +560,46 @@ def add_book_dialog(conn):
                     time.sleep(2)
                     with conn.session as s:
                         try:
-                            # Insert book with is_publish_only
+                            # Insert book with publisher and other fields
                             s.execute(text("""
-                                INSERT INTO books (title, date, is_single_author, is_publish_only)
-                                VALUES (:title, :date, :is_single_author, :is_publish_only)
+                                INSERT INTO books (title, date, is_single_author, is_publish_only, publisher)
+                                VALUES (:title, :date, :is_single_author, :is_publish_only, :publisher)
                             """), params={
                                 "title": book_data["title"], 
                                 "date": book_data["date"], 
                                 "is_single_author": book_data["is_single_author"],
-                                "is_publish_only": book_data["is_publish_only"]
+                                "is_publish_only": book_data["is_publish_only"],
+                                "publisher": book_data["publisher"]
                             })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                            # Process only active authors
-                            active_authors = [a for a in author_data if is_author_active(a)]
-                            for author in active_authors:
-                                if author["author_id"]:
-                                    # Use existing author
-                                    author_id_to_link = author["author_id"]
-                                else:
-                                    # Insert new author
-                                    s.execute(text("""
-                                        INSERT INTO authors (name, email, phone)
-                                        VALUES (:name, :email, :phone)
-                                        ON DUPLICATE KEY UPDATE name=name
-                                    """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
-                                    author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                            # Process only active authors if publisher allows authors
+                            if publisher not in ["AG Kids", "NEET/JEE"]:
+                                active_authors = [a for a in author_data if is_author_active(a)]
+                                for author in active_authors:
+                                    if author["author_id"]:
+                                        # Use existing author
+                                        author_id_to_link = author["author_id"]
+                                    else:
+                                        # Insert new author
+                                        s.execute(text("""
+                                            INSERT INTO authors (name, email, phone)
+                                            VALUES (:name, :email, :phone)
+                                            ON DUPLICATE KEY UPDATE name=name
+                                        """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
+                                        author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                                if book_id and author_id_to_link:
-                                    s.execute(text("""
-                                        INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                        VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                    """), params={
-                                        "book_id": book_id,
-                                        "author_id": author_id_to_link,
-                                        "author_position": author["author_position"],
-                                        "corresponding_agent": author["corresponding_agent"],
-                                        "publishing_consultant": author["publishing_consultant"]
-                                    })
+                                    if book_id and author_id_to_link:
+                                        s.execute(text("""
+                                            INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                            VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                        """), params={
+                                            "book_id": book_id,
+                                            "author_id": author_id_to_link,
+                                            "author_position": author["author_position"],
+                                            "corresponding_agent": author["corresponding_agent"],
+                                            "publishing_consultant": author["publishing_consultant"]
+                                        })
                             s.commit()
                             st.success("Book and Authors Saved Successfully!", icon="✔️")
                             time.sleep(1)
@@ -560,6 +610,7 @@ def add_book_dialog(conn):
                             st.rerun()
                         except Exception as db_error:
                             s.rollback()
+                            st.error(f"Database error: {db_error}")
 
     with col2:
         if st.button("Cancel", key="dialog_cancel", type="secondary"):
@@ -732,7 +783,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 st.success("Book Details Updated Successfully!", icon="✔️")
                 time.sleep(1)
                 st.rerun()
-
 
 
 ###################################################################################################################################
@@ -1782,7 +1832,7 @@ def edit_operation_dialog(book_id, conn):
     is_publish_only = False
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
-        is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Check if publish only
+        is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
         col1, col2 = st.columns([6, 1])
         with col1:
             st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
@@ -1829,8 +1879,8 @@ def edit_operation_dialog(book_id, conn):
         SELECT writing_start, writing_end, writing_by, 
                proofreading_start, proofreading_end, proofreading_by, 
                formatting_start, formatting_end, formatting_by, 
-               front_cover_start, front_cover_end, front_cover_by,
-               back_cover_start, back_cover_end, back_cover_by, book_pages
+               front_cover_start, front_cover_end,
+               back_cover_start, back_cover_end, book_pages
         FROM books WHERE book_id = {book_id}
     """
     book_operations = conn.query(query, show_spinner=False)
@@ -1840,6 +1890,24 @@ def edit_operation_dialog(book_id, conn):
         current_data = {}
     else:
         current_data = book_operations.iloc[0].to_dict()
+
+    # Initialize session state for all worker fields
+    worker_keys = [
+        f"writing_by_{book_id}",
+        f"proofreading_by_{book_id}",
+        f"formatting_by_{book_id}",
+        f"cover_by_{book_id}"
+    ]
+    worker_defaults = [
+        current_data.get('writing_by', ""),
+        current_data.get('proofreading_by', ""),
+        current_data.get('formatting_by', ""),
+        current_data.get('cover_by', "")
+    ]
+
+    for key, default in zip(worker_keys, worker_defaults):
+        if key not in st.session_state:
+            st.session_state[key] = default
 
     # Streamlit-style Status Overview
     cols = st.columns(5, gap="small")
@@ -1855,8 +1923,6 @@ def edit_operation_dialog(book_id, conn):
         with cols[i]:
             start = current_data.get(start_field)
             end = current_data.get(end_field)
-            
-            # Determine status
             if end:
                 status_class = "status-complete"
                 end_date = str(end).split()[0] if end else ""
@@ -1867,8 +1933,6 @@ def edit_operation_dialog(book_id, conn):
             else:
                 status_class = "status-pending"
                 status_text = "Pending"
-            
-            # Streamlit-integrated status display
             html = f"""
                 <div class="status-box {status_class}">
                     <strong>{op_name}</strong><br>
@@ -1881,95 +1945,92 @@ def edit_operation_dialog(book_id, conn):
     writing_names = fetch_unique_names("writing_by")
     proofreading_names = fetch_unique_names("proofreading_by")
     formatting_names = fetch_unique_names("formatting_by")
-    front_cover_names = fetch_unique_names("front_cover_by")
-    back_cover_names = fetch_unique_names("back_cover_by")
-
-    # Sort the lists and ensure no empty entries
-    writing_names = sorted([name for name in writing_names if name])
-    proofreading_names = sorted([name for name in proofreading_names if name])
-    formatting_names = sorted([name for name in formatting_names if name])
-    front_cover_names = sorted([name for name in front_cover_names if name])
-    back_cover_names = sorted([name for name in back_cover_names if name])
 
     # Initialize session state for text inputs
-    if f"writing_by_{book_id}" not in st.session_state:
-        st.session_state[f"writing_by_{book_id}"] = current_data.get('writing_by', "")
-    if f"proofreading_by_{book_id}" not in st.session_state:
-        st.session_state[f"proofreading_by_{book_id}"] = current_data.get('proofreading_by', "")
-    if f"formatting_by_{book_id}" not in st.session_state:
-        st.session_state[f"formatting_by_{book_id}"] = current_data.get('formatting_by', "")
-    if f"front_cover_by_{book_id}" not in st.session_state:
-        st.session_state[f"front_cover_by_{book_id}"] = current_data.get('front_cover_by', "")
-    if f"back_cover_by_{book_id}" not in st.session_state:
-        st.session_state[f"back_cover_by_{book_id}"] = current_data.get('back_cover_by', "")
+    for key, value in [
+        (f"writing_by_{book_id}", current_data.get('writing_by', "")),
+        (f"proofreading_by_{book_id}", current_data.get('proofreading_by', "")),
+        (f"formatting_by_{book_id}", current_data.get('formatting_by', "")),
+    ]:
+        if key not in st.session_state:
+            st.session_state[key] = value
 
     # Define options for selectboxes
     writing_options = ["Select Writer"] + writing_names + ["Add New..."]
     proofreading_options = ["Select Proofreader"] + proofreading_names + ["Add New..."]
     formatting_options = ["Select Formatter"] + formatting_names + ["Add New..."]
-    front_cover_options = ["Select Front Cover Designer"] + front_cover_names + ["Add New..."]
-    back_cover_options = ["Select Back Cover Designer"] + back_cover_names + ["Add New..."]
 
-    # Define tabs for each operation
+    # Define tabs
     tab1, tab2, tab3, tab4 = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
 
     # Writing Tab
     with tab1:
         if is_publish_only:
             st.warning("Writing section is disabled because this book is in 'Publish Only' mode.")
-        with st.form(key=f"writing_form_{book_id}", border=False):
-            selected_writer = st.selectbox(
-                "Writer",
-                writing_options,
-                index=writing_options.index(st.session_state[f"writing_by_{book_id}"]) if st.session_state[f"writing_by_{book_id}"] in writing_names else 0,
-                key=f"writing_select_{book_id}",
-                help="Select an existing writer or 'Add New...' to enter a new one.",
-                disabled=is_publish_only
+        
+        # Worker selection outside the form
+        writing_options = ["Select Writer"] + fetch_unique_names("writing_by") + ["Add New..."]
+        selected_writer = st.selectbox(
+            "Writer",
+            writing_options,
+            index=(writing_options.index(st.session_state[f"writing_by_{book_id}"]) 
+                if st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
+            key=f"writing_select_{book_id}",
+            disabled=is_publish_only
+        )
+        
+        if selected_writer == "Add New..." and not is_publish_only:
+            new_writer = st.text_input(
+                "New Writer Name",
+                key=f"writing_new_input_{book_id}",
+                placeholder="Enter new writer name..."
             )
-            if selected_writer == "Add New..." and not is_publish_only:
-                st.session_state[f"writing_by_{book_id}"] = st.text_input(
-                    "New Writer Name",
-                    value="",
-                    key=f"writing_new_input_{book_id}",
-                    placeholder="Enter new writer name...",
-                    disabled=is_publish_only
-                )
-            elif selected_writer != "Select Writer" and not is_publish_only:
-                st.session_state[f"writing_by_{book_id}"] = selected_writer
+            if new_writer:
+                st.session_state[f"writing_by_{book_id}"] = new_writer
+        elif selected_writer != "Select Writer" and not is_publish_only:
+            st.session_state[f"writing_by_{book_id}"] = selected_writer
 
-            writing_by = st.text_input(
-                "Writing By",
-                value=st.session_state[f"writing_by_{book_id}"],
-                key=f"writing_by_input_{book_id}",
-                disabled=is_publish_only
-            )
+        writing_by = st.session_state[f"writing_by_{book_id}"] if st.session_state[f"writing_by_{book_id}"] != "Select Writer" else ""
+
+        # Rest of the form
+        with st.form(key=f"writing_form_{book_id}", border=False):
             col1, col2 = st.columns(2)
             with col1:
                 writing_start_date = st.date_input(
                     "Start Date", 
-                    value=current_data.get('writing_start', None), 
+                    value=current_data.get('writing_start'), 
                     key=f"writing_start_date_{book_id}",
                     disabled=is_publish_only
                 )
                 writing_start_time = st.time_input(
                     "Start Time", 
-                    value=current_data.get('writing_start', None), 
+                    value=current_data.get('writing_start'), 
                     key=f"writing_start_time_{book_id}",
                     disabled=is_publish_only
                 )
             with col2:
                 writing_end_date = st.date_input(
                     "End Date", 
-                    value=current_data.get('writing_end', None), 
+                    value=current_data.get('writing_end'), 
                     key=f"writing_end_date_{book_id}",
                     disabled=is_publish_only
                 )
                 writing_end_time = st.time_input(
                     "End Time", 
-                    value=current_data.get('writing_end', None), 
+                    value=current_data.get('writing_end'), 
                     key=f"writing_end_time_{book_id}",
                     disabled=is_publish_only
                 )
+            
+            book_pages = st.number_input(
+                "Total Book Pages",
+                min_value=0,
+                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
+                step=1,
+                key=f"book_pages_writing_{book_id}",
+                disabled=is_publish_only
+            )
+
             if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
                 with st.spinner("Saving Writing details..."):
                     time.sleep(2)
@@ -1981,44 +2042,57 @@ def edit_operation_dialog(book_id, conn):
                         updates = {
                             "writing_start": writing_start,
                             "writing_end": writing_end,
-                            "writing_by": writing_by if writing_by else None
+                            "writing_by": writing_by if writing_by else None,
+                            "book_pages": book_pages
                         }
                         update_operation_details(book_id, updates)
-                        st.session_state[f"writing_by_{book_id}"] = writing_by
                         st.success("✔️ Updated Writing details")
+                        if selected_writer == "Add New..." and writing_by:
+                            st.cache_data.clear()
 
     # Proofreading Tab
     with tab2:
-        with st.form(key=f"proofreading_form_{book_id}", border=False):
-            selected_proofreader = st.selectbox(
-                "Proofreader",
-                proofreading_options,
-                index=proofreading_options.index(st.session_state[f"proofreading_by_{book_id}"]) if st.session_state[f"proofreading_by_{book_id}"] in proofreading_names else 0,
-                key=f"proofreading_select_{book_id}",
-                help="Select an existing proofreader or 'Add New...' to enter a new one."
+        # Worker selection outside the form
+        proofreading_options = ["Select Proofreader"] + fetch_unique_names("proofreading_by") + ["Add New..."]
+        selected_proofreader = st.selectbox(
+            "Proofreader",
+            proofreading_options,
+            index=(proofreading_options.index(st.session_state[f"proofreading_by_{book_id}"]) 
+                if st.session_state[f"proofreading_by_{book_id}"] in proofreading_options else 0),
+            key=f"proofreading_select_{book_id}"
+        )
+        
+        if selected_proofreader == "Add New...":
+            new_proofreader = st.text_input(
+                "New Proofreader Name",
+                key=f"proofreading_new_input_{book_id}",
+                placeholder="Enter new proofreader name..."
             )
-            if selected_proofreader == "Add New...":
-                st.session_state[f"proofreading_by_{book_id}"] = st.text_input(
-                    "New Proofreader Name",
-                    value="",
-                    key=f"proofreading_new_input_{book_id}",
-                    placeholder="Enter new proofreader name..."
-                )
-            elif selected_proofreader != "Select Proofreader":
-                st.session_state[f"proofreading_by_{book_id}"] = selected_proofreader
+            if new_proofreader:
+                st.session_state[f"proofreading_by_{book_id}"] = new_proofreader
+        elif selected_proofreader != "Select Proofreader":
+            st.session_state[f"proofreading_by_{book_id}"] = selected_proofreader
 
-            proofreading_by = st.text_input(
-                "Proofreading By",
-                value=st.session_state[f"proofreading_by_{book_id}"],
-                key=f"proofreading_by_input_{book_id}"
-            )
+        proofreading_by = st.session_state[f"proofreading_by_{book_id}"] if st.session_state[f"proofreading_by_{book_id}"] != "Select Proofreader" else ""
+
+        # Rest of the form
+        with st.form(key=f"proofreading_form_{book_id}", border=False):
             col1, col2 = st.columns(2)
             with col1:
-                proofreading_start_date = st.date_input("Start Date", value=current_data.get('proofreading_start', None), key=f"proofreading_start_date_{book_id}")
-                proofreading_start_time = st.time_input("Start Time", value=current_data.get('proofreading_start', None), key=f"proofreading_start_time_{book_id}")
+                proofreading_start_date = st.date_input("Start Date", value=current_data.get('proofreading_start'), key=f"proofreading_start_date_{book_id}")
+                proofreading_start_time = st.time_input("Start Time", value=current_data.get('proofreading_start'), key=f"proofreading_start_time_{book_id}")
             with col2:
-                proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end', None), key=f"proofreading_end_date_{book_id}")
-                proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end', None), key=f"proofreading_end_time_{book_id}")
+                proofreading_end_date = st.date_input("End Date", value=current_data.get('proofreading_end'), key=f"proofreading_end_date_{book_id}")
+                proofreading_end_time = st.time_input("End Time", value=current_data.get('proofreading_end'), key=f"proofreading_end_time_{book_id}")
+            
+            book_pages = st.number_input(
+                "Total Book Pages",
+                min_value=0,
+                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
+                step=1,
+                key=f"book_pages_proofreading_{book_id}"
+            )
+
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
                 with st.spinner("Saving Proofreading details..."):
                     time.sleep(2)
@@ -2030,53 +2104,57 @@ def edit_operation_dialog(book_id, conn):
                         updates = {
                             "proofreading_start": proofreading_start,
                             "proofreading_end": proofreading_end,
-                            "proofreading_by": proofreading_by if proofreading_by else None
+                            "proofreading_by": proofreading_by if proofreading_by else None,
+                            "book_pages": book_pages
                         }
                         update_operation_details(book_id, updates)
-                        st.session_state[f"proofreading_by_{book_id}"] = proofreading_by
                         st.success("✔️ Updated Proofreading details")
+                        if selected_proofreader == "Add New..." and proofreading_by:
+                            st.cache_data.clear()
 
     # Formatting Tab
     with tab3:
-        with st.form(key=f"formatting_form_{book_id}", border=False):
-            selected_formatter = st.selectbox(
-                "Formatter",
-                formatting_options,
-                index=formatting_options.index(st.session_state[f"formatting_by_{book_id}"]) if st.session_state[f"formatting_by_{book_id}"] in formatting_names else 0,
-                key=f"formatting_select_{book_id}",
-                help="Select an existing formatter or 'Add New...' to enter a new one."
+        # Worker selection outside the form
+        formatting_options = ["Select Formatter"] + fetch_unique_names("formatting_by") + ["Add New..."]
+        selected_formatter = st.selectbox(
+            "Formatter",
+            formatting_options,
+            index=(formatting_options.index(st.session_state[f"formatting_by_{book_id}"]) 
+                if st.session_state[f"formatting_by_{book_id}"] in formatting_options else 0),
+            key=f"formatting_select_{book_id}"
+        )
+        
+        if selected_formatter == "Add New...":
+            new_formatter = st.text_input(
+                "New Formatter Name",
+                key=f"formatting_new_input_{book_id}",
+                placeholder="Enter new formatter name..."
             )
-            if selected_formatter == "Add New...":
-                st.session_state[f"formatting_by_{book_id}"] = st.text_input(
-                    "New Formatter Name",
-                    value="",
-                    key=f"formatting_new_input_{book_id}",
-                    placeholder="Enter new formatter name..."
-                )
-            elif selected_formatter != "Select Formatter":
-                st.session_state[f"formatting_by_{book_id}"] = selected_formatter
+            if new_formatter:
+                st.session_state[f"formatting_by_{book_id}"] = new_formatter
+        elif selected_formatter != "Select Formatter":
+            st.session_state[f"formatting_by_{book_id}"] = selected_formatter
 
-            formatting_by = st.text_input(
-                "Formatting By",
-                value=st.session_state[f"formatting_by_{book_id}"],
-                key=f"formatting_by_input_{book_id}"
-            )
+        formatting_by = st.session_state[f"formatting_by_{book_id}"] if st.session_state[f"formatting_by_{book_id}"] != "Select Formatter" else ""
+
+        # Rest of the form
+        with st.form(key=f"formatting_form_{book_id}", border=False):
             col1, col2 = st.columns(2)
             with col1:
-                formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start', None), key=f"formatting_start_date_{book_id}")
-                formatting_start_time = st.time_input("Start Time", value=current_data.get('formatting_start', None), key=f"formatting_start_time_{book_id}")
+                formatting_start_date = st.date_input("Start Date", value=current_data.get('formatting_start'), key=f"formatting_start_date_{book_id}")
+                formatting_start_time = st.time_input("Start Time", value=current_data.get('formatting_start'), key=f"formatting_start_time_{book_id}")
             with col2:
-                formatting_end_date = st.date_input("End Date", value=current_data.get('formatting_end', None), key=f"formatting_end_date_{book_id}")
-                formatting_end_time = st.time_input("End Time", value=current_data.get('formatting_end', None), key=f"formatting_end_time_{book_id}")
+                formatting_end_date = st.date_input("End Date", value=current_data.get('formatting_end'), key=f"formatting_end_date_{book_id}")
+                formatting_end_time = st.time_input("End Time", value=current_data.get('formatting_end'), key=f"formatting_end_time_{book_id}")
             
             book_pages = st.number_input(
                 "Total Book Pages",
                 min_value=0,
-                value=current_data.get('book_pages', 1) if current_data.get('book_pages') else 0,
+                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
                 step=1,
-                key=f"book_pages_{book_id}"
+                key=f"book_pages_formatting_{book_id}"
             )
-            
+
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 with st.spinner("Saving Formatting details..."):
                     time.sleep(2)
@@ -2092,115 +2170,79 @@ def edit_operation_dialog(book_id, conn):
                             "book_pages": book_pages
                         }
                         update_operation_details(book_id, updates)
-                        st.session_state[f"formatting_by_{book_id}"] = formatting_by
                         st.success("✔️ Updated Formatting details")
+                        if selected_formatter == "Add New..." and formatting_by:
+                            st.cache_data.clear()
 
     # Book Cover Tab
     with tab4:
-        with st.expander("📚 Front Cover Details", expanded=False):
+        # Worker selection outside the form
+        cover_options = ["Select Cover Designer"] + fetch_unique_names("cover_by") + ["Add New..."]
+        selected_cover = st.selectbox(
+            "Cover Designer",
+            cover_options,
+            index=(cover_options.index(st.session_state[f"cover_by_{book_id}"]) 
+                   if st.session_state[f"cover_by_{book_id}"] in cover_options else 0),
+            key=f"cover_select_{book_id}"
+        )
+        
+        if selected_cover == "Add New...":
+            new_cover_designer = st.text_input(
+                "New Cover Designer Name",
+                key=f"cover_new_input_{book_id}",
+                placeholder="Enter new cover designer name..."
+            )
+            if new_cover_designer:
+                st.session_state[f"cover_by_{book_id}"] = new_cover_designer
+        elif selected_cover != "Select Cover Designer":
+            st.session_state[f"cover_by_{book_id}"] = selected_cover
+
+        cover_by = st.session_state[f"cover_by_{book_id}"] if st.session_state[f"cover_by_{book_id}"] != "Select Cover Designer" else ""
+
+        # Rest of the form
+        with st.form(key=f"cover_form_{book_id}", border=False):
             st.subheader("Front Cover")
-            with st.form(key=f"front_cover_form_{book_id}", border=False):
-                selected_front_cover = st.selectbox(
-                    "Front Cover Designer",
-                    front_cover_options,
-                    index=front_cover_options.index(st.session_state[f"front_cover_by_{book_id}"]) if st.session_state[f"front_cover_by_{book_id}"] in front_cover_names else 0,
-                    key=f"front_cover_select_{book_id}",
-                    help="Select an existing front cover designer or 'Add New...' to enter a new one."
-                )
-                if selected_front_cover == "Add New...":
-                    st.session_state[f"front_cover_by_{book_id}"] = st.text_input(
-                        "New Front Cover Designer Name",
-                        value="",
-                        key=f"front_cover_new_input_{book_id}",
-                        placeholder="Enter new front cover designer name..."
-                    )
-                elif selected_front_cover != "Select Front Cover Designer":
-                    st.session_state[f"front_cover_by_{book_id}"] = selected_front_cover
+            col1, col2 = st.columns(2)
+            with col1:
+                front_cover_start_date = st.date_input("Front Start Date", value=current_data.get('front_cover_start'), key=f"front_cover_start_date_{book_id}")
+                front_cover_start_time = st.time_input("Front Start Time", value=current_data.get('front_cover_start'), key=f"front_cover_start_time_{book_id}")
+            with col2:
+                front_cover_end_date = st.date_input("Front End Date", value=current_data.get('front_cover_end'), key=f"front_cover_end_date_{book_id}")
+                front_cover_end_time = st.time_input("Front End Time", value=current_data.get('front_cover_end'), key=f"front_cover_end_time_{book_id}")
 
-                front_cover_by = st.text_input(
-                    "Front Cover By",
-                    value=st.session_state[f"front_cover_by_{book_id}"],
-                    key=f"front_cover_by_input_{book_id}"
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    front_cover_start_date = st.date_input("Front Start Date", value=current_data.get('front_cover_start', None), key=f"front_cover_start_date_{book_id}")
-                    front_cover_start_time = st.time_input("Front Start Time", value=current_data.get('front_cover_start', None), key=f"front_cover_start_time_{book_id}")
-                with col2:
-                    front_cover_end_date = st.date_input("Front End Date", value=current_data.get('front_cover_end', None), key=f"front_cover_end_date_{book_id}")
-                    front_cover_end_time = st.time_input("Front End Time", value=current_data.get('front_cover_end', None), key=f"front_cover_end_time_{book_id}")
-                
-                front_submit = st.form_submit_button("💾 Save Front Cover", use_container_width=True)
-
-        with st.expander("📚 Back Cover Details", expanded=False):
             st.subheader("Back Cover")
-            with st.form(key=f"back_cover_form_{book_id}", border=False):
-                selected_back_cover = st.selectbox(
-                    "Back Cover Designer",
-                    back_cover_options,
-                    index=back_cover_options.index(st.session_state[f"back_cover_by_{book_id}"]) if st.session_state[f"back_cover_by_{book_id}"] in back_cover_names else 0,
-                    key=f"back_cover_select_{book_id}",
-                    help="Select an existing back cover designer or 'Add New...' to enter a new one."
-                )
-                if selected_back_cover == "Add New...":
-                    st.session_state[f"back_cover_by_{book_id}"] = st.text_input(
-                        "New Back Cover Designer Name",
-                        value="",
-                        key=f"back_cover_new_input_{book_id}",
-                        placeholder="Enter new back cover designer name..."
-                    )
-                elif selected_back_cover != "Select Back Cover Designer":
-                    st.session_state[f"back_cover_by_{book_id}"] = selected_back_cover
+            col1, col2 = st.columns(2)
+            with col1:
+                back_cover_start_date = st.date_input("Back Start Date", value=current_data.get('back_cover_start'), key=f"back_cover_start_date_{book_id}")
+                back_cover_start_time = st.time_input("Back Start Time", value=current_data.get('back_cover_start'), key=f"back_cover_start_time_{book_id}")
+            with col2:
+                back_cover_end_date = st.date_input("Back End Date", value=current_data.get('back_cover_end'), key=f"back_cover_end_date_{book_id}")
+                back_cover_end_time = st.time_input("Back End Time", value=current_data.get('back_cover_end'), key=f"back_cover_end_time_{book_id}")
 
-                back_cover_by = st.text_input(
-                    "Back Cover By",
-                    value=st.session_state[f"back_cover_by_{book_id}"],
-                    key=f"back_cover_by_input_{book_id}"
-                )
-                col1, col2 = st.columns(2)
-                with col1:
-                    back_cover_start_date = st.date_input("Back Start Date", value=current_data.get('back_cover_start', None), key=f"back_cover_start_date_{book_id}")
-                    back_cover_start_time = st.time_input("Back Start Time", value=current_data.get('back_cover_start', None), key=f"back_cover_start_time_{book_id}")
-                with col2:
-                    back_cover_end_date = st.date_input("Back End Date", value=current_data.get('back_cover_end', None), key=f"back_cover_end_date_{book_id}")
-                    back_cover_end_time = st.time_input("Back End Time", value=current_data.get('back_cover_end', None), key=f"back_cover_end_time_{book_id}")
-                
-                back_submit = st.form_submit_button("💾 Save Back Cover", use_container_width=True)
-
-        # Handle form submissions
-        if front_submit:
-            with st.spinner("Saving Front Cover details..."):
-                time.sleep(2)
-                front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
-                front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
-                if front_cover_start and front_cover_end and front_cover_start > front_cover_end:
-                        st.error("Start date/time must be before end date/time.")
-                else:
-                    updates = {
-                        "front_cover_start": front_cover_start,
-                        "front_cover_end": front_cover_end,
-                        "front_cover_by": front_cover_by if front_cover_by else None
-                    }
-                    update_operation_details(book_id, updates)
-                    st.session_state[f"front_cover_by_{book_id}"] = front_cover_by  # Update session state after save
-                    st.success("✔️ Updated Front Cover details")
-
-        if back_submit:
-            with st.spinner("Saving Back Cover details..."):
-                time.sleep(2)
-                back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
-                back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
-                if back_cover_start and back_cover_end and back_cover_start > back_cover_end:
-                        st.error("Start date/time must be before end date/time.")
-                else:
-                    updates = {
-                        "back_cover_start": back_cover_start,
-                        "back_cover_end": back_cover_end,
-                        "back_cover_by": back_cover_by if back_cover_by else None
-                    }
-                    update_operation_details(book_id, updates)
-                    st.session_state[f"back_cover_by_{book_id}"] = back_cover_by  # Update session state after save
-                    st.success("✔️ Updated Back Cover details")
+            if st.form_submit_button("💾 Save Cover Details", use_container_width=True):
+                with st.spinner("Saving Cover details..."):
+                    time.sleep(2)
+                    front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
+                    front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
+                    back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
+                    back_cover_end = f"{back_cover_end_date} {back_cover_end_time}" if back_cover_end_date and back_cover_end_time else None
+                    
+                    if front_cover_start and front_cover_end and front_cover_start > front_cover_end:
+                        st.error("Front cover start date/time must be before end date/time.")
+                    elif back_cover_start and back_cover_end and back_cover_start > back_cover_end:
+                        st.error("Back cover start date/time must be before end date/time.")
+                    else:
+                        updates = {
+                            "front_cover_start": front_cover_start,
+                            "front_cover_end": front_cover_end,
+                            "back_cover_start": back_cover_start,
+                            "back_cover_end": back_cover_end,
+                            "cover_by": cover_by if cover_by else None
+                        }
+                        update_operation_details(book_id, updates)
+                        st.success("✔️ Updated Cover details")
+                        if selected_cover == "Add New..." and cover_by:
+                            st.cache_data.clear()
 
 def update_operation_details(book_id, updates):
     """Update operation details in the books table."""
@@ -3337,23 +3379,36 @@ with cont:
                     badge_content = ""
                     badge_style = ""
                     publish_badge = ""
+                    publisher_badge = ""
                     
                     # Handle the author count/single badge
                     if row['is_single_author'] == 1:
-                        # For single-author books, show "Single" in a pill-shaped badge
                         badge_content = "Single"
                         badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
                     else:
-                        # For multi-author books, show the author count
                         badge_content = str(author_count)
-                        badge_style = "color: #2aba25; font-size:14px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;"
+                        badge_style = "color: #2aba25; font-size: 14px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;"
                     
-                    if row['is_publish_only'] == 1:  # Using .get() for safety if column doesn't exist yet
+                    # Handle the "Publish Only" badge
+                    if row['is_publish_only'] == 1:
                         publish_badge = '<span style="color: #ff9800; font-size: 12px; background-color: #fff3e0; padding: 2px 6px; border-radius: 12px; margin-left: 5px;">Publish Only</span>'
                     
-                    # Display the title with both badges
+                    # Handle the publisher badge with distinct colors
+                    publisher = row.get('publisher', '')  # Safe access
+                    publisher_colors = {
+                        "Cipher": {"color": "#ffffff", "background": "#673ab7"},  # White text on deep purple
+                        "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
+                        "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
+                        "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
+                    }
+                    if publisher in publisher_colors:
+                        style = publisher_colors[publisher]
+                        publisher_style = f"color: {style['color']}; font-size: 12px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
+                        publisher_badge = f'<span style="{publisher_style}">{publisher}</span>'
+                    
+                    # Display the title with all badges
                     st.markdown(
-                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}",
+                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
                         unsafe_allow_html=True
                     )
                 with col3:
@@ -3368,11 +3423,19 @@ with cont:
                         if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
                             manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
                     with btn_col2:
-                        if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
-                            manage_price_dialog(row['book_id'], row['price'],conn)
+                        publisher = row.get('publisher', '')
+                        if publisher not in ["AG Kids", "NEET/JEE"]:
+                            if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
+                                manage_price_dialog(row['book_id'], row['price'], conn)
+                        else:
+                            st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Price management disabled for this publisher", disabled=True)
                     with btn_col3:
-                        if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
-                            edit_author_dialog(row['book_id'], conn)
+                        publisher = row.get('publisher', '')
+                        if publisher not in ["AG Kids", "NEET/JEE"]:
+                            if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
+                                edit_author_dialog(row['book_id'], conn)
+                        else:
+                            st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Author editing disabled for this publisher", disabled=True)
                     with btn_col4:
                         if st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations"):
                             edit_operation_dialog(row['book_id'], conn)
