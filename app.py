@@ -79,6 +79,8 @@ def validate_token():
 
 validate_token()
 
+UPLOAD_DIR = "uploads"
+
 st.cache_data.clear()
 
 # --- Database Connection ---
@@ -98,13 +100,13 @@ def connect_db():
 conn = connect_db()
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, is_publish_only, publisher FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path is_publish_only, publisher FROM books"
 books = conn.query(query,show_spinner = False)
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, num_copies, print_status,is_publish_only
+    SELECT title, date, apply_isbn, isbn, is_single_author, num_copies, syllabus_path, print_status,is_publish_only, publisher
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -273,8 +275,6 @@ def edit_author_detail(conn):
 
 
 
-
-
 ###################################################################################################################################
 ##################################--------------- Add New Book & Auhtor ----------------------------##################################
 ###################################################################################################################################
@@ -289,11 +289,10 @@ def add_book_dialog(conn):
             "email": "",
             "phone": "",
             "author_id": None,
-            "author_position": "1st",  # Default position, will be overridden
+            "author_position": "1st",
             "corresponding_agent": "",
             "publishing_consultant": ""
         }
-        # Update the author dict with any missing keys, preserving existing values
         for key, default_value in default_author.items():
             if key not in author:
                 author[key] = default_value
@@ -305,10 +304,10 @@ def add_book_dialog(conn):
             st.markdown("<h5 style='color: #4CAF50;'>Publisher</h5>", unsafe_allow_html=True)
             publisher = st.radio(
                 "Select Publisher",
-                ["AGPH", "Cipher", "AG Classics", "AG Kids", "NEET/JEE"],
+                ["AGPH", "Cipher", "AG Volumes", "AG Classics", "AG Kids", "NEET/JEE"],
                 key="publisher_select",
                 horizontal=True,
-                help="Select the publisher for this book."
+                label_visibility="collapsed"
             )
             return publisher
 
@@ -320,11 +319,10 @@ def add_book_dialog(conn):
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
             
             # Determine if toggles should be enabled based on publisher
-            toggles_enabled = publisher in ["AGPH", "Cipher", "AG Classics"]
+            toggles_enabled = publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
             
             # Columns for toggles
             col3, col4 = st.columns(2)
-            # Add the "Single Author" toggle (default is off, meaning multiple authors allowed)
             is_single_author = col3.toggle(
                 "Single Author Book?",
                 value=False,
@@ -332,7 +330,6 @@ def add_book_dialog(conn):
                 help="Enable this to restrict the book to a single author.",
                 disabled=not toggles_enabled
             )
-            # Add the "Publish Only" toggle
             is_publish_only = col4.toggle(
                 "Publish Only?",
                 value=False,
@@ -352,6 +349,24 @@ def add_book_dialog(conn):
                 "publisher": publisher
             }
 
+    def syllabus_upload_section(is_publish_only, toggles_enabled):
+        with st.container(border=True):
+            st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
+            syllabus_file = None
+            if not is_publish_only and toggles_enabled:
+                syllabus_file = st.file_uploader(
+                    "Upload Book Syllabus",
+                    type=["pdf", "docx", "jpg", "jpeg", "png"],
+                    key="syllabus_upload",
+                    help="Upload the book syllabus as a PDF, DOCX, or image file."
+                )
+            else:
+                if is_publish_only:
+                    st.info("Syllabus upload is disabled for Publish Only books.")
+                if not toggles_enabled:
+                    st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
+            return syllabus_file
+
     def author_details_section(conn, is_single_author, publisher):
         # Check if author section should be disabled
         author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
@@ -365,16 +380,6 @@ def add_book_dialog(conn):
         else:
             # Ensure backward compatibility for existing session state
             st.session_state.authors = [ensure_author_fields(author) for author in st.session_state.authors]
-
-        def get_all_authors(conn):
-            with conn.session as s:
-                try:
-                    query = text("SELECT author_id, name, email, phone FROM authors ORDER BY name")
-                    authors = s.execute(query).fetchall()
-                    return authors
-                except Exception as e:
-                    st.error(f"Error fetching authors: {e}")
-                    return []
 
         # Fetch unique corresponding agents and publishing consultants
         def get_unique_agents_and_consultants(conn):
@@ -543,13 +548,15 @@ def add_book_dialog(conn):
     # --- Combined Container Inside Dialog ---
     with st.container():
         publisher = publisher_section()
-        st.markdown(" ")
         book_data = book_details_section(publisher)
-        st.markdown(" ")
+        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         author_data = author_details_section(conn, book_data["is_single_author"], publisher)
+        
+        # Add syllabus_file to book_data for saving
+        book_data["syllabus_file"] = syllabus_file
 
     # --- Save, Clear, and Cancel Buttons ---
-    col1, col2 = st.columns([7,1])
+    col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
             errors = validate_form(book_data, author_data, book_data["is_single_author"], publisher)
@@ -560,16 +567,29 @@ def add_book_dialog(conn):
                     time.sleep(2)
                     with conn.session as s:
                         try:
-                            # Insert book with publisher and other fields
+                            # Handle syllabus file upload
+                            syllabus_path = None
+                            if book_data["syllabus_file"] and not book_data["is_publish_only"]:
+                                # Generate a unique filename to avoid overwrites
+                                file_extension = os.path.splitext(book_data["syllabus_file"].name)[1]
+                                unique_filename = f"syllabus_{book_data['title'].replace(' ', '_')}_{int(time.time())}{file_extension}"
+                                syllabus_path = os.path.join(UPLOAD_DIR, unique_filename)
+                                
+                                # Save the file to the uploads directory
+                                with open(syllabus_path, "wb") as f:
+                                    f.write(book_data["syllabus_file"].getbuffer())
+                            
+                            # Insert book with publisher, syllabus path, and other fields
                             s.execute(text("""
-                                INSERT INTO books (title, date, is_single_author, is_publish_only, publisher)
-                                VALUES (:title, :date, :is_single_author, :is_publish_only, :publisher)
+                                INSERT INTO books (title, date, is_single_author, is_publish_only, publisher, syllabus_path)
+                                VALUES (:title, :date, :is_single_author, :is_publish_only, :publisher, :syllabus_path)
                             """), params={
-                                "title": book_data["title"], 
-                                "date": book_data["date"], 
+                                "title": book_data["title"],
+                                "date": book_data["date"],
                                 "is_single_author": book_data["is_single_author"],
                                 "is_publish_only": book_data["is_publish_only"],
-                                "publisher": book_data["publisher"]
+                                "publisher": book_data["publisher"],
+                                "syllabus_path": syllabus_path
                             })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
@@ -578,10 +598,8 @@ def add_book_dialog(conn):
                                 active_authors = [a for a in author_data if is_author_active(a)]
                                 for author in active_authors:
                                     if author["author_id"]:
-                                        # Use existing author
                                         author_id_to_link = author["author_id"]
                                     else:
-                                        # Insert new author
                                         s.execute(text("""
                                             INSERT INTO authors (name, email, phone)
                                             VALUES (:name, :email, :phone)
@@ -617,7 +635,7 @@ def add_book_dialog(conn):
             st.session_state.authors = [
                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                 for i in range(4)
-            ]  # Reset authors
+            ]
             st.rerun()
 
 
@@ -629,22 +647,24 @@ from datetime import datetime
 
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    # Fetch current book details (title, date, and is_publish_only) from the database
+    # Fetch current book details (title, date, is_publish_only, syllabus_path) from the database
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
         st.error("❌ Book not found in database.")
         return
     
-    # Extract current title, date, and is_publish_only from the DataFrame
+    # Extract current title, date, is_publish_only, and syllabus_path from the DataFrame
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Default to False if not present
+    current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)  # Get syllabus path, None if not present
 
     # Main container
     with st.container():
         # Header with Book ID
         st.markdown(f"### {book_id} - {current_title}", unsafe_allow_html=True)
 
+        # Book Details Section
         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="info-box">', unsafe_allow_html=True)
@@ -672,8 +692,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
             )
             st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
         # ISBN Details Section
+        st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown('<div class="info-box">', unsafe_allow_html=True)
             apply_isbn = st.checkbox(
@@ -712,77 +732,137 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 isbn_receive_date = None
             st.markdown('</div>', unsafe_allow_html=True)
 
+        # Book Syllabus Section
+        st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown('<div class="info-box">', unsafe_allow_html=True)
+            # Display current syllabus if it exists
+            if current_syllabus_path:
+                st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
+                # Optionally provide a download link (if file exists)
+                if os.path.exists(current_syllabus_path):
+                    with open(current_syllabus_path, "rb") as f:
+                        st.download_button(
+                            label=":material/download: Download",
+                            data=f,
+                            file_name=os.path.basename(current_syllabus_path),
+                            key=f"download_syllabus_{book_id}"
+                        )
+                else:
+                    st.warning("Current syllabus file not found on server.")
+            
+            # Syllabus uploader
+            syllabus_file = None
+            if not new_is_publish_only:
+                syllabus_file = st.file_uploader(
+                    "Upload New Syllabus",
+                    type=["pdf", "docx", "jpg", "jpeg", "png"],
+                    key=f"syllabus_upload_{book_id}",
+                    help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image)."
+                )
+            else:
+                st.info("Syllabus upload is disabled for Publish Only books.")
+            st.markdown('</div>', unsafe_allow_html=True)
+
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
             with st.spinner("Saving changes..."):
-                time.sleep(2) 
+                # Handle syllabus file upload
+                new_syllabus_path = current_syllabus_path  # Keep existing path by default
+                if syllabus_file and not new_is_publish_only:
+                    # Generate a unique filename
+                    file_extension = os.path.splitext(syllabus_file.name)[1]
+                    unique_filename = f"syllabus_{new_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
+                    new_syllabus_path = os.path.join(UPLOAD_DIR, unique_filename)
+                    
+                    # Save the new file
+                    with open(new_syllabus_path, "wb") as f:
+                        f.write(syllabus_file.getbuffer())
+                    
+                    # Optionally delete the old syllabus file (if it exists and is different)
+                    if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
+                        try:
+                            os.remove(current_syllabus_path)
+                        except OSError:
+                            st.warning(f"Could not delete old syllabus file: {current_syllabus_path}")
+
                 with conn.session as s:
-                    if apply_isbn and receive_isbn and new_isbn:
-                        s.execute(
-                            text("""
-                                UPDATE books 
-                                SET apply_isbn = :apply_isbn, 
-                                    isbn = :isbn, 
-                                    isbn_receive_date = :isbn_receive_date, 
-                                    title = :title, 
-                                    date = :date,
-                                    is_publish_only = :is_publish_only
-                                WHERE book_id = :book_id
-                            """),
-                            {
-                                "apply_isbn": 1, 
-                                "isbn": new_isbn, 
-                                "isbn_receive_date": isbn_receive_date, 
-                                "title": new_title, 
-                                "date": new_date,
-                                "is_publish_only": 1 if new_is_publish_only else 0,
-                                "book_id": book_id
-                            }
-                        )
-                    elif apply_isbn and not receive_isbn:
-                        s.execute(
-                            text("""
-                                UPDATE books 
-                                SET apply_isbn = :apply_isbn, 
-                                    isbn = NULL, 
-                                    isbn_receive_date = NULL, 
-                                    title = :title, 
-                                    date = :date,
-                                    is_publish_only = :is_publish_only
-                                WHERE book_id = :book_id
-                            """),
-                            {
-                                "apply_isbn": 1, 
-                                "title": new_title, 
-                                "date": new_date,
-                                "is_publish_only": 1 if new_is_publish_only else 0,
-                                "book_id": book_id
-                            }
-                        )
-                    else:
-                        s.execute(
-                            text("""
-                                UPDATE books 
-                                SET apply_isbn = :apply_isbn, 
-                                    isbn = NULL, 
-                                    isbn_receive_date = NULL, 
-                                    title = :title, 
-                                    date = :date,
-                                    is_publish_only = :is_publish_only
-                                WHERE book_id = :book_id
-                            """),
-                            {
-                                "apply_isbn": 0, 
-                                "title": new_title, 
-                                "date": new_date,
-                                "is_publish_only": 1 if new_is_publish_only else 0,
-                                "book_id": book_id
-                            }
-                        )
-                    s.commit()
-                st.success("Book Details Updated Successfully!", icon="✔️")
-                time.sleep(1)
-                st.rerun()
+                    try:
+                        if apply_isbn and receive_isbn and new_isbn:
+                            s.execute(
+                                text("""
+                                    UPDATE books 
+                                    SET apply_isbn = :apply_isbn, 
+                                        isbn = :isbn, 
+                                        isbn_receive_date = :isbn_receive_date, 
+                                        title = :title, 
+                                        date = :date,
+                                        is_publish_only = :is_publish_only,
+                                        syllabus_path = :syllabus_path
+                                    WHERE book_id = :book_id
+                                """),
+                                {
+                                    "apply_isbn": 1, 
+                                    "isbn": new_isbn, 
+                                    "isbn_receive_date": isbn_receive_date, 
+                                    "title": new_title, 
+                                    "date": new_date,
+                                    "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "syllabus_path": new_syllabus_path,
+                                    "book_id": book_id
+                                }
+                            )
+                        elif apply_isbn and not receive_isbn:
+                            s.execute(
+                                text("""
+                                    UPDATE books 
+                                    SET apply_isbn = :apply_isbn, 
+                                        isbn = NULL, 
+                                        isbn_receive_date = NULL, 
+                                        title = :title, 
+                                        date = :date,
+                                        is_publish_only = :is_publish_only,
+                                        syllabus_path = :syllabus_path
+                                    WHERE book_id = :book_id
+                                """),
+                                {
+                                    "apply_isbn": 1, 
+                                    "title": new_title, 
+                                    "date": new_date,
+                                    "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "syllabus_path": new_syllabus_path,
+                                    "book_id": book_id
+                                }
+                            )
+                        else:
+                            s.execute(
+                                text("""
+                                    UPDATE books 
+                                    SET apply_isbn = :apply_isbn, 
+                                        isbn = NULL, 
+                                        isbn_receive_date = NULL, 
+                                        title = :title, 
+                                        date = :date,
+                                        is_publish_only = :is_publish_only,
+                                        syllabus_path = :syllabus_path
+                                    WHERE book_id = :book_id
+                                """),
+                                {
+                                    "apply_isbn": 0, 
+                                    "title": new_title, 
+                                    "date": new_date,
+                                    "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "syllabus_path": new_syllabus_path,
+                                    "book_id": book_id
+                                }
+                            )
+                        s.commit()
+                        st.success("Book Details Updated Successfully!", icon="✔️")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as db_error:
+                        s.rollback()
+                        st.error(f"Database error: {db_error}")
 
 
 ###################################################################################################################################
@@ -1194,9 +1274,140 @@ def delete_book_author(id, conn):
     with conn.session as session:
         session.execute(text(query), {"id": int(id)})
         session.commit()
+                
+def get_unique_agents_and_consultants(conn):
+    with conn.session as s:
+        try:
+            agent_query = text("SELECT DISTINCT corresponding_agent FROM book_authors WHERE corresponding_agent IS NOT NULL AND corresponding_agent != '' ORDER BY corresponding_agent")
+            agents = [row[0] for row in s.execute(agent_query).fetchall()]
+            
+            consultant_query = text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
+            consultants = [row[0] for row in s.execute(consultant_query).fetchall()]
+            
+            return agents, consultants
+        except Exception as e:
+            st.error(f"Error fetching agents/consultants: {e}")
+            return [], []
 
+def validate_email(email):
+    """Validate email format."""
+    email_pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    return bool(re.match(email_pattern, email))
+
+def validate_phone(phone):
+    """Validate phone number format (basic validation)."""
+    phone_pattern = r"^\+?\d{10,15}$"
+    return bool(re.match(phone_pattern, phone))
+
+def is_author_complete(author):
+    """Check if an author entry is complete (all required fields are filled)."""
+    return (
+        author["name"] and
+        author["email"] and validate_email(author["email"]) and
+        author["phone"] and validate_phone(author["phone"]) and
+        author["author_position"] and
+        author["corresponding_agent"] and
+        author["publishing_consultant"]
+    )
+
+# New helper functions for chapters and editors
+def fetch_chapters(book_id, conn):
+    with conn.session as s:
+        query = text("""
+            SELECT chapter_id, book_id, chapter_title, chapter_number
+            FROM chapters
+            WHERE book_id = :book_id
+            ORDER BY chapter_number
+        """)
+        result = s.execute(query, {"book_id": book_id}).fetchall()
+        return pd.DataFrame(result, columns=['chapter_id', 'book_id', 'chapter_title', 'chapter_number'])
+
+def fetch_chapter_editors(chapter_id, conn):
+    with conn.session as s:
+        query = text("""
+            SELECT ce.author_id, ce.author_position, a.name, a.email, a.phone,
+                   ce.corresponding_agent, ce.publishing_consultant
+            FROM chapter_editors ce
+            JOIN authors a ON ce.author_id = a.author_id
+            WHERE ce.chapter_id = :chapter_id
+            ORDER BY ce.author_position
+        """)
+        result = s.execute(query, {"chapter_id": chapter_id}).fetchall()
+        return pd.DataFrame(result, columns=[
+            'author_id', 'author_position', 'name', 'email', 'phone',
+            'corresponding_agent', 'publishing_consultant'
+        ])
+
+def initialize_new_editors(slots):
+    return [
+        {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None}
+        for _ in range(slots)
+    ]
+
+def is_editor_complete(editor):
+    return (
+        editor["name"] and
+        editor["email"] and validate_email(editor["email"]) and
+        editor["phone"] and validate_phone(editor["phone"]) and
+        editor["author_position"]
+    )
+
+def validate_editor(editor, existing_positions, existing_editor_ids, all_new_editors, index):
+    if not editor["name"]:
+        return False, "Editor name is required."
+    if not editor["email"]:
+        return False, "Email is required."
+    if not validate_email(editor["email"]):
+        return False, "Invalid email format."
+    if not editor["phone"]:
+        return False, "Phone number is required."
+    if not validate_phone(editor["phone"]):
+        return False, "Invalid phone number format (e.g., +919876543210)."
+    if not editor["author_position"]:
+        return False, "Editor position is required."
+    
+    if editor["author_position"] in existing_positions:
+        return False, f"Position '{editor['author_position']}' is already taken."
+    new_positions = [e["author_position"] for i, e in enumerate(all_new_editors) if i != index and e["author_position"]]
+    if editor["author_position"] in new_positions:
+        return False, f"Position '{editor['author_position']}' is already taken by another new editor."
+    
+    if editor["author_id"] and editor["author_id"] in existing_editor_ids:
+        return False, f"Editor '{editor['name']}' is already linked to this chapter."
+    new_editor_ids = [e["author_id"] for i, e in enumerate(all_new_editors) if i != index and e["author_id"]]
+    if editor["author_id"] and editor["author_id"] in new_editor_ids:
+        return False, f"Editor '{editor['name']}' is already added as a new editor."
+    
+    return True, ""
+
+def get_all_authors(conn):
+    with conn.session as s:
+        try:
+            query = text("SELECT author_id, name, email, phone FROM authors ORDER BY name")
+            authors = s.execute(query).fetchall()
+            return authors
+        except Exception as e:
+            st.error(f"Error fetching authors: {e}")
+            return []
+        
+        # Fetch unique corresponding agents and publishing consultants
+def get_unique_agents_and_consultants(conn):
+    with conn.session as s:
+        try:
+            agent_query = text("SELECT DISTINCT corresponding_agent FROM book_authors WHERE corresponding_agent IS NOT NULL AND corresponding_agent != '' ORDER BY corresponding_agent")
+            agents = [row[0] for row in s.execute(agent_query).fetchall()]
+            
+            consultant_query = text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
+            consultants = [row[0] for row in s.execute(consultant_query).fetchall()]
+            
+            return agents, consultants
+        except Exception as e:
+            st.error(f"Error fetching agents/consultants: {e}")
+            return [], []
 # Constants
 MAX_AUTHORS = 4
+MAX_CHAPTERS = 30
+MAX_EDITORS_PER_CHAPTER = 2
 
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large')
@@ -1478,329 +1689,800 @@ def edit_author_dialog(book_id, conn):
                         with col_cancel:
                             if st.form_submit_button("Cancel", use_container_width=True):
                                 st.session_state[confirmation_key] = False  # Reset confirmation state
+
     
+    publisher = book_details['publisher'].iloc[0] if 'publisher' in book_details else None
 
-    book_authors = fetch_book_authors(book_id, conn)
-    existing_author_count = len(book_authors)
-    toggle_editable = existing_author_count <= 1  # Editable only if 0 or 1 author
+    if publisher == "AG Volumes":
+        st.markdown("### Manage Chapters and Editors")
+        chapters = fetch_chapters(book_id, conn)
+        existing_chapter_count = len(chapters)
+        available_chapter_slots = MAX_CHAPTERS - existing_chapter_count
 
-    if existing_author_count == 1:
-        toggle_col1, toggle_col2 = st.columns([3, 4])
-        with toggle_col1:
-            new_is_single_author = st.toggle(
-                "Single Author?",
-                value=is_single_author,
-                key=f"single_author_toggle_{book_id}",
-                help="Toggle between single and multiple authors",
-                disabled=not toggle_editable
-            )
-
-        if toggle_editable and new_is_single_author != is_single_author:
-            try:
-                with st.spinner("Updating author mode..."):
-                    with conn.session as s:
-                        time.sleep(2)
-                        s.execute(
-                            text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
-                            {"is_single_author": int(new_is_single_author), "book_id": book_id}
-                        )
-                        s.commit()
-                    st.success(f"✔️ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
-                    st.cache_data.clear()
-                    is_single_author = new_is_single_author
-            except Exception as e:
-                st.error(f"❌ Error updating author mode: {e}")
-
-    available_slots = MAX_AUTHORS - existing_author_count
-    # st.write(f"Debug: Available slots = {available_slots}")  # Debug statement
-
-    if is_single_author and existing_author_count >= 1:
-        st.warning("⚠️ This book is marked as 'Single Author'. No additional authors can be added.")
-        if st.button("Close"):
-            st.rerun()
-        return
-
-    if existing_author_count >= MAX_AUTHORS:
-        st.warning("⚠️ This book already has the maximum number of authors (4). No more authors can be added.")
-        if st.button("Close"):
-            st.rerun()
-        return
-
-    if existing_author_count == 0:
-        st.warning(f"⚠️ No authors found for Book ID: {book_id}")
-
-    # Helper functions (unchanged for brevity)
-    def ensure_author_fields(author):
-        default_author = {
-            "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
-            "corresponding_agent": "", "publishing_consultant": ""
-        }
-        for key, default_value in default_author.items():
-            if key not in author:
-                author[key] = default_value
-        return author
-
-    def initialize_new_authors(slots):
-        return [
-            {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
-            "corresponding_agent": "", "publishing_consultant": ""}
-            for _ in range(slots)
-        ]
-
-    # Initialize session state
-    if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
-        st.session_state.new_authors = initialize_new_authors(available_slots)
-    else:
-        st.session_state.new_authors = [ensure_author_fields(author) for author in st.session_state.new_authors]
-
-    # Check if new_authors exists and has the correct length; reinitialize if not
-    if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
-        st.session_state.new_authors = initialize_new_authors(available_slots)
-    else:
-        st.session_state.new_authors = [ensure_author_fields(author) for author in st.session_state.new_authors]
-
-    def get_all_authors(conn):
-        """Fetch all authors from the database."""
-        with conn.session as s:
-            try:
-                query = text("SELECT author_id, name, email, phone FROM authors ORDER BY name")
-                authors = s.execute(query).fetchall()
-                return authors
-            except Exception as e:
-                st.error(f"❌ Error fetching authors: {e}")
-                return []
+        if existing_chapter_count >= MAX_CHAPTERS:
+            st.warning("⚠️ This book already has the maximum number of chapters (30). No more chapters can be added.")
+        else:
+            # Initialize or refresh session state for editing existing chapters
+            if "edit_chapters" not in st.session_state:
+                st.session_state.edit_chapters = {}
             
-    def get_unique_agents_and_consultants(conn):
-        with conn.session as s:
-            try:
-                agent_query = text("SELECT DISTINCT corresponding_agent FROM book_authors WHERE corresponding_agent IS NOT NULL AND corresponding_agent != '' ORDER BY corresponding_agent")
-                agents = [row[0] for row in s.execute(agent_query).fetchall()]
-                
-                consultant_query = text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
-                consultants = [row[0] for row in s.execute(consultant_query).fetchall()]
-                
-                return agents, consultants
-            except Exception as e:
-                st.error(f"Error fetching agents/consultants: {e}")
-                return [], []
-
-    def validate_email(email):
-        """Validate email format."""
-        email_pattern = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-        return bool(re.match(email_pattern, email))
-
-    def validate_phone(phone):
-        """Validate phone number format (basic validation)."""
-        phone_pattern = r"^\+?\d{10,15}$"
-        return bool(re.match(phone_pattern, phone))
-
-    def is_author_complete(author):
-        """Check if an author entry is complete (all required fields are filled)."""
-        return (
-            author["name"] and
-            author["email"] and validate_email(author["email"]) and
-            author["phone"] and validate_phone(author["phone"]) and
-            author["author_position"] and
-            author["corresponding_agent"] and
-            author["publishing_consultant"]
-        )
-
-    def validate_author(author, existing_positions, existing_author_ids, all_new_authors, index, is_single_author):
-        """Validate an author's details, including single author constraint."""
-        if not author["name"]:
-            return False, "Author name is required."
-        if not author["email"]:
-            return False, "Email is required."
-        if not validate_email(author["email"]):
-            return False, "Invalid email format."
-        if not author["phone"]:
-            return False, "Phone number is required."
-        if not validate_phone(author["phone"]):
-            return False, "Invalid phone number format (e.g., +919876543210 or 9876543210)."
-        if not author["author_position"]:
-            return False, "Author position is required."
-        if not author["corresponding_agent"]:
-            return False, "Corresponding agent is required."
-        if not author["publishing_consultant"]:
-            return False, "Publishing consultant is required."
-        
-        # Check for duplicate positions
-        if author["author_position"] in existing_positions:
-            return False, f"Position '{author['author_position']}' is already taken by an existing author."
-        new_positions = [a["author_position"] for i, a in enumerate(all_new_authors) if i != index and a["author_position"]]
-        if author["author_position"] in new_positions:
-            return False, f"Position '{author['author_position']}' is already taken by another new author."
-        
-        # Check for duplicate authors
-        if author["author_id"] and author["author_id"] in existing_author_ids:
-            return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already linked to this book."
-        new_author_ids = [a["author_id"] for i, a in enumerate(all_new_authors) if i != index and a["author_id"]]
-        if author["author_id"] and author["author_id"] in new_author_ids:
-            return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already added as a new author."
-
-        # If is_single_author is True, ensure only one author is added in total
-        if is_single_author and existing_author_count + len([a for a in all_new_authors if is_author_complete(a)]) > 1:
-            return False, "Only one author is allowed because this book is marked as 'Single Author'."
-
-        return True, ""
-
-    # Author selection and form
-    st.markdown(f"### Add Up to {available_slots} New Authors")
-    all_authors = get_all_authors(conn)
-    author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
-    unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
-    agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
-    consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
-
-    existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
-    existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
-
-    # Render expanders
-    for i in range(available_slots):
-        with st.expander(f"New Author {i+1}", expanded=False):
-            with st.container(border=False):
-                st.markdown(f"#### New Author {i+1}")
-                disabled = is_single_author and existing_author_count >= 1
-                if disabled and i == 0:
-                    st.warning("⚠️ This section is disabled because the book is marked as 'Single Author' and already has one author.")
-
-                selected_author = st.selectbox(
-                    f"Select Author {i+1}",
-                    author_options,
-                    key=f"new_author_select_{i}",
-                    help="Select an existing author or 'Add New Author' to enter new details.",
-                    disabled=disabled
-                )
-
-                if selected_author != "Add New Author" and selected_author and not disabled:
-                    selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
-                    selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
-                    if selected_author_details:
-                        st.session_state.new_authors[i].update({
-                            "name": selected_author_details.name,
-                            "email": selected_author_details.email,
-                            "phone": selected_author_details.phone,
-                            "author_id": selected_author_details.author_id
+            # Sync edit_chapters with current chapters
+            for _, chapter in chapters.iterrows():
+                chapter_id = chapter['chapter_id']
+                if chapter_id not in st.session_state.edit_chapters:
+                    editors = [
+                        {
+                            "author_id": editor['author_id'],
+                            "author_position": editor['author_position'],
+                            "name": editor['name'],
+                            "email": editor['email'],
+                            "phone": editor['phone'],
+                            "corresponding_agent": editor['corresponding_agent'] or "",
+                            "publishing_consultant": editor['publishing_consultant'] or ""
+                        }
+                        for _, editor in fetch_chapter_editors(chapter['chapter_id'], conn).iterrows()
+                    ]
+                    # Ensure two editor slots are available, filling with empty editors if needed
+                    while len(editors) < MAX_EDITORS_PER_CHAPTER:
+                        editors.append({
+                            "author_id": None,
+                            "author_position": None,
+                            "name": "",
+                            "email": "",
+                            "phone": "",
+                            "corresponding_agent": "",
+                            "publishing_consultant": ""
                         })
-                elif selected_author == "Add New Author" and not disabled:
-                    st.session_state.new_authors[i]["author_id"] = None
+                    st.session_state.edit_chapters[chapter_id] = {
+                        "chapter_title": chapter['chapter_title'],
+                        "chapter_number": str(chapter['chapter_number']),
+                        "editors": editors
+                    }
 
-                col1, col2 = st.columns(2)
-                st.session_state.new_authors[i]["name"] = col1.text_input(
-                    f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
-                    placeholder="Enter author name..", help="Enter the full name of the author.", disabled=disabled
-                )
-                current_new_positions = [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]]
-                all_taken_positions = existing_positions + current_new_positions
-                available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in all_taken_positions]
-                if available_positions:
-                    st.session_state.new_authors[i]["author_position"] = col2.selectbox(
-                        f"Position {i+1}",
-                        available_positions,
-                        key=f"new_author_position_{i}",
-                        help="Select a unique position for this author.",
-                        disabled=disabled
-                    )
-                elif not disabled:
-                    st.error("❌ No available positions left.")
+            # Display existing chapters in expanders
+            if existing_chapter_count > 0:
+                st.markdown("#### Existing Chapters")
+                for _, chapter in chapters.iterrows():
+                    chapter_id = chapter['chapter_id']
+                    edit_data = st.session_state.edit_chapters[chapter_id]
+                    with st.expander(f"Chapter {edit_data['chapter_number']}: {edit_data['chapter_title'] or 'Untitled'}", expanded=False):
+                        edit_data["chapter_title"] = st.text_input(
+                            "Chapter Title",
+                            value=edit_data["chapter_title"],
+                            key=f"edit_chapter_title_{chapter_id}",
+                            placeholder="Enter chapter title..."
+                        )
 
-                col3, col4 = st.columns(2)
-                st.session_state.new_authors[i]["phone"] = col3.text_input(
-                    f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
-                    placeholder="Enter phone..", help="Enter a valid phone number (e.g., +919876543210 or 9876543210).", disabled=disabled
-                )
-                st.session_state.new_authors[i]["email"] = col4.text_input(
-                    f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
-                    placeholder="Enter email..", help="Enter a valid email address (e.g., author@example.com).", disabled=disabled
-                )
+                        editor_tabs = st.tabs(["Editor 1", "Editor 2"])
+                        for j, editor_tab in enumerate(editor_tabs):
+                            with editor_tab:
+                                editor = edit_data["editors"][j]
+                                all_authors = get_all_authors(conn)
+                                author_options = ["Select Existing Editor"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+                                selected_editor = st.selectbox(
+                                    "Select Editor",
+                                    author_options,
+                                    index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
+                                    key=f"edit_chapter_{chapter_id}_editor_select_{j}"
+                                )
 
-                col5, col6 = st.columns(2)
-                selected_agent = col5.selectbox(
-                    f"Corresponding Agent {i+1}",
-                    agent_options,
-                    index=agent_options.index(st.session_state.new_authors[i]["corresponding_agent"]) if st.session_state.new_authors[i]["corresponding_agent"] in unique_agents else 0,
-                    key=f"new_agent_select_{i}",
-                    help="Select an existing agent or 'Add New...' to enter a new one.",
-                    disabled=disabled
-                )
-                if selected_agent == "Add New..." and not disabled:
-                    st.session_state.new_authors[i]["corresponding_agent"] = col5.text_input(
-                        f"New Agent Name {i+1}",
-                        value="",
-                        key=f"new_agent_input_{i}",
-                        placeholder="Enter new agent name...",
-                        help="Enter the name of the new corresponding agent."
-                    )
-                elif selected_agent != "Select Agent" and not disabled:
-                    st.session_state.new_authors[i]["corresponding_agent"] = selected_agent
+                                if selected_editor != "Select Existing Editor" and selected_editor:
+                                    selected_editor_id = int(selected_editor.split('(ID: ')[1][:-1])
+                                    selected_editor_details = next((a for a in all_authors if a.author_id == selected_editor_id), None)
+                                    if selected_editor_details:
+                                        editor.update({
+                                            "name": selected_editor_details.name,
+                                            "email": selected_editor_details.email,
+                                            "phone": selected_editor_details.phone,
+                                            "author_id": selected_editor_id
+                                        })
+                                elif selected_editor == "Select Existing Editor":
+                                    editor["author_id"] = None
 
-                selected_consultant = col6.selectbox(
-                    f"Publishing Consultant {i+1}",
-                    consultant_options,
-                    index=consultant_options.index(st.session_state.new_authors[i]["publishing_consultant"]) if st.session_state.new_authors[i]["publishing_consultant"] in unique_consultants else 0,
-                    key=f"new_consultant_select_{i}",
-                    help="Select an existing consultant or 'Add New...' to enter a new one.",
-                    disabled=disabled
-                )
-                if selected_consultant == "Add New..." and not disabled:
-                    st.session_state.new_authors[i]["publishing_consultant"] = col6.text_input(
-                        f"New Consultant Name {i+1}",
-                        value="",
-                        key=f"new_consultant_input_{i}",
-                        placeholder="Enter new consultant name...",
-                        help="Enter the name of the new publishing consultant."
-                    )
-                elif selected_consultant != "Select Consultant" and not disabled:
-                    st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
+                                col1, col2 = st.columns(2)
+                                editor["name"] = col1.text_input(
+                                    "Name",
+                                    value=editor["name"],
+                                    key=f"edit_chapter_{chapter_id}_editor_name_{j}"
+                                )
+                                available_positions = ["1st", "2nd"]
+                                current_positions = [e["author_position"] for k, e in enumerate(edit_data["editors"]) if k != j and e["author_position"]]
+                                available_positions = [p for p in available_positions if p not in current_positions]
+                                editor["author_position"] = col2.selectbox(
+                                    "Position",
+                                    available_positions,
+                                    index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                                    key=f"edit_chapter_{chapter_id}_editor_position_{j}"
+                                )
 
-    # Button section
-    col1, col2 = st.columns([7, 1])
-    with col1:
-        if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
-            errors = []
-            active_authors = [author for author in st.session_state.new_authors if is_author_complete(author)]
-            if not active_authors:
-                st.error("❌ Please fill in the details for at least one author to proceed.")
-            else:
-                for i, author in enumerate(active_authors):
-                    is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, st.session_state.new_authors, i, is_single_author)
-                    if not is_valid:
-                        errors.append(f"Author {i+1}: {error_message}")
-                if errors:
-                    for error in errors:
-                        st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
-                else:
-                    try:
-                        for author in active_authors:
-                            if is_author_complete(author):
-                                author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
-                                if book_id and author_id_to_link:
+                                col3, col4 = st.columns(2)
+                                editor["email"] = col3.text_input(
+                                    "Email",
+                                    value=editor["email"],
+                                    key=f"edit_chapter_{chapter_id}_editor_email_{j}"
+                                )
+                                editor["phone"] = col4.text_input(
+                                    "Phone",
+                                    value=editor["phone"],
+                                    key=f"edit_chapter_{chapter_id}_editor_phone_{j}"
+                                )
+
+                                col5, col6 = st.columns(2)
+                                unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+                                agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
+                                agent_index = agent_options.index(editor["corresponding_agent"]) if editor["corresponding_agent"] in unique_agents else 0
+                                selected_agent = col5.selectbox(
+                                    "Corresponding Agent",
+                                    agent_options,
+                                    index=agent_index,
+                                    key=f"edit_chapter_{chapter_id}_editor_agent_{j}"
+                                )
+                                if selected_agent == "Add New...":
+                                    editor["corresponding_agent"] = col5.text_input(
+                                        "New Agent Name",
+                                        value=editor["corresponding_agent"],
+                                        key=f"edit_chapter_{chapter_id}_editor_agent_input_{j}"
+                                    )
+                                elif selected_agent != "Select Agent":
+                                    editor["corresponding_agent"] = selected_agent
+                                else:
+                                    editor["corresponding_agent"] = ""
+
+                                consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
+                                consultant_index = consultant_options.index(editor["publishing_consultant"]) if editor["publishing_consultant"] in unique_consultants else 0
+                                selected_consultant = col6.selectbox(
+                                    "Publishing Consultant",
+                                    consultant_options,
+                                    index=consultant_index,
+                                    key=f"edit_chapter_{chapter_id}_editor_consultant_{j}"
+                                )
+                                if selected_consultant == "Add New...":
+                                    editor["publishing_consultant"] = col6.text_input(
+                                        "New Consultant Name",
+                                        value=editor["publishing_consultant"],
+                                        key=f"edit_chapter_{chapter_id}_editor_consultant_input_{j}"
+                                    )
+                                elif selected_consultant != "Select Consultant":
+                                    editor["publishing_consultant"] = selected_consultant
+                                else:
+                                    editor["publishing_consultant"] = ""
+
+                        col_save, col_delete = st.columns([3, 1])
+                        with col_save:
+                            if st.button("Save Chapter", key=f"save_chapter_{chapter_id}"):
+                                errors = []
+                                if not edit_data["chapter_title"]:
+                                    errors.append("Chapter title is required.")
+
+                                active_editors = [e for e in edit_data["editors"] if is_editor_complete(e)]
+                                if not active_editors:
+                                    errors.append("At least one editor is required.")
+                                else:
+                                    existing_editor_ids = []
+                                    for j, editor in enumerate(active_editors):
+                                        is_valid, error = validate_editor(editor, [], existing_editor_ids, edit_data["editors"], j)
+                                        if not is_valid:
+                                            errors.append(f"Editor {j+1}: {error}")
+                                        else:
+                                            existing_editor_ids.append(editor["author_id"])
+
+                                if errors:
+                                    for error in errors:
+                                        st.error(f"❌ {error}")
+                                else:
+                                    try:
+                                        with conn.session as s:
+                                            s.begin()
+                                            # Update chapter (keep chapter_number unchanged)
+                                            s.execute(
+                                                text("""
+                                                    UPDATE chapters
+                                                    SET chapter_title = :chapter_title
+                                                    WHERE chapter_id = :chapter_id
+                                                """),
+                                                {
+                                                    "chapter_id": chapter_id,
+                                                    "chapter_title": edit_data["chapter_title"]
+                                                }
+                                            )
+                                            # Delete existing editors
+                                            s.execute(
+                                                text("DELETE FROM chapter_editors WHERE chapter_id = :chapter_id"),
+                                                {"chapter_id": chapter_id}
+                                            )
+                                            # Insert updated editors
+                                            for editor in active_editors:
+                                                editor_id = editor["author_id"]
+                                                if not editor_id:
+                                                    s.execute(
+                                                        text("""
+                                                            INSERT INTO authors (name, email, phone)
+                                                            VALUES (:name, :email, :phone)
+                                                        """),
+                                                        {
+                                                            "name": editor["name"],
+                                                            "email": editor["email"],
+                                                            "phone": editor["phone"]
+                                                        }
+                                                    )
+                                                    editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                                s.execute(
+                                                    text("""
+                                                        INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                        VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                                    """),
+                                                    {
+                                                        "chapter_id": chapter_id,
+                                                        "author_id": editor_id,
+                                                        "author_position": editor["author_position"],
+                                                        "corresponding_agent": editor["corresponding_agent"],
+                                                        "publishing_consultant": editor["publishing_consultant"]
+                                                    }
+                                                )
+                                            s.commit()
+                                        st.success("✔️ Chapter updated successfully!")
+                                        st.cache_data.clear()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Error updating chapter: {e}")
+                                        with conn.session as s:
+                                            s.rollback()
+
+                        with col_delete:
+                            if st.button("Delete Chapter", key=f"delete_chapter_{chapter_id}"):
+                                try:
                                     with conn.session as s:
+                                        s.begin()
                                         s.execute(
-                                            text("""
-                                                INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                                VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                            """),
-                                            params={
-                                                "book_id": book_id,
-                                                "author_id": author_id_to_link,
-                                                "author_position": author["author_position"],
-                                                "corresponding_agent": author["corresponding_agent"],
-                                                "publishing_consultant": author["publishing_consultant"]
-                                            }
+                                            text("DELETE FROM chapter_editors WHERE chapter_id = :chapter_id"),
+                                            {"chapter_id": chapter_id}
+                                        )
+                                        s.execute(
+                                            text("DELETE FROM chapters WHERE chapter_id = :chapter_id"),
+                                            {"chapter_id": chapter_id}
                                         )
                                         s.commit()
-                        st.cache_data.clear()
-                        st.success("✔️ New authors added successfully!")
-                        del st.session_state.new_authors
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error adding authors: {e}")
+                                    del st.session_state.edit_chapters[chapter_id]
+                                    st.success("✔️ Chapter deleted successfully!")
+                                    st.cache_data.clear()
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Error deleting chapter: {e}")
+                                    with conn.session as s:
+                                        s.rollback()
 
-    with col2:
-        if st.button("Cancel", key="cancel_add_authors", type="secondary"):
-            del st.session_state.new_authors
-            st.rerun()
+            # New chapter form
+            st.markdown("#### Add New Chapter")
+            # Calculate smallest available chapter number
+            existing_numbers = sorted([int(c["chapter_number"]) for _, c in chapters.iterrows()])
+            next_number = 1
+            for num in existing_numbers:
+                if num != next_number:
+                    break
+                next_number += 1
+            if "new_chapters" not in st.session_state:
+                st.session_state.new_chapters = [
+                    {"chapter_title": "", "chapter_number": str(next_number), "editors": initialize_new_editors(MAX_EDITORS_PER_CHAPTER)}
+                ]
+
+            def ensure_editor_fields(editor):
+                default_editor = {
+                    "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+                    "corresponding_agent": "", "publishing_consultant": ""
+                }
+                for key, default_value in default_editor.items():
+                    if key not in editor:
+                        editor[key] = default_value
+                return editor
+
+            st.session_state.new_chapters = [
+                {
+                    "chapter_title": c["chapter_title"],
+                    "chapter_number": c["chapter_number"],
+                    "editors": [ensure_editor_fields(e) for e in c["editors"]]
+                }
+                for c in st.session_state.new_chapters
+            ]
+
+            all_authors = get_all_authors(conn)
+            author_options = ["Add New Editor"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+            unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+            agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
+            consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
+
+            chapter = st.session_state.new_chapters[0]
+            with st.expander(f"Chapter {chapter['chapter_number']}: New Chapter", expanded=False):
+                chapter["chapter_title"] = st.text_input(
+                    "Chapter Title",
+                    chapter["chapter_title"],
+                    key="new_chapter_title",
+                    placeholder="Enter chapter title..."
+                )
+
+                editor_tabs = st.tabs(["Editor 1", "Editor 2"])
+                for j, editor_tab in enumerate(editor_tabs):
+                    with editor_tab:
+                        editor = chapter["editors"][j]
+                        selected_editor = st.selectbox(
+                            "Select Editor",
+                            author_options,
+                            index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
+                            key=f"new_chapter_editor_select_{j}"
+                        )
+
+                        if selected_editor != "Add New Editor" and selected_editor:
+                            selected_editor_id = int(selected_editor.split('(ID: ')[1][:-1])
+                            selected_editor_details = next((a for a in all_authors if a.author_id == selected_editor_id), None)
+                            if selected_editor_details:
+                                editor.update({
+                                    "name": selected_editor_details.name,
+                                    "email": selected_editor_details.email,
+                                    "phone": selected_editor_details.phone,
+                                    "author_id": selected_editor_id,
+                                    "corresponding_agent": "",
+                                    "publishing_consultant": ""
+                                })
+                        elif selected_editor == "Add New Editor":
+                            editor["author_id"] = None
+
+                        col1, col2 = st.columns(2)
+                        editor["name"] = col1.text_input(
+                            "Name",
+                            editor["name"],
+                            key=f"new_chapter_editor_name_{j}"
+                        )
+                        available_positions = ["1st", "2nd"]
+                        current_positions = [e["author_position"] for k, e in enumerate(chapter["editors"]) if k != j and e["author_position"]]
+                        available_positions = [p for p in available_positions if p not in current_positions]
+                        editor["author_position"] = col2.selectbox(
+                            "Position",
+                            available_positions,
+                            index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                            key=f"new_chapter_editor_position_{j}"
+                        )
+
+                        col3, col4 = st.columns(2)
+                        editor["email"] = col3.text_input(
+                            "Email",
+                            editor["email"],
+                            key=f"new_chapter_editor_email_{j}"
+                        )
+                        editor["phone"] = col4.text_input(
+                            "Phone",
+                            editor["phone"],
+                            key=f"new_chapter_editor_phone_{j}"
+                        )
+
+                        col5, col6 = st.columns(2)
+                        agent_index = 0
+                        if editor["corresponding_agent"] and editor["corresponding_agent"] in unique_agents:
+                            try:
+                                agent_index = agent_options.index(editor["corresponding_agent"])
+                            except ValueError:
+                                agent_index = 0
+                        selected_agent = col5.selectbox(
+                            "Corresponding Agent",
+                            agent_options,
+                            index=agent_index,
+                            key=f"new_chapter_editor_agent_{j}"
+                        )
+                        if selected_agent == "Add New...":
+                            editor["corresponding_agent"] = col5.text_input(
+                                "New Agent Name",
+                                value=editor["corresponding_agent"],
+                                key=f"new_chapter_editor_agent_input_{j}"
+                            )
+                        elif selected_agent != "Select Agent":
+                            editor["corresponding_agent"] = selected_agent
+                        else:
+                            editor["corresponding_agent"] = ""
+
+                        consultant_index = 0
+                        if editor["publishing_consultant"] and editor["publishing_consultant"] in unique_consultants:
+                            try:
+                                consultant_index = consultant_options.index(editor["publishing_consultant"])
+                            except ValueError:
+                                consultant_index = 0
+                        selected_consultant = col6.selectbox(
+                            "Publishing Consultant",
+                            consultant_options,
+                            index=consultant_index,
+                            key=f"new_chapter_editor_consultant_{j}"
+                        )
+                        if selected_consultant == "Add New...":
+                            editor["publishing_consultant"] = col6.text_input(
+                            "New Consultant Name",
+                                value=editor["publishing_consultant"],
+                                key=f"new_chapter_editor_consultant_input_{j}"
+                            )
+                        elif selected_consultant != "Select Consultant":
+                            editor["publishing_consultant"] = selected_consultant
+                        else:
+                            editor["publishing_consultant"] = ""
+
+            # Save new chapter
+            col_save, col_cancel = st.columns([7, 1])
+            with col_save:
+                if st.button("Add Chapter and Editors", key="add_chapters", type = "primary"):
+                    errors = []
+                    chapter = st.session_state.new_chapters[0]
+                    existing_numbers = [int(c["chapter_number"]) for _, c in chapters.iterrows()]
+                    if int(chapter["chapter_number"]) in existing_numbers:
+                        errors.append(f"Chapter number {chapter['chapter_number']} is already used.")
+                    if not chapter["chapter_title"]:
+                        errors.append("Chapter: Title is required.")
+
+                    active_editors = [e for e in chapter["editors"] if is_editor_complete(e)]
+                    if not active_editors:
+                        errors.append("Chapter: At least one editor is required.")
+                    else:
+                        existing_editor_ids = []
+                        for j, editor in enumerate(active_editors):
+                            is_valid, error = validate_editor(editor, [], existing_editor_ids, chapter["editors"], j)
+                            if not is_valid:
+                                errors.append(f"Editor {j+1}: {error}")
+                            else:
+                                existing_editor_ids.append(editor["author_id"])
+
+                    if errors:
+                        for error in errors:
+                            st.error(f"❌ {error}")
+                    else:
+                        try:
+                            with conn.session as s:
+                                s.begin()
+                                s.execute(
+                                    text("""
+                                        INSERT INTO chapters (book_id, chapter_title, chapter_number)
+                                        VALUES (:book_id, :chapter_title, :chapter_number)
+                                    """),
+                                    {
+                                        "book_id": book_id,
+                                        "chapter_title": chapter["chapter_title"],
+                                        "chapter_number": int(chapter["chapter_number"])
+                                    }
+                                )
+                                chapter_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                if not chapter_id:
+                                    raise Exception("Failed to retrieve chapter_id.")
+
+                                for editor in active_editors:
+                                    editor_id = editor["author_id"]
+                                    if not editor_id:
+                                        s.execute(
+                                            text("""
+                                                INSERT INTO authors (name, email, phone)
+                                                VALUES (:name, :email, :phone)
+                                            """),
+                                            {
+                                                "name": editor["name"],
+                                                "email": editor["email"],
+                                                "phone": editor["phone"]
+                                            }
+                                        )
+                                        editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                        if not editor_id:
+                                            raise Exception("Failed to retrieve author_id.")
+
+                                    s.execute(
+                                        text("""
+                                            INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                            VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                        """),
+                                        {
+                                            "chapter_id": chapter_id,
+                                            "author_id": editor_id,
+                                            "author_position": editor["author_position"],
+                                            "corresponding_agent": editor["corresponding_agent"],
+                                            "publishing_consultant": editor["publishing_consultant"]
+                                        }
+                                    )
+                                s.commit()
+                            st.success("✔️ Chapter and editors added successfully!")
+                            st.cache_data.clear()
+                            # Calculate next smallest available number
+                            chapters = fetch_chapters(book_id, conn)
+                            existing_numbers = sorted([int(c["chapter_number"]) for _, c in chapters.iterrows()])
+                            next_number = 1
+                            for num in existing_numbers:
+                                if num != next_number:
+                                    break
+                                next_number += 1
+                            st.session_state.new_chapters = [
+                                {
+                                    "chapter_title": "",
+                                    "chapter_number": str(next_number),
+                                    "editors": initialize_new_editors(MAX_EDITORS_PER_CHAPTER)
+                                }
+                            ]
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error adding chapter/editors: {e}")
+                            with conn.session as s:
+                                s.rollback()
+
+            with col_cancel:
+                if st.button("Cancel", key="cancel_chapters"):
+                    del st.session_state.new_chapters
+                    st.rerun()
+
+    else:
+        book_authors = fetch_book_authors(book_id, conn)
+        existing_author_count = len(book_authors)
+        toggle_editable = existing_author_count <= 1  # Editable only if 0 or 1 author
+
+        if existing_author_count == 1:
+            toggle_col1, toggle_col2 = st.columns([3, 4])
+            with toggle_col1:
+                new_is_single_author = st.toggle(
+                    "Single Author?",
+                    value=is_single_author,
+                    key=f"single_author_toggle_{book_id}",
+                    help="Toggle between single and multiple authors",
+                    disabled=not toggle_editable
+                )
+
+            if toggle_editable and new_is_single_author != is_single_author:
+                try:
+                    with st.spinner("Updating author mode..."):
+                        with conn.session as s:
+                            time.sleep(2)
+                            s.execute(
+                                text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
+                                {"is_single_author": int(new_is_single_author), "book_id": book_id}
+                            )
+                            s.commit()
+                        st.success(f"✔️ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
+                        st.cache_data.clear()
+                        is_single_author = new_is_single_author
+                except Exception as e:
+                    st.error(f"❌ Error updating author mode: {e}")
+
+        available_slots = MAX_AUTHORS - existing_author_count
+        # st.write(f"Debug: Available slots = {available_slots}")  # Debug statement
+
+        if is_single_author and existing_author_count >= 1:
+            st.warning("⚠️ This book is marked as 'Single Author'. No additional authors can be added.")
+            if st.button("Close"):
+                st.rerun()
+            return
+
+        if existing_author_count >= MAX_AUTHORS:
+            st.warning("⚠️ This book already has the maximum number of authors (4). No more authors can be added.")
+            if st.button("Close"):
+                st.rerun()
+            return
+
+        if existing_author_count == 0:
+            st.warning(f"⚠️ No authors found for Book ID: {book_id}")
+
+        # Helper functions (unchanged for brevity)
+        def ensure_author_fields(author):
+            default_author = {
+                "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+                "corresponding_agent": "", "publishing_consultant": ""
+            }
+            for key, default_value in default_author.items():
+                if key not in author:
+                    author[key] = default_value
+            return author
+
+        def initialize_new_authors(slots):
+            return [
+                {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+                "corresponding_agent": "", "publishing_consultant": ""}
+                for _ in range(slots)
+            ]
+
+        # Initialize session state
+        if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
+            st.session_state.new_authors = initialize_new_authors(available_slots)
+        else:
+            st.session_state.new_authors = [ensure_author_fields(author) for author in st.session_state.new_authors]
+
+        # Check if new_authors exists and has the correct length; reinitialize if not
+        if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
+            st.session_state.new_authors = initialize_new_authors(available_slots)
+        else:
+            st.session_state.new_authors = [ensure_author_fields(author) for author in st.session_state.new_authors]
+
+
+        def validate_author(author, existing_positions, existing_author_ids, all_new_authors, index, is_single_author):
+            """Validate an author's details, including single author constraint."""
+            if not author["name"]:
+                return False, "Author name is required."
+            if not author["email"]:
+                return False, "Email is required."
+            if not validate_email(author["email"]):
+                return False, "Invalid email format."
+            if not author["phone"]:
+                return False, "Phone number is required."
+            if not validate_phone(author["phone"]):
+                return False, "Invalid phone number format (e.g., +919876543210 or 9876543210)."
+            if not author["author_position"]:
+                return False, "Author position is required."
+            if not author["corresponding_agent"]:
+                return False, "Corresponding agent is required."
+            if not author["publishing_consultant"]:
+                return False, "Publishing consultant is required."
+            
+            # Check for duplicate positions
+            if author["author_position"] in existing_positions:
+                return False, f"Position '{author['author_position']}' is already taken by an existing author."
+            new_positions = [a["author_position"] for i, a in enumerate(all_new_authors) if i != index and a["author_position"]]
+            if author["author_position"] in new_positions:
+                return False, f"Position '{author['author_position']}' is already taken by another new author."
+            
+            # Check for duplicate authors
+            if author["author_id"] and author["author_id"] in existing_author_ids:
+                return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already linked to this book."
+            new_author_ids = [a["author_id"] for i, a in enumerate(all_new_authors) if i != index and a["author_id"]]
+            if author["author_id"] and author["author_id"] in new_author_ids:
+                return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already added as a new author."
+
+            # If is_single_author is True, ensure only one author is added in total
+            if is_single_author and existing_author_count + len([a for a in all_new_authors if is_author_complete(a)]) > 1:
+                return False, "Only one author is allowed because this book is marked as 'Single Author'."
+
+            return True, ""
+
+        # Author selection and form
+        st.markdown(f"### Add Up to {available_slots} New Authors")
+        all_authors = get_all_authors(conn)
+        author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+        unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+        agent_options = ["Select Agent"] + unique_agents + ["Add New..."]
+        consultant_options = ["Select Consultant"] + unique_consultants + ["Add New..."]
+
+        existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
+        existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
+
+        # Render expanders
+        for i in range(available_slots):
+            with st.expander(f"New Author {i+1}", expanded=False):
+                with st.container(border=False):
+                    st.markdown(f"#### New Author {i+1}")
+                    disabled = is_single_author and existing_author_count >= 1
+                    if disabled and i == 0:
+                        st.warning("⚠️ This section is disabled because the book is marked as 'Single Author' and already has one author.")
+
+                    selected_author = st.selectbox(
+                        f"Select Author {i+1}",
+                        author_options,
+                        key=f"new_author_select_{i}",
+                        help="Select an existing author or 'Add New Author' to enter new details.",
+                        disabled=disabled
+                    )
+
+                    if selected_author != "Add New Author" and selected_author and not disabled:
+                        selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
+                        selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
+                        if selected_author_details:
+                            st.session_state.new_authors[i].update({
+                                "name": selected_author_details.name,
+                                "email": selected_author_details.email,
+                                "phone": selected_author_details.phone,
+                                "author_id": selected_author_details.author_id
+                            })
+                    elif selected_author == "Add New Author" and not disabled:
+                        st.session_state.new_authors[i]["author_id"] = None
+
+                    col1, col2 = st.columns(2)
+                    st.session_state.new_authors[i]["name"] = col1.text_input(
+                        f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
+                        placeholder="Enter author name..", help="Enter the full name of the author.", disabled=disabled
+                    )
+                    current_new_positions = [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]]
+                    all_taken_positions = existing_positions + current_new_positions
+                    available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in all_taken_positions]
+                    if available_positions:
+                        st.session_state.new_authors[i]["author_position"] = col2.selectbox(
+                            f"Position {i+1}",
+                            available_positions,
+                            key=f"new_author_position_{i}",
+                            help="Select a unique position for this author.",
+                            disabled=disabled
+                        )
+                    elif not disabled:
+                        st.error("❌ No available positions left.")
+
+                    col3, col4 = st.columns(2)
+                    st.session_state.new_authors[i]["phone"] = col3.text_input(
+                        f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
+                        placeholder="Enter phone..", help="Enter a valid phone number (e.g., +919876543210 or 9876543210).", disabled=disabled
+                    )
+                    st.session_state.new_authors[i]["email"] = col4.text_input(
+                        f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
+                        placeholder="Enter email..", help="Enter a valid email address (e.g., author@example.com).", disabled=disabled
+                    )
+
+                    col5, col6 = st.columns(2)
+                    selected_agent = col5.selectbox(
+                        f"Corresponding Agent {i+1}",
+                        agent_options,
+                        index=agent_options.index(st.session_state.new_authors[i]["corresponding_agent"]) if st.session_state.new_authors[i]["corresponding_agent"] in unique_agents else 0,
+                        key=f"new_agent_select_{i}",
+                        help="Select an existing agent or 'Add New...' to enter a new one.",
+                        disabled=disabled
+                    )
+                    if selected_agent == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = col5.text_input(
+                            f"New Agent Name {i+1}",
+                            value="",
+                            key=f"new_agent_input_{i}",
+                            placeholder="Enter new agent name...",
+                            help="Enter the name of the new corresponding agent."
+                        )
+                    elif selected_agent != "Select Agent" and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = selected_agent
+
+                    selected_consultant = col6.selectbox(
+                        f"Publishing Consultant {i+1}",
+                        consultant_options,
+                        index=consultant_options.index(st.session_state.new_authors[i]["publishing_consultant"]) if st.session_state.new_authors[i]["publishing_consultant"] in unique_consultants else 0,
+                        key=f"new_consultant_select_{i}",
+                        help="Select an existing consultant or 'Add New...' to enter a new one.",
+                        disabled=disabled
+                    )
+                    if selected_consultant == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = col6.text_input(
+                            f"New Consultant Name {i+1}",
+                            value="",
+                            key=f"new_consultant_input_{i}",
+                            placeholder="Enter new consultant name...",
+                            help="Enter the name of the new publishing consultant."
+                        )
+                    elif selected_consultant != "Select Consultant" and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
+
+        # Button section
+        col1, col2 = st.columns([7, 1])
+        with col1:
+            if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
+                errors = []
+                active_authors = [author for author in st.session_state.new_authors if is_author_complete(author)]
+                if not active_authors:
+                    st.error("❌ Please fill in the details for at least one author to proceed.")
+                else:
+                    for i, author in enumerate(active_authors):
+                        is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, st.session_state.new_authors, i, is_single_author)
+                        if not is_valid:
+                            errors.append(f"Author {i+1}: {error_message}")
+                    if errors:
+                        for error in errors:
+                            st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
+                    else:
+                        try:
+                            for author in active_authors:
+                                if is_author_complete(author):
+                                    author_id_to_link = author["author_id"] or insert_author(conn, author["name"], author["email"], author["phone"])
+                                    if book_id and author_id_to_link:
+                                        with conn.session as s:
+                                            s.execute(
+                                                text("""
+                                                    INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                    VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                                """),
+                                                params={
+                                                    "book_id": book_id,
+                                                    "author_id": author_id_to_link,
+                                                    "author_position": author["author_position"],
+                                                    "corresponding_agent": author["corresponding_agent"],
+                                                    "publishing_consultant": author["publishing_consultant"]
+                                                }
+                                            )
+                                            s.commit()
+                            st.cache_data.clear()
+                            st.success("✔️ New authors added successfully!")
+                            del st.session_state.new_authors
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Error adding authors: {e}")
+
+        with col2:
+            if st.button("Cancel", key="cancel_add_authors", type="secondary"):
+                del st.session_state.new_authors
+                st.rerun()
 
 def insert_author(conn, name, email, phone):
     with conn.session as s:
@@ -2905,7 +3587,7 @@ def update_inventory_delivery_details(book_id, updates, conn):
         set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
         query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
         params = updates.copy()
-        params["id"] = int(book_id)  # Ensure book_id is an integer
+        params["id"] = int(book_id)  
         with conn.session as session:
             session.execute(text(query), params)
             session.commit()
@@ -3431,6 +4113,7 @@ with cont:
                     publisher = row.get('publisher', '')  # Safe access
                     publisher_colors = {
                         "Cipher": {"color": "#ffffff", "background": "#673ab7"},  # White text on deep purple
+                        "AG Volumes": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
                         "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
                         "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
                         "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
@@ -3442,7 +4125,7 @@ with cont:
                     
                     # Display the title with all badges
                     st.markdown(
-                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
+                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}",
                         unsafe_allow_html=True
                     )
                 with col3:
