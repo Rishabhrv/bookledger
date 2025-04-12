@@ -79,7 +79,8 @@ def validate_token():
 
 validate_token()
 
-UPLOAD_DIR = "uploads"
+#UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
+UPLOAD_DIR = "/home/rishabhvyas/bookledger/uploads"
 
 st.cache_data.clear()
 
