@@ -571,14 +571,31 @@ def add_book_dialog(conn):
                             # Handle syllabus file upload
                             syllabus_path = None
                             if book_data["syllabus_file"] and not book_data["is_publish_only"]:
-                                # Generate a unique filename to avoid overwrites
+                                # Debug file details
+                                st.write(f"Received file: {book_data['syllabus_file'].name}, size: {book_data['syllabus_file'].size}")
+                                
+                                # Generate unique filename
                                 file_extension = os.path.splitext(book_data["syllabus_file"].name)[1]
                                 unique_filename = f"syllabus_{book_data['title'].replace(' ', '_')}_{int(time.time())}{file_extension}"
-                                syllabus_path = os.path.join(UPLOAD_DIR, unique_filename)
+                                syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
                                 
-                                # Save the file to the uploads directory
-                                with open(syllabus_path, "wb") as f:
-                                    f.write(book_data["syllabus_file"].getbuffer())
+                                # Verify directory permissions
+                                if not os.access(UPLOAD_DIR, os.W_OK):
+                                    st.error(f"No write permission for {UPLOAD_DIR}.")
+                                    raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
+                                
+                                # Save file
+                                try:
+                                    with open(syllabus_path_temp, "wb") as f:
+                                        f.write(book_data["syllabus_file"].getbuffer())
+                                    syllabus_path = syllabus_path_temp
+                                    st.write(f"File saved to: {syllabus_path}")
+                                except PermissionError:
+                                    st.error(f"Permission denied: Cannot write to {syllabus_path_temp}.")
+                                    raise
+                                except Exception as e:
+                                    st.error(f"Failed to save syllabus file: {str(e)}")
+                                    raise
                             
                             # Insert book with publisher, syllabus path, and other fields
                             s.execute(text("""
