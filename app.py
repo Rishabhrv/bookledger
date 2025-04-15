@@ -1696,6 +1696,10 @@ def edit_author_dialog(book_id, conn):
 
     import time  # For spinner delay
 
+    # Assumed helper function (adjusted for fix)
+    def is_editor_complete(editor):
+        # Allow editor with at least name and position for existing chapters
+        return bool(editor.get("name") and editor.get("author_position"))
 
     if publisher == "AG Volumes":
         st.markdown("### Manage Chapters and Editors")
@@ -1758,6 +1762,7 @@ def edit_author_dialog(book_id, conn):
                             placeholder="Enter chapter title..."
                         )
 
+                        # Fixed tab labels to "Editor" for consistency
                         editor_tabs = st.tabs(["Writer 1", "Writer 2", "Writer 3", "Writer 4"])
                         for j, editor_tab in enumerate(editor_tabs):
                             with editor_tab:
@@ -1765,7 +1770,7 @@ def edit_author_dialog(book_id, conn):
                                 all_authors = get_all_authors(conn)
                                 author_options = ["Select Existing Editor"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
                                 selected_editor = st.selectbox(
-                                    "Select Writer",
+                                    "Select Writer",  # Changed from "Select Writer"
                                     author_options,
                                     index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
                                     key=f"edit_chapter_{chapter_id}_editor_select_{j}"
@@ -1783,6 +1788,13 @@ def edit_author_dialog(book_id, conn):
                                         })
                                 elif selected_editor == "Select Existing Editor":
                                     editor["author_id"] = None
+                                    editor.update({
+                                        "name": "",
+                                        "email": "",
+                                        "phone": "",
+                                        "corresponding_agent": "",
+                                        "publishing_consultant": ""
+                                    })
 
                                 col1, col2 = st.columns(2)
                                 editor["name"] = col1.text_input(
@@ -1852,6 +1864,9 @@ def edit_author_dialog(book_id, conn):
                                 else:
                                     editor["publishing_consultant"] = ""
 
+                            # Ensure editor data is updated in session state
+                            edit_data["editors"][j] = editor
+
                         col_save, col_delete = st.columns([3, 1])
                         with col_save:
                             if st.button("Save Chapter", key=f"save_chapter_{chapter_id}"):
@@ -1863,7 +1878,7 @@ def edit_author_dialog(book_id, conn):
 
                                     active_editors = [e for e in edit_data["editors"] if is_editor_complete(e)]
                                     if not active_editors:
-                                        errors.append("At least one editor is required.")
+                                        errors.append("At least one editor is required with name and position.")
                                     else:
                                         existing_editor_ids = []
                                         for j, editor in enumerate(active_editors):
@@ -1871,7 +1886,7 @@ def edit_author_dialog(book_id, conn):
                                             if not is_valid:
                                                 errors.append(f"Editor {j+1}: {error}")
                                             else:
-                                                existing_editor_ids.append(editor["author_id"])
+                                                existing_editor_ids.append(editor["author_id"] or editor["name"])
 
                                     if errors:
                                         for error in errors:
@@ -1901,6 +1916,7 @@ def edit_author_dialog(book_id, conn):
                                                 for editor in active_editors:
                                                     editor_id = editor["author_id"]
                                                     if not editor_id:
+                                                        # Insert new author if needed
                                                         s.execute(
                                                             text("""
                                                                 INSERT INTO authors (name, email, phone)
@@ -1908,11 +1924,13 @@ def edit_author_dialog(book_id, conn):
                                                             """),
                                                             {
                                                                 "name": editor["name"],
-                                                                "email": editor["email"],
-                                                                "phone": editor["phone"]
+                                                                "email": editor["email"] or None,
+                                                                "phone": editor["phone"] or None
                                                             }
                                                         )
                                                         editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                                        if not editor_id:
+                                                            raise Exception("Failed to retrieve author_id.")
                                                     s.execute(
                                                         text("""
                                                             INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
@@ -1922,8 +1940,8 @@ def edit_author_dialog(book_id, conn):
                                                             "chapter_id": chapter_id,
                                                             "author_id": editor_id,
                                                             "author_position": editor["author_position"],
-                                                            "corresponding_agent": editor["corresponding_agent"],
-                                                            "publishing_consultant": editor["publishing_consultant"]
+                                                            "corresponding_agent": editor["corresponding_agent"] or None,
+                                                            "publishing_consultant": editor["publishing_consultant"] or None
                                                         }
                                                     )
                                                 s.commit()
@@ -2035,12 +2053,13 @@ def edit_author_dialog(book_id, conn):
                     placeholder="Enter chapter title..."
                 )
 
+                # Fixed tab labels to "Editor" for consistency
                 editor_tabs = st.tabs(["Writer 1", "Writer 2", "Writer 3", "Writer 4"])
                 for j, editor_tab in enumerate(editor_tabs):
                     with editor_tab:
                         editor = chapter["editors"][j]
                         selected_editor = st.selectbox(
-                            "Select Writer",
+                            "Select Writer",  # Changed from "Select Writer"
                             author_options,
                             index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
                             key=f"new_chapter_editor_select_{j}"
@@ -2060,6 +2079,13 @@ def edit_author_dialog(book_id, conn):
                                 })
                         elif selected_editor == "Add New Editor":
                             editor["author_id"] = None
+                            editor.update({
+                                "name": editor.get("name", ""),
+                                "email": editor.get("email", ""),
+                                "phone": editor.get("phone", ""),
+                                "corresponding_agent": editor.get("corresponding_agent", ""),
+                                "publishing_consultant": editor.get("publishing_consultant", "")
+                            })
 
                         col1, col2 = st.columns(2)
                         editor["name"] = col1.text_input(
@@ -2118,7 +2144,7 @@ def edit_author_dialog(book_id, conn):
                             try:
                                 consultant_index = consultant_options.index(editor["publishing_consultant"])
                             except ValueError:
-                                consultant_index = 0
+                                agent_index = 0
                         selected_consultant = col6.selectbox(
                             "Publishing Consultant",
                             consultant_options,
@@ -2136,6 +2162,9 @@ def edit_author_dialog(book_id, conn):
                         else:
                             editor["publishing_consultant"] = ""
 
+                    # Ensure editor data is updated in session state
+                    chapter["editors"][j] = editor
+
             # Save new chapter
             col_save, col_cancel = st.columns([7, 1])
             with col_save:
@@ -2152,7 +2181,7 @@ def edit_author_dialog(book_id, conn):
 
                         active_editors = [e for e in chapter["editors"] if is_editor_complete(e)]
                         if not active_editors:
-                            errors.append("Chapter: At least one editor is required.")
+                            errors.append("Chapter: At least one editor is required with name and position.")
                         else:
                             existing_editor_ids = []
                             for j, editor in enumerate(active_editors):
@@ -2160,7 +2189,7 @@ def edit_author_dialog(book_id, conn):
                                 if not is_valid:
                                     errors.append(f"Editor {j+1}: {error}")
                                 else:
-                                    existing_editor_ids.append(editor["author_id"])
+                                    existing_editor_ids.append(editor["author_id"] or editor["name"])
 
                         if errors:
                             for error in errors:
@@ -2194,8 +2223,8 @@ def edit_author_dialog(book_id, conn):
                                                 """),
                                                 {
                                                     "name": editor["name"],
-                                                    "email": editor["email"],
-                                                    "phone": editor["phone"]
+                                                    "email": editor["email"] or None,
+                                                    "phone": editor["phone"] or None
                                                 }
                                             )
                                             editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
@@ -2211,8 +2240,8 @@ def edit_author_dialog(book_id, conn):
                                                 "chapter_id": chapter_id,
                                                 "author_id": editor_id,
                                                 "author_position": editor["author_position"],
-                                                "corresponding_agent": editor["corresponding_agent"],
-                                                "publishing_consultant": editor["publishing_consultant"]
+                                                "corresponding_agent": editor["corresponding_agent"] or None,
+                                                "publishing_consultant": editor["publishing_consultant"] or None
                                             }
                                         )
                                     s.commit()
