@@ -1694,6 +1694,9 @@ def edit_author_dialog(book_id, conn):
     
     publisher = book_details['publisher'].iloc[0] if 'publisher' in book_details else None
 
+    import time  # For spinner delay
+
+
     if publisher == "AG Volumes":
         st.markdown("### Manage Chapters and Editors")
         chapters = fetch_chapters(book_id, conn)
@@ -1707,42 +1710,43 @@ def edit_author_dialog(book_id, conn):
             if "edit_chapters" not in st.session_state:
                 st.session_state.edit_chapters = {}
             
-            # Sync edit_chapters with current chapters
+            # Sync edit_chapters with current chapters, forcing initialization to avoid KeyError
+            MAX_EDITORS_PER_CHAPTER = 4
             for _, chapter in chapters.iterrows():
                 chapter_id = chapter['chapter_id']
-                if chapter_id not in st.session_state.edit_chapters:
-                    editors = [
-                        {
-                            "author_id": editor['author_id'],
-                            "author_position": editor['author_position'],
-                            "name": editor['name'],
-                            "email": editor['email'],
-                            "phone": editor['phone'],
-                            "corresponding_agent": editor['corresponding_agent'] or "",
-                            "publishing_consultant": editor['publishing_consultant'] or ""
-                        }
-                        for _, editor in fetch_chapter_editors(chapter['chapter_id'], conn).iterrows()
-                    ]
-                    # Ensure two editor slots are available, filling with empty editors if needed
-                    while len(editors) < MAX_EDITORS_PER_CHAPTER:
-                        editors.append({
-                            "author_id": None,
-                            "author_position": None,
-                            "name": "",
-                            "email": "",
-                            "phone": "",
-                            "corresponding_agent": "",
-                            "publishing_consultant": ""
-                        })
-                    st.session_state.edit_chapters[chapter_id] = {
-                        "chapter_title": chapter['chapter_title'],
-                        "chapter_number": str(chapter['chapter_number']),
-                        "editors": editors
+                # Always initialize or update to ensure "editors" key exists
+                editors = [
+                    {
+                        "author_id": editor['author_id'],
+                        "author_position": editor['author_position'],
+                        "name": editor['name'],
+                        "email": editor['email'],
+                        "phone": editor['phone'],
+                        "corresponding_agent": editor['corresponding_agent'] or "",
+                        "publishing_consultant": editor['publishing_consultant'] or ""
                     }
+                    for _, editor in fetch_chapter_editors(chapter['chapter_id'], conn).iterrows()
+                ]
+                # Ensure four editor slots
+                while len(editors) < MAX_EDITORS_PER_CHAPTER:
+                    editors.append({
+                        "author_id": None,
+                        "author_position": None,
+                        "name": "",
+                        "email": "",
+                        "phone": "",
+                        "corresponding_agent": "",
+                        "publishing_consultant": ""
+                    })
+                st.session_state.edit_chapters[chapter_id] = {
+                    "chapter_title": chapter['chapter_title'],
+                    "chapter_number": str(chapter['chapter_number']),
+                    "editors": editors
+                }
 
             # Display existing chapters in expanders
             if existing_chapter_count > 0:
-                st.markdown("#### Existing Chapters")
+                st.markdown(f"#### Existing Chapters ({existing_chapter_count})")
                 for _, chapter in chapters.iterrows():
                     chapter_id = chapter['chapter_id']
                     edit_data = st.session_state.edit_chapters[chapter_id]
@@ -1754,14 +1758,14 @@ def edit_author_dialog(book_id, conn):
                             placeholder="Enter chapter title..."
                         )
 
-                        editor_tabs = st.tabs(["Editor 1", "Editor 2"])
+                        editor_tabs = st.tabs(["Writer 1", "Writer 2", "Writer 3", "Writer 4"])
                         for j, editor_tab in enumerate(editor_tabs):
                             with editor_tab:
                                 editor = edit_data["editors"][j]
                                 all_authors = get_all_authors(conn)
                                 author_options = ["Select Existing Editor"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
                                 selected_editor = st.selectbox(
-                                    "Select Editor",
+                                    "Select Writer",
                                     author_options,
                                     index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
                                     key=f"edit_chapter_{chapter_id}_editor_select_{j}"
@@ -1786,7 +1790,7 @@ def edit_author_dialog(book_id, conn):
                                     value=editor["name"],
                                     key=f"edit_chapter_{chapter_id}_editor_name_{j}"
                                 )
-                                available_positions = ["1st", "2nd"]
+                                available_positions = ["1st", "2nd", "3rd", "4th"]
                                 current_positions = [e["author_position"] for k, e in enumerate(edit_data["editors"]) if k != j and e["author_position"]]
                                 available_positions = [p for p in available_positions if p not in current_positions]
                                 editor["author_position"] = col2.selectbox(
@@ -1851,106 +1855,110 @@ def edit_author_dialog(book_id, conn):
                         col_save, col_delete = st.columns([3, 1])
                         with col_save:
                             if st.button("Save Chapter", key=f"save_chapter_{chapter_id}"):
-                                errors = []
-                                if not edit_data["chapter_title"]:
-                                    errors.append("Chapter title is required.")
+                                with st.spinner("Saving chapter..."):
+                                    time.sleep(2)  # 2-second delay for UX
+                                    errors = []
+                                    if not edit_data["chapter_title"]:
+                                        errors.append("Chapter title is required.")
 
-                                active_editors = [e for e in edit_data["editors"] if is_editor_complete(e)]
-                                if not active_editors:
-                                    errors.append("At least one editor is required.")
-                                else:
-                                    existing_editor_ids = []
-                                    for j, editor in enumerate(active_editors):
-                                        is_valid, error = validate_editor(editor, [], existing_editor_ids, edit_data["editors"], j)
-                                        if not is_valid:
-                                            errors.append(f"Editor {j+1}: {error}")
-                                        else:
-                                            existing_editor_ids.append(editor["author_id"])
+                                    active_editors = [e for e in edit_data["editors"] if is_editor_complete(e)]
+                                    if not active_editors:
+                                        errors.append("At least one editor is required.")
+                                    else:
+                                        existing_editor_ids = []
+                                        for j, editor in enumerate(active_editors):
+                                            is_valid, error = validate_editor(editor, [], existing_editor_ids, edit_data["editors"], j)
+                                            if not is_valid:
+                                                errors.append(f"Editor {j+1}: {error}")
+                                            else:
+                                                existing_editor_ids.append(editor["author_id"])
 
-                                if errors:
-                                    for error in errors:
-                                        st.error(f"❌ {error}")
-                                else:
+                                    if errors:
+                                        for error in errors:
+                                            st.error(f"❌ {error}")
+                                    else:
+                                        try:
+                                            with conn.session as s:
+                                                s.begin()
+                                                # Update chapter (keep chapter_number unchanged)
+                                                s.execute(
+                                                    text("""
+                                                        UPDATE chapters
+                                                        SET chapter_title = :chapter_title
+                                                        WHERE chapter_id = :chapter_id
+                                                    """),
+                                                    {
+                                                        "chapter_id": chapter_id,
+                                                        "chapter_title": edit_data["chapter_title"]
+                                                    }
+                                                )
+                                                # Delete existing editors
+                                                s.execute(
+                                                    text("DELETE FROM chapter_editors WHERE chapter_id = :chapter_id"),
+                                                    {"chapter_id": chapter_id}
+                                                )
+                                                # Insert updated editors
+                                                for editor in active_editors:
+                                                    editor_id = editor["author_id"]
+                                                    if not editor_id:
+                                                        s.execute(
+                                                            text("""
+                                                                INSERT INTO authors (name, email, phone)
+                                                                VALUES (:name, :email, :phone)
+                                                            """),
+                                                            {
+                                                                "name": editor["name"],
+                                                                "email": editor["email"],
+                                                                "phone": editor["phone"]
+                                                            }
+                                                        )
+                                                        editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                                    s.execute(
+                                                        text("""
+                                                            INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                            VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                                        """),
+                                                        {
+                                                            "chapter_id": chapter_id,
+                                                            "author_id": editor_id,
+                                                            "author_position": editor["author_position"],
+                                                            "corresponding_agent": editor["corresponding_agent"],
+                                                            "publishing_consultant": editor["publishing_consultant"]
+                                                        }
+                                                    )
+                                                s.commit()
+                                            st.success("✔️ Chapter updated successfully!")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"❌ Error updating chapter: {e}")
+                                            with conn.session as s:
+                                                s.rollback()
+
+                        with col_delete:
+                            if st.button("Delete Chapter", key=f"delete_chapter_{chapter_id}"):
+                                with st.spinner("Deleting chapter..."):
+                                    time.sleep(2)  # 2-second delay for UX
                                     try:
                                         with conn.session as s:
                                             s.begin()
-                                            # Update chapter (keep chapter_number unchanged)
-                                            s.execute(
-                                                text("""
-                                                    UPDATE chapters
-                                                    SET chapter_title = :chapter_title
-                                                    WHERE chapter_id = :chapter_id
-                                                """),
-                                                {
-                                                    "chapter_id": chapter_id,
-                                                    "chapter_title": edit_data["chapter_title"]
-                                                }
-                                            )
-                                            # Delete existing editors
                                             s.execute(
                                                 text("DELETE FROM chapter_editors WHERE chapter_id = :chapter_id"),
                                                 {"chapter_id": chapter_id}
                                             )
-                                            # Insert updated editors
-                                            for editor in active_editors:
-                                                editor_id = editor["author_id"]
-                                                if not editor_id:
-                                                    s.execute(
-                                                        text("""
-                                                            INSERT INTO authors (name, email, phone)
-                                                            VALUES (:name, :email, :phone)
-                                                        """),
-                                                        {
-                                                            "name": editor["name"],
-                                                            "email": editor["email"],
-                                                            "phone": editor["phone"]
-                                                        }
-                                                    )
-                                                    editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
-                                                s.execute(
-                                                    text("""
-                                                        INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                                        VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                                    """),
-                                                    {
-                                                        "chapter_id": chapter_id,
-                                                        "author_id": editor_id,
-                                                        "author_position": editor["author_position"],
-                                                        "corresponding_agent": editor["corresponding_agent"],
-                                                        "publishing_consultant": editor["publishing_consultant"]
-                                                    }
-                                                )
+                                            s.execute(
+                                                text("DELETE FROM chapters WHERE chapter_id = :chapter_id"),
+                                                {"chapter_id": chapter_id}
+                                            )
                                             s.commit()
-                                        st.success("✔️ Chapter updated successfully!")
+                                        del st.session_state.edit_chapters[chapter_id]
+                                        st.success("✔️ Chapter deleted successfully!")
                                         st.cache_data.clear()
                                         st.rerun()
                                     except Exception as e:
-                                        st.error(f"❌ Error updating chapter: {e}")
+                                        st.error(f"❌ Error deleting chapter: {e}")
                                         with conn.session as s:
                                             s.rollback()
-
-                        with col_delete:
-                            if st.button("Delete Chapter", key=f"delete_chapter_{chapter_id}"):
-                                try:
-                                    with conn.session as s:
-                                        s.begin()
-                                        s.execute(
-                                            text("DELETE FROM chapter_editors WHERE chapter_id = :chapter_id"),
-                                            {"chapter_id": chapter_id}
-                                        )
-                                        s.execute(
-                                            text("DELETE FROM chapters WHERE chapter_id = :chapter_id"),
-                                            {"chapter_id": chapter_id}
-                                        )
-                                        s.commit()
-                                    del st.session_state.edit_chapters[chapter_id]
-                                    st.success("✔️ Chapter deleted successfully!")
-                                    st.cache_data.clear()
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error deleting chapter: {e}")
-                                    with conn.session as s:
-                                        s.rollback()
 
             # New chapter form
             st.markdown("#### Add New Chapter")
@@ -1961,11 +1969,29 @@ def edit_author_dialog(book_id, conn):
                 if num != next_number:
                     break
                 next_number += 1
+            
+            # Initialize new_chapters with exactly four editors
             if "new_chapters" not in st.session_state:
                 st.session_state.new_chapters = [
-                    {"chapter_title": "", "chapter_number": str(next_number), "editors": initialize_new_editors(MAX_EDITORS_PER_CHAPTER)}
+                    {
+                        "chapter_title": "",
+                        "chapter_number": str(next_number),
+                        "editors": [
+                            {
+                                "author_id": None,
+                                "author_position": None,
+                                "name": "",
+                                "email": "",
+                                "phone": "",
+                                "corresponding_agent": "",
+                                "publishing_consultant": ""
+                            }
+                            for _ in range(MAX_EDITORS_PER_CHAPTER)
+                        ]
+                    }
                 ]
 
+            # Ensure new_chapters always has four editors
             def ensure_editor_fields(editor):
                 default_editor = {
                     "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
@@ -1976,14 +2002,23 @@ def edit_author_dialog(book_id, conn):
                         editor[key] = default_value
                 return editor
 
-            st.session_state.new_chapters = [
-                {
-                    "chapter_title": c["chapter_title"],
-                    "chapter_number": c["chapter_number"],
-                    "editors": [ensure_editor_fields(e) for e in c["editors"]]
-                }
-                for c in st.session_state.new_chapters
-            ]
+            # Force four editors in new_chapters
+            for chapter in st.session_state.new_chapters:
+                chapter["editors"] = [
+                    ensure_editor_fields(e) for e in chapter["editors"]
+                ]
+                while len(chapter["editors"]) < MAX_EDITORS_PER_CHAPTER:
+                    chapter["editors"].append({
+                        "author_id": None,
+                        "author_position": None,
+                        "name": "",
+                        "email": "",
+                        "phone": "",
+                        "corresponding_agent": "",
+                        "publishing_consultant": ""
+                    })
+                if len(chapter["editors"]) > MAX_EDITORS_PER_CHAPTER:
+                    chapter["editors"] = chapter["editors"][:MAX_EDITORS_PER_CHAPTER]
 
             all_authors = get_all_authors(conn)
             author_options = ["Add New Editor"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
@@ -2000,12 +2035,12 @@ def edit_author_dialog(book_id, conn):
                     placeholder="Enter chapter title..."
                 )
 
-                editor_tabs = st.tabs(["Editor 1", "Editor 2"])
+                editor_tabs = st.tabs(["Writer 1", "Writer 2", "Writer 3", "Writer 4"])
                 for j, editor_tab in enumerate(editor_tabs):
                     with editor_tab:
                         editor = chapter["editors"][j]
                         selected_editor = st.selectbox(
-                            "Select Editor",
+                            "Select Writer",
                             author_options,
                             index=author_options.index(f"{editor['name']} (ID: {editor['author_id']})") if editor['author_id'] and f"{editor['name']} (ID: {editor['author_id']})" in author_options else 0,
                             key=f"new_chapter_editor_select_{j}"
@@ -2032,7 +2067,7 @@ def edit_author_dialog(book_id, conn):
                             editor["name"],
                             key=f"new_chapter_editor_name_{j}"
                         )
-                        available_positions = ["1st", "2nd"]
+                        available_positions = ["1st", "2nd", "3rd", "4th"]
                         current_positions = [e["author_position"] for k, e in enumerate(chapter["editors"]) if k != j and e["author_position"]]
                         available_positions = [p for p in available_positions if p not in current_positions]
                         editor["author_position"] = col2.selectbox(
@@ -2092,7 +2127,7 @@ def edit_author_dialog(book_id, conn):
                         )
                         if selected_consultant == "Add New...":
                             editor["publishing_consultant"] = col6.text_input(
-                            "New Consultant Name",
+                                "New Consultant Name",
                                 value=editor["publishing_consultant"],
                                 key=f"new_chapter_editor_consultant_input_{j}"
                             )
@@ -2104,103 +2139,116 @@ def edit_author_dialog(book_id, conn):
             # Save new chapter
             col_save, col_cancel = st.columns([7, 1])
             with col_save:
-                if st.button("Add Chapter and Editors", key="add_chapters", type = "primary"):
-                    errors = []
-                    chapter = st.session_state.new_chapters[0]
-                    existing_numbers = [int(c["chapter_number"]) for _, c in chapters.iterrows()]
-                    if int(chapter["chapter_number"]) in existing_numbers:
-                        errors.append(f"Chapter number {chapter['chapter_number']} is already used.")
-                    if not chapter["chapter_title"]:
-                        errors.append("Chapter: Title is required.")
+                if st.button("Add Chapter and Editors", key="add_chapters", type="primary"):
+                    with st.spinner("Saving chapter..."):
+                        time.sleep(2)  # 2-second delay for UX
+                        errors = []
+                        chapter = st.session_state.new_chapters[0]
+                        existing_numbers = [int(c["chapter_number"]) for _, c in chapters.iterrows()]
+                        if int(chapter["chapter_number"]) in existing_numbers:
+                            errors.append(f"Chapter number {chapter['chapter_number']} is already used.")
+                        if not chapter["chapter_title"]:
+                            errors.append("Chapter: Title is required.")
 
-                    active_editors = [e for e in chapter["editors"] if is_editor_complete(e)]
-                    if not active_editors:
-                        errors.append("Chapter: At least one editor is required.")
-                    else:
-                        existing_editor_ids = []
-                        for j, editor in enumerate(active_editors):
-                            is_valid, error = validate_editor(editor, [], existing_editor_ids, chapter["editors"], j)
-                            if not is_valid:
-                                errors.append(f"Editor {j+1}: {error}")
-                            else:
-                                existing_editor_ids.append(editor["author_id"])
+                        active_editors = [e for e in chapter["editors"] if is_editor_complete(e)]
+                        if not active_editors:
+                            errors.append("Chapter: At least one editor is required.")
+                        else:
+                            existing_editor_ids = []
+                            for j, editor in enumerate(active_editors):
+                                is_valid, error = validate_editor(editor, [], existing_editor_ids, chapter["editors"], j)
+                                if not is_valid:
+                                    errors.append(f"Editor {j+1}: {error}")
+                                else:
+                                    existing_editor_ids.append(editor["author_id"])
 
-                    if errors:
-                        for error in errors:
-                            st.error(f"❌ {error}")
-                    else:
-                        try:
-                            with conn.session as s:
-                                s.begin()
-                                s.execute(
-                                    text("""
-                                        INSERT INTO chapters (book_id, chapter_title, chapter_number)
-                                        VALUES (:book_id, :chapter_title, :chapter_number)
-                                    """),
-                                    {
-                                        "book_id": book_id,
-                                        "chapter_title": chapter["chapter_title"],
-                                        "chapter_number": int(chapter["chapter_number"])
-                                    }
-                                )
-                                chapter_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
-                                if not chapter_id:
-                                    raise Exception("Failed to retrieve chapter_id.")
-
-                                for editor in active_editors:
-                                    editor_id = editor["author_id"]
-                                    if not editor_id:
-                                        s.execute(
-                                            text("""
-                                                INSERT INTO authors (name, email, phone)
-                                                VALUES (:name, :email, :phone)
-                                            """),
-                                            {
-                                                "name": editor["name"],
-                                                "email": editor["email"],
-                                                "phone": editor["phone"]
-                                            }
-                                        )
-                                        editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
-                                        if not editor_id:
-                                            raise Exception("Failed to retrieve author_id.")
-
+                        if errors:
+                            for error in errors:
+                                st.error(f"❌ {error}")
+                        else:
+                            try:
+                                with conn.session as s:
+                                    s.begin()
                                     s.execute(
                                         text("""
-                                            INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                            VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                            INSERT INTO chapters (book_id, chapter_title, chapter_number)
+                                            VALUES (:book_id, :chapter_title, :chapter_number)
                                         """),
                                         {
-                                            "chapter_id": chapter_id,
-                                            "author_id": editor_id,
-                                            "author_position": editor["author_position"],
-                                            "corresponding_agent": editor["corresponding_agent"],
-                                            "publishing_consultant": editor["publishing_consultant"]
+                                            "book_id": book_id,
+                                            "chapter_title": chapter["chapter_title"],
+                                            "chapter_number": int(chapter["chapter_number"])
                                         }
                                     )
-                                s.commit()
-                            st.success("✔️ Chapter and editors added successfully!")
-                            st.cache_data.clear()
-                            # Calculate next smallest available number
-                            chapters = fetch_chapters(book_id, conn)
-                            existing_numbers = sorted([int(c["chapter_number"]) for _, c in chapters.iterrows()])
-                            next_number = 1
-                            for num in existing_numbers:
-                                if num != next_number:
-                                    break
-                                next_number += 1
-                            st.session_state.new_chapters = [
-                                {
-                                    "chapter_title": "",
-                                    "chapter_number": str(next_number),
-                                    "editors": initialize_new_editors(MAX_EDITORS_PER_CHAPTER)
-                                }
-                            ]
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Error adding chapter/editors: {e}")
-                            with conn.session as s:
-                                s.rollback()
+                                    chapter_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                    if not chapter_id:
+                                        raise Exception("Failed to retrieve chapter_id.")
+
+                                    for editor in active_editors:
+                                        editor_id = editor["author_id"]
+                                        if not editor_id:
+                                            s.execute(
+                                                text("""
+                                                    INSERT INTO authors (name, email, phone)
+                                                    VALUES (:name, :email, :phone)
+                                                """),
+                                                {
+                                                    "name": editor["name"],
+                                                    "email": editor["email"],
+                                                    "phone": editor["phone"]
+                                                }
+                                            )
+                                            editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                            if not editor_id:
+                                                raise Exception("Failed to retrieve author_id.")
+
+                                        s.execute(
+                                            text("""
+                                                INSERT INTO chapter_editors (chapter_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                VALUES (:chapter_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                            """),
+                                            {
+                                                "chapter_id": chapter_id,
+                                                "author_id": editor_id,
+                                                "author_position": editor["author_position"],
+                                                "corresponding_agent": editor["corresponding_agent"],
+                                                "publishing_consultant": editor["publishing_consultant"]
+                                            }
+                                        )
+                                    s.commit()
+                                st.success("✔️ Chapter and editors added successfully!")
+                                st.cache_data.clear()
+                                # Calculate next smallest available number
+                                chapters = fetch_chapters(book_id, conn)
+                                existing_numbers = sorted([int(c["chapter_number"]) for _, c in chapters.iterrows()])
+                                next_number = 1
+                                for num in existing_numbers:
+                                    if num != next_number:
+                                        break
+                                    next_number += 1
+                                st.session_state.new_chapters = [
+                                    {
+                                        "chapter_title": "",
+                                        "chapter_number": str(next_number),
+                                        "editors": [
+                                            {
+                                                "author_id": None,
+                                                "author_position": None,
+                                                "name": "",
+                                                "email": "",
+                                                "phone": "",
+                                                "corresponding_agent": "",
+                                                "publishing_consultant": ""
+                                            }
+                                            for _ in range(MAX_EDITORS_PER_CHAPTER)
+                                        ]
+                                    }
+                                ]
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Error adding chapter/editors: {e}")
+                                with conn.session as s:
+                                    s.rollback()
 
             with col_cancel:
                 if st.button("Cancel", key="cancel_chapters"):
