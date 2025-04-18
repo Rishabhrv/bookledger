@@ -5,10 +5,10 @@ from datetime import date
 import time
 import re
 import os
-import base64
-import json
-import hashlib
-import hmac
+import jwt
+import requests
+import datetime
+import time
 
 
 # Set page configuration
@@ -33,56 +33,165 @@ hide_menu_style = """
 
 st.markdown(hide_menu_style, unsafe_allow_html=True)
 
-# Use the same secret key as MasterSheet3
-SECRET_KEY = os.getenv('SECRET_KEY', 'default-secret-key') 
+
+# Define mapping of access values to button functions
+ACCESS_TO_BUTTON = {
+    # Loop buttons (table)
+    "ISBN": "manage_isbn_dialog",
+    "Payment": "manage_price_dialog",
+    "Authors": "edit_author_dialog",
+    "Operations": "edit_operation_dialog",
+    "Printing & Delivery": "edit_inventory_delivery_dialog",
+    # Non-loop buttons
+    "Add Book": "add_book_dialog",
+    "Authors Edit": "edit_author_detail"
+}
+
+
+# Configuration
+FLASK_VALIDATE_URL = "http://localhost:5000/validate_token"
+FLASK_USER_DETAILS_URL = "http://localhost:5000/user_details"
+JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
+FLASK_LOGIN_URL = "http://localhost:5000/login"
+FLASK_LOGOUT_URL = "http://localhost:5000/logout"
+VALID_ROLES = {"admin", "user"}
+VALID_APPS = {"main", "operations"}
+
 
 def validate_token():
-    # Store token in session_state if it is found in URL parameters
+    # Check if token exists in session state or query params
     if 'token' not in st.session_state:
-        params = st.query_params
-        if 'token' in params:
-            st.session_state.token = params['token']
-        else:
-            st.error("Access Denied: Login Required")
+        token = st.query_params.get("token")
+        if not token:
+            st.error("Access denied: Please log in first")
+            st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
             st.stop()
+        st.session_state.token = token if isinstance(token, str) else token[0]
 
     token = st.session_state.token
 
     try:
-        parts = token.split('.')
-        if len(parts) != 3:
-            raise ValueError("Invalid token format")
+        # Local validation: only check for user_id and exp
+        decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        if 'user_id' not in decoded or 'exp' not in decoded:
+            raise jwt.InvalidTokenError("Missing user_id or exp")
 
-        header = json.loads(base64.urlsafe_b64decode(parts[0] + '==').decode('utf-8'))
-        payload = json.loads(base64.urlsafe_b64decode(parts[1] + '==').decode('utf-8'))
+        # Server-side token validation
+        response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=5)
+        if response.status_code != 200 or not response.json().get('valid'):
+            error = response.json().get('error', 'Invalid token')
+            raise jwt.InvalidTokenError(error)
 
-        signature = base64.urlsafe_b64decode(parts[2] + '==')
-        expected_signature = hmac.new(
-            SECRET_KEY.encode(),
-            f"{parts[0]}.{parts[1]}".encode(),
-            hashlib.sha256
-        ).digest()
+        # Fetch user details
+        details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=5)
+        if details_response.status_code != 200 or not details_response.json().get('valid'):
+            error = details_response.json().get('error', 'Unable to fetch user details')
+            raise jwt.InvalidTokenError(f"User details error: {error}")
 
-        if not hmac.compare_digest(signature, expected_signature):
-            raise ValueError("Invalid token signature")
+        user_details = details_response.json()
+        role = user_details['role'].lower()
+        app = user_details['app'].lower()
+        access = user_details['access']
+        email = user_details['email']
+        start_date = user_details['start_date']
 
-        if 'exp' in payload and payload['exp'] < time.time():
-            raise ValueError("Token has expired")
+        if role not in VALID_ROLES:
+            raise jwt.InvalidTokenError(f"Invalid role '{role}'")
+        if app not in VALID_APPS:
+            raise jwt.InvalidTokenError(f"Invalid app '{app}'")
+        
+        # Validate access based on app
+        if app == 'main':
+            valid_access = set(ACCESS_TO_BUTTON.keys())
+            if not all(acc in valid_access for acc in access):
+                raise jwt.InvalidTokenError(f"Invalid access for main app: {access}")
+        elif app == 'operations':
+            valid_access = {"writer", "proofreader", "formatter", "cover_designer"}
+            if not (len(access) == 1 and access[0] in valid_access):
+                raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
 
-        # Store validated user info in session_state
-        st.session_state.user = payload['user']
-        st.session_state.role = payload['role']
+        st.session_state.user_id = decoded['user_id']  # Store user_id
+        st.session_state.email = email
+        st.session_state.role = role
+        st.session_state.app = app
+        st.session_state.access = access
+        st.session_state.exp = decoded['exp']
+        st.session_state.start_date = start_date
 
-    except ValueError as e:
-        st.error(f"Access Denied: {e}")
+    except jwt.ExpiredSignatureError:
+        st.error("Access denied: Token expired. Please log in again.")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
+        st.stop()
+    except jwt.InvalidSignatureError:
+        st.error("Access denied: Invalid token signature. Please log in again.")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
+        st.stop()
+    except jwt.DecodeError:
+        st.error("Access denied: Token decoding failed. Please log in again.")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
+        st.stop()
+    except jwt.InvalidTokenError as e:
+        st.error(f"Access denied: {str(e)}. Please log in again.")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
+        st.stop()
+    except requests.RequestException:
+        st.error("Access denied: Unable to contact authentication server. Please try again later.")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
         st.stop()
 
+def clear_auth_session():
+    # Clear authentication-related session state keys
+    keys_to_clear = ['token', 'email', 'role', 'app', 'access', 'exp']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    # Clear query parameters to prevent token reuse
+    st.query_params.clear()
+
+# Run validation
 validate_token()
+
+user_role = st.session_state.get("role", "Unknown")
+user_app = st.session_state.get("app", "Unknown")
+user_access = st.session_state.get("access", [])
+user_id = st.session_state.get("user_id", "Unknown")
 
 #UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
 UPLOAD_DIR = "/home/rishabhvyas/bookledger/uploads"
 
 st.cache_data.clear()
+
+# Function to check if a button is allowed for the user's role and access
+def is_button_allowed(button_name, debug=False):
+    user_role = st.session_state.get("role", "Unknown")
+    user_access = st.session_state.get("access", [])  # Expecting a list like ['isbn', 'payment', 'authors']
+    
+    # Special case for admin-only buttons
+    if button_name == "manage_users":
+        return user_role == "admin"
+    
+    # Debug output (optional)
+    if debug:
+        st.write(f"Debug: role={user_role}, access={user_access}, button={button_name}")
+    
+    # Admins have access to all buttons
+    if user_role == "admin":
+        return True
+    # Invalid or unset role gets no access
+    if user_role != "user":
+        return False
+    
+    # For 'user' role, check if the button corresponds to an access value
+    allowed_buttons = [ACCESS_TO_BUTTON.get(access) for access in user_access if access in ACCESS_TO_BUTTON]
+    if debug:
+        st.write(f"Debug: allowed_buttons={allowed_buttons}")
+    return button_name in allowed_buttons
+
 
 # --- Database Connection ---
 def connect_db():
@@ -103,6 +212,28 @@ conn = connect_db()
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path is_publish_only, publisher FROM books"
 books = conn.query(query,show_spinner = False)
+
+# Apply date range filtering
+if user_role == "user" and user_app == "main":
+    start_date = st.session_state.get("start_date")
+    if start_date:
+        try:
+            # Convert inputs to pd.Timestamp for consistency
+            if isinstance(start_date, str):
+                start_date = pd.to_datetime(start_date)
+            elif isinstance(start_date, date):
+                start_date = pd.Timestamp(start_date)
+            # Ensure books['date'] is datetime64[ns]
+            books['date'] = pd.to_datetime(books['date'])
+            books = books[books['date'] >= start_date]
+        except Exception as e:
+            st.error(f"Error applying date filter: {e}")
+            books = books.iloc[0:0]  # Empty DataFrame on error
+    else:
+        st.warning("Please select a valid start date.")
+        books = books.iloc[0:0]  # Empty DataFrame if no start date
+elif user_role != "admin":
+    books = books.iloc[0:0]  # No data for invalid roles or user with app!='main'
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
@@ -149,6 +280,269 @@ def get_status_pill(deliver_value):
 
     return f"<span style='{pill_style} color: {text_color};'>{status}</span>"
 
+###################################################################################################################################
+##################################--------------- Admin Panel ----------------------------##################################
+###################################################################################################################################
+
+@st.dialog("Manage Users", width="large")
+def manage_users(conn):
+    # Check if user is admin
+    if st.session_state.get("role", None) != "admin":
+        st.error("❌ Access Denied: Only admins can manage users.")
+        return
+
+    # Initialize session state for show_passwords and confirm_delete_user_id
+    if "show_passwords" not in st.session_state:
+        st.session_state.show_passwords = False
+    if "confirm_delete_user_id" not in st.session_state:
+        st.session_state.confirm_delete_user_id = None
+
+    # Fetch all users from database
+    with conn.session as s:
+        users = s.execute(
+            text("SELECT id, username, email, password, role, app, access, start_date FROM users ORDER BY username")
+        ).fetchall()
+    
+    # Tabs for user management
+    tab1, tab2, tab3 = st.tabs(["View Users", "Add New User", "Edit Users"])
+
+    # Tab 1: View Users (Table + Add New User in Expander)
+    with tab1:
+        if not users:
+            st.error("❌ No users found in database.")
+        else:
+            # Show Password checkbox
+            st.markdown("### Users Overview", unsafe_allow_html=True)
+            st.checkbox(
+                "Show Passwords",
+                value=st.session_state.show_passwords,
+                key="toggle_passwords",
+                on_change=lambda: st.session_state.update({"show_passwords": not st.session_state.show_passwords}),
+                help="Check to reveal all passwords in the table"
+            )
+
+            # Prepare data for st.data_editor
+            user_data = [
+                {
+                    "ID": user.id,
+                    "Username": user.username,
+                    "Email": user.email or "",
+                    "Password": user.password if st.session_state.show_passwords else "••••••••",
+                    "Real_Password": user.password,  # Hidden column
+                    "Role": user.role,
+                    "App": user.app or "",
+                    "Access": user.access or "",
+                    "Start Date": user.start_date
+                }
+                for user in users
+            ]
+            df = pd.DataFrame(user_data)
+
+            # Display table
+            st.data_editor(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                disabled=["ID", "Username", "Email", "Password", "Real_Password", "Role", "App", "Access", "Start Date"],
+                column_config={
+                    "ID": st.column_config.NumberColumn("ID", help="Unique user ID", disabled=True),
+                    "Username": st.column_config.TextColumn("Username", help="User's username"),
+                    "Email": st.column_config.TextColumn("Email", help="User's email address"),
+                    "Password": st.column_config.TextColumn("Password", help="Password (masked by default)"),
+                    "Real_Password": None,  # Hide this column
+                    "Role": st.column_config.TextColumn("Role", help="User's role"),
+                    "App": st.column_config.TextColumn("App", help="User's app assignment"),
+                    "Access": st.column_config.TextColumn("Access", help="User's access permissions"),
+                    "Start Date": st.column_config.DateColumn("Start Date", help="Data access start date")
+                },
+                column_order=["ID", "Username", "Email", "Role", "App", "Access", "Start Date", "Password"],
+                num_rows="fixed",
+                key="user_table"
+            )
+    with tab2:
+        with st.container(border=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_username = st.text_input("Username", key="new_username", placeholder="Enter username")
+                new_email = st.text_input("Email", key="new_email", placeholder="Enter email")
+            with col2:
+                new_password = st.text_input("Password", key="new_password", type="password", placeholder="Enter password")
+                new_role = st.selectbox("Role", options=["admin", "user"], key="new_role")
+
+            col3, col4 = st.columns([1,3])
+            if new_role == "admin":
+                new_app = "main"
+                new_access = None
+                new_start_date = None
+                with col3:
+                    st.text_input("App", value=new_app, disabled=True, key="new_app")
+                with col4:
+                    st.text_input("Access", value="", disabled=True, key="new_access")
+                st.date_input("Data From", value=None, disabled=True, key="new_start_date")
+            else:
+                with col3:
+                    new_app = st.selectbox("App", options=["main", "operations"], key="new_app_select")
+                with col4:
+                    access_options = (
+                        list(ACCESS_TO_BUTTON.keys())
+                        if new_app == "main"
+                        else ["writer", "proofreader", "formatter", "cover_designer"]
+                    )
+                    if new_app == "main":
+                        new_access = st.multiselect(
+                            "Access",
+                            options=access_options,
+                            default=[],
+                            key="new_access_select",
+                            help="Select one or more access permissions"
+                        )
+                    else:
+                        new_access = st.selectbox(
+                            "Access",
+                            options=access_options,
+                            key="new_access_select",
+                            help="Select one access permission"
+                        )
+                new_start_date = st.date_input(
+                    "Data From",
+                    value=None,
+                    key="new_start_date",
+                    help="Select data access start date" if new_app == "main" else None,
+                    disabled=new_app != "main"
+                )
+
+            if st.button("Add User", key="add_user", type="primary", use_container_width=True):
+                if not new_username or not new_password:
+                    st.error("❌ Username and password are required.")
+                elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+                    st.error("❌ Invalid email format.")
+                else:
+                    access_value = None if new_role == "admin" else (
+                        ",".join(new_access) if new_app == "main" and new_access else
+                        new_access if new_app == "operations" and new_access else None
+                    )
+
+                    with st.spinner("Adding user..."):
+                        time.sleep(1)
+                        with conn.session as s:
+                            s.execute(
+                                text("""
+                                    INSERT INTO users (username, email, password, role, app, access, start_date)
+                                    VALUES (:username, :email, :password, :role, :app, :access, :start_date)
+                                """),
+                                {
+                                    "username": new_username,
+                                    "email": new_email if new_email else None,
+                                    "password": new_password,
+                                    "role": new_role,
+                                    "app": new_app,
+                                    "access": access_value,
+                                    "start_date": new_start_date
+                                }
+                            )
+                            s.commit()
+                        st.success("User Added Successfully!", icon="✔️")
+                        st.rerun()
+
+    with tab3:
+        if not users:
+            st.error("❌ No users found in database.")
+        else:
+            with st.container(border=True):
+                st.markdown("### Select User", unsafe_allow_html=True)
+                user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
+                selected_user_name = st.selectbox("Select User", options=list(user_dict.keys()), key="user_select")
+                selected_user = user_dict[selected_user_name]
+                st.markdown(f"**ID:** <span style='color: #2196F3'>{selected_user.id}</span>", unsafe_allow_html=True)
+
+            with st.container(border=True):
+                st.markdown(f"### Editing: <span style='color: #4CAF50'>{selected_user.username}</span>", unsafe_allow_html=True)
+                col1, col2 = st.columns(2)
+                with col1:
+                    new_username = st.text_input("Username", value=selected_user.username, key=f"username_{selected_user.id}")
+                    new_email = st.text_input("Email", value=selected_user.email or "", key=f"email_{selected_user.id}")
+                with col2:
+                    new_password = st.text_input("Password", value=selected_user.password or "", key=f"password_{selected_user.id}", type="password")
+                    valid_roles = ["admin", "user"]
+                    current_role = selected_user.role if selected_user.role in valid_roles else "user"
+                    if selected_user.role not in valid_roles:
+                        st.warning(f"⚠️ Invalid role '{selected_user.role}' detected. Defaulting to 'user'.")
+                    new_role = st.selectbox("Role", options=valid_roles, index=valid_roles.index(current_role), key=f"role_{selected_user.id}")
+
+                col3, col4 = st.columns([1,3])
+                if new_role == "admin":
+                    new_app = "main"
+                    new_access = None
+                    new_start_date = None
+                    with col3:
+                        st.text_input("App", value=new_app, disabled=True, key=f"app_{selected_user.id}")
+                    with col4:
+                        st.text_input("Access", value="", disabled=True, key=f"access_{selected_user.id}")
+                    st.date_input("Data From", value=None, disabled=True, key=f"start_date_{selected_user.id}")
+                else:
+                    with col3:
+                        new_app = st.selectbox("App", options=["main", "operations"], index=["main", "operations"].index(selected_user.app) if selected_user.app else 0, key=f"app_select_{selected_user.id}")
+                    with col4:
+                        access_options = list(ACCESS_TO_BUTTON.keys()) if new_app == "main" else ["writer", "proofreader", "formatter", "cover_designer"]
+                        if new_app == "main":
+                            default_access = [access.strip() for access in selected_user.access.split(",") if access.strip() in access_options] if selected_user.access and isinstance(selected_user.access, str) else []
+                            new_access = st.multiselect("Access", options=access_options, default=default_access, key=f"access_select_{selected_user.id}")
+                        else:
+                            new_access = st.selectbox("Access", options=access_options, index=access_options.index(selected_user.access) if selected_user.access in access_options else 0, key=f"access_select_{selected_user.id}")
+                    new_start_date = st.date_input("Data From", value=selected_user.start_date, key=f"start_date_{selected_user.id}", disabled=new_app != "main")
+
+                btn_col1, btn_col2 = st.columns([3, 1])
+                with btn_col1:
+                    if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary", use_container_width=True):
+                        if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+                            st.error("❌ Invalid email format.")
+                        else:
+                            access_value = None if new_role == "admin" else (",".join(new_access) if new_app == "main" and new_access else new_access if new_app == "operations" and new_access else None)
+                            with st.spinner("Saving changes..."):
+                                time.sleep(1)
+                                with conn.session as s:
+                                    s.execute(
+                                        text("""
+                                            UPDATE users 
+                                            SET username = :username, email = :email, password = :password,
+                                                role = :role, app = :app, access = :access, start_date = :start_date
+                                            WHERE id = :id
+                                        """),
+                                        {
+                                            "username": new_username,
+                                            "email": new_email if new_email else None,
+                                            "password": new_password if new_password else None,
+                                            "role": new_role,
+                                            "app": new_app,
+                                            "access": access_value,
+                                            "start_date": new_start_date,
+                                            "id": selected_user.id
+                                        }
+                                    )
+                                    s.commit()
+                                st.success("User Updated Successfully!", icon="✔️")
+                                st.rerun()
+
+                with btn_col2:
+                    if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", use_container_width=True):
+                        st.session_state.confirm_delete_user_id = selected_user.id
+
+                if st.session_state.confirm_delete_user_id == selected_user.id:
+                    st.warning(f"Are you sure you want to delete {selected_user.username} (ID: {selected_user.id})?")
+                    confirm_col1, confirm_col2 = st.columns([4, 1])
+                    with confirm_col1:
+                        if st.button("❌ Cancel", key=f"cancel_delete_{selected_user.id}"):
+                            st.session_state.confirm_delete_user_id = None
+                    with confirm_col2:
+                        if st.button("✔️ Confirm", key=f"confirm_delete_{selected_user.id}"):
+                            with st.spinner("Deleting user..."):
+                                time.sleep(1)
+                                with conn.session as s:
+                                    s.execute(text("DELETE FROM users WHERE id = :id"), {"id": selected_user.id})
+                                    s.commit()
+                                st.success("User Deleted Successfully!", icon="✔️")
+                                st.session_state.confirm_delete_user_id = None
+                                st.rerun()
 
 ###################################################################################################################################
 ##################################--------------- Edit Auhtor Details ----------------------------##################################
@@ -264,7 +658,7 @@ def edit_author_detail(conn):
             with confirm_col2:
                 if st.button("✔️ Confirm", key=f"confirm_{delete_key}"):
                     with st.spinner("Deleting author..."):
-                        time.sleep(2)
+                        time.sleep(1)
                         with conn.session as s:
                             s.execute(
                                 text("DELETE FROM authors WHERE author_id = :author_id"),
@@ -565,7 +959,7 @@ def add_book_dialog(conn):
                 st.error("\n".join(errors), icon="🚨")
             else:
                 with st.spinner("Saving..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     with conn.session as s:
                         try:
                             # Handle syllabus file upload
@@ -757,7 +1151,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
             # Display current syllabus if it exists
             if current_syllabus_path:
                 st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
-                # Optionally provide a download link (if file exists)
+                # Provide download link (if file exists)
                 if os.path.exists(current_syllabus_path):
                     with open(current_syllabus_path, "rb") as f:
                         st.download_button(
@@ -778,6 +1172,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                     key=f"syllabus_upload_{book_id}",
                     help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image)."
                 )
+                # Warn about overwrite if a new file is uploaded and a current syllabus exists
+                if syllabus_file and current_syllabus_path:
+                    st.warning("Uploading a new syllabus will replace the existing one.")
             else:
                 st.info("Syllabus upload is disabled for Publish Only books.")
             st.markdown('</div>', unsafe_allow_html=True)
@@ -785,24 +1182,44 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
             with st.spinner("Saving changes..."):
+                os.makedirs(UPLOAD_DIR, exist_ok=True)
+
                 # Handle syllabus file upload
                 new_syllabus_path = current_syllabus_path  # Keep existing path by default
                 if syllabus_file and not new_is_publish_only:
+                    # Debug file details
+                    st.write(f"Received file: {syllabus_file.name}, size: {syllabus_file.size}")
+                    
                     # Generate a unique filename
                     file_extension = os.path.splitext(syllabus_file.name)[1]
                     unique_filename = f"syllabus_{new_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
-                    new_syllabus_path = os.path.join(UPLOAD_DIR, unique_filename)
+                    new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                    
+                    # Verify directory permissions
+                    if not os.access(UPLOAD_DIR, os.W_OK):
+                        st.error(f"No write permission for {UPLOAD_DIR}.")
+                        raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
                     
                     # Save the new file
-                    with open(new_syllabus_path, "wb") as f:
-                        f.write(syllabus_file.getbuffer())
-                    
-                    # Optionally delete the old syllabus file (if it exists and is different)
-                    if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
-                        try:
-                            os.remove(current_syllabus_path)
-                        except OSError:
-                            st.warning(f"Could not delete old syllabus file: {current_syllabus_path}")
+                    try:
+                        with open(new_syllabus_path_temp, "wb") as f:
+                            f.write(syllabus_file.getbuffer())
+                        new_syllabus_path = new_syllabus_path_temp
+                        st.write(f"New syllabus saved to: {new_syllabus_path}")
+                        
+                        # Delete the old syllabus file (if it exists and is different)
+                        if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
+                            try:
+                                os.remove(current_syllabus_path)
+                                st.write(f"Old syllabus deleted: {current_syllabus_path}")
+                            except OSError as e:
+                                st.warning(f"Could not delete old syllabus file: {str(e)}")
+                    except PermissionError:
+                        st.error(f"Permission denied: Cannot write to {new_syllabus_path_temp}.")
+                        raise
+                    except Exception as e:
+                        st.error(f"Failed to save syllabus file: {str(e)}")
+                        raise
 
                 with conn.session as s:
                     try:
@@ -1028,7 +1445,7 @@ def manage_price_dialog(book_id, current_price, conn):
             
             if st.button("Save Book Price", key=f"save_price_{book_id}"):
                 with st.spinner("Saving..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     try:
                         price = int(price_str) if price_str.strip() else None
                         if price is not None and price < 0:
@@ -1216,7 +1633,7 @@ def manage_price_dialog(book_id, current_price, conn):
                     # Save button
                     if st.button("Save Payment", key=f"save_payment_{row['id']}"):
                         with st.spinner("Saving Payment..."):
-                            time.sleep(2)
+                            time.sleep(1)
                             if new_paid > new_total:
                                 st.error("Total EMI payments cannot exceed total amount")
                             elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
@@ -1430,6 +1847,7 @@ MAX_EDITORS_PER_CHAPTER = 2
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large')
 def edit_author_dialog(book_id, conn):
+    import time
     # Fetch book details for title, is_single_author, num_copies, and print_status
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
@@ -1672,7 +2090,7 @@ def edit_author_dialog(book_id, conn):
 
                             try:
                                 with st.spinner("Saving changes..."):
-                                    time.sleep(2)
+                                    time.sleep(1)
                                     update_book_authors(row['id'], updates, conn)
                                     st.cache_data.clear()
                                     st.success(f"✔️ Updated details for {row['name']} (Author ID: {row['author_id']})")
@@ -1697,7 +2115,7 @@ def edit_author_dialog(book_id, conn):
                             if st.form_submit_button("Yes, Remove", use_container_width=True, type="primary"):
                                 try:
                                     with st.spinner("Removing author..."):
-                                        time.sleep(2)
+                                        time.sleep(1)
                                         delete_book_author(row['id'], conn)
                                         st.cache_data.clear()
                                         st.success(f"✔️ Removed {row['name']} (Author ID: {row['author_id']}) from this book")
@@ -1888,7 +2306,7 @@ def edit_author_dialog(book_id, conn):
                         with col_save:
                             if st.button("Save Chapter", key=f"save_chapter_{chapter_id}"):
                                 with st.spinner("Saving chapter..."):
-                                    time.sleep(2)  # 2-second delay for UX
+                                    time.sleep(1)  # 2-second delay for UX
                                     errors = []
                                     if not edit_data["chapter_title"]:
                                         errors.append("Chapter title is required.")
@@ -1973,7 +2391,7 @@ def edit_author_dialog(book_id, conn):
                         with col_delete:
                             if st.button("Delete Chapter", key=f"delete_chapter_{chapter_id}"):
                                 with st.spinner("Deleting chapter..."):
-                                    time.sleep(2)  # 2-second delay for UX
+                                    time.sleep(1)  # 2-second delay for UX
                                     try:
                                         with conn.session as s:
                                             s.begin()
@@ -2187,7 +2605,7 @@ def edit_author_dialog(book_id, conn):
             with col_save:
                 if st.button("Add Chapter and Editors", key="add_chapters", type="primary"):
                     with st.spinner("Saving chapter..."):
-                        time.sleep(2)  # 2-second delay for UX
+                        time.sleep(1)  # 2-second delay for UX
                         errors = []
                         chapter = st.session_state.new_chapters[0]
                         existing_numbers = [int(c["chapter_number"]) for _, c in chapters.iterrows()]
@@ -2321,7 +2739,7 @@ def edit_author_dialog(book_id, conn):
                 try:
                     with st.spinner("Updating author mode..."):
                         with conn.session as s:
-                            time.sleep(2)
+                            time.sleep(1)
                             s.execute(
                                 text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
                                 {"is_single_author": int(new_is_single_author), "book_id": book_id}
@@ -2810,7 +3228,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
                 with st.spinner("Saving Writing details..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
                     writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
                     if writing_start and writing_end and writing_start > writing_end:
@@ -2872,7 +3290,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
                 with st.spinner("Saving Proofreading details..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
                     proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
                     if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
@@ -2934,7 +3352,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 with st.spinner("Saving Formatting details..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                     formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
                     if formatting_start and formatting_end and formatting_start > formatting_end:
@@ -2998,7 +3416,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Cover Details", use_container_width=True):
                 with st.spinner("Saving Cover details..."):
-                    time.sleep(2)
+                    time.sleep(1)
                     front_cover_start = f"{front_cover_start_date} {front_cover_start_time}" if front_cover_start_date and front_cover_start_time else None
                     front_cover_end = f"{front_cover_end_date} {front_cover_end_time}" if front_cover_end_date and front_cover_end_time else None
                     back_cover_start = f"{back_cover_start_date} {back_cover_start_time}" if back_cover_start_date and back_cover_start_time else None
@@ -3303,7 +3721,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                         if save_edit:
                             with st.spinner("Saving edited print run..."):
-                                time.sleep(2)
+                                time.sleep(1)
                                 try:
                                     with conn.session as session:
                                         # Update print_runs table
@@ -3406,7 +3824,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                     if save_new_print:
                         with st.spinner("Saving new print run..."):
-                            time.sleep(2)
+                            time.sleep(1)
                             try:
                                 if st.session_state[f"new_num_copies_{book_id}"] > 0:
                                     with conn.session as session:
@@ -3633,7 +4051,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 # Handle form submission (moved inside the form context)
                 if save_inventory:
                     with st.spinner("Saving Inventory details..."):
-                        time.sleep(2)
+                        time.sleep(1)
                         try:
                             # Update books table for links, reviews, and MRP
                             book_updates = {
@@ -4006,7 +4424,9 @@ with srcol2:
 
         # Status filter with pills (Delivered, On Going, Pending Payment, single selection)
         st.write("Filter by Status:")
-        status_options = ["Delivered", "On Going", "Pending Payment"]
+        status_options = ["Delivered", "On Going"]
+        if user_role == "admin":
+            status_options.append("Pending Payment")
         selected_status = st.pills(
             "Status",
             options=status_options,
@@ -4075,15 +4495,27 @@ with srcol5:
     st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
                                               label_visibility="collapsed")
 
-# Add New Book button
 with srcol3:
-    if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
-        add_book_dialog(conn)
+    # Add Book button
+    if is_button_allowed("add_book_dialog"):
+        if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
+            add_book_dialog(conn)
+    else:
+        st.button(":material/add: Book", type="secondary", help="Add New Book (Disabled)", use_container_width=True, disabled=True)
 
 with srcol4:
-    with st.popover("More", use_container_width=True, help = "More Options"):
-        if st.button("Edit Authors", key="edit_author_btn", type ="tertiary", icon = "✏️"):
-            edit_author_detail(conn)
+    with st.popover("More", use_container_width=True, help="More Options"):
+        # Edit Authors button
+        if is_button_allowed("edit_author_detail"):
+            if st.button("Edit Authors", key="edit_author_btn", type="tertiary", icon="✏️"):
+                edit_author_detail(conn)
+        else:
+            st.button("Edit Authors", key="edit_author_btn", type="tertiary", icon="✏️", help="Edit Authors (Disabled)", disabled=True)
+        
+        # User Access button (hidden for non-admin)
+        if st.session_state.get("role") == "admin":
+            if st.button("User Access", key="user_access", type="tertiary", icon="👤"):
+                manage_users(conn)
     
 
 # Pagination Logic (Modified)
@@ -4159,6 +4591,7 @@ delivery_icon = ":material/local_shipping:"
 # ops_icon = ":material/check_circle:"
 # delivery_icon = ":material/hourglass_top:"
 
+
 # Display the table
 column_size = [0.5, 4, 1, 1, 1, 2]
 
@@ -4232,28 +4665,48 @@ with cont:
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
                     with btn_col1:
-                        if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
-                            manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
+                        # ISBN button (manage_isbn_dialog)
+                        if is_button_allowed("manage_isbn_dialog"):
+                            if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
+                                manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
+                        else:
+                            st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN (Disabled)", disabled=True)
                     with btn_col2:
+                        # Price button (manage_price_dialog)
                         publisher = row.get('publisher', '')
-                        if publisher not in ["AG Kids", "NEET/JEE"]:
-                            if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
-                                manage_price_dialog(row['book_id'], row['price'], conn)
+                        if publisher not in ["AG Kids", "NEET/JEE"] or st.session_state.get("role") == "admin":
+                            if is_button_allowed("manage_price_dialog"):
+                                if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
+                                    manage_price_dialog(row['book_id'], row['price'], conn)
+                            else:
+                                st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price (Disabled)", disabled=True)
                         else:
                             st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Price management disabled for this publisher", disabled=True)
                     with btn_col3:
+                        # Author button (edit_author_dialog)
                         publisher = row.get('publisher', '')
-                        if publisher not in ["AG Kids", "NEET/JEE"]:
-                            if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
-                                edit_author_dialog(row['book_id'], conn)
+                        if publisher not in ["AG Kids", "NEET/JEE"] or st.session_state.get("role") == "admin":
+                            if is_button_allowed("edit_author_dialog"):
+                                if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
+                                    edit_author_dialog(row['book_id'], conn)
+                            else:
+                                st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors (Disabled)", disabled=True)
                         else:
                             st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Author editing disabled for this publisher", disabled=True)
                     with btn_col4:
-                        if st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations"):
-                            edit_operation_dialog(row['book_id'], conn)
+                        # Operations button (edit_operation_dialog)
+                        if is_button_allowed("edit_operation_dialog"):
+                            if st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations"):
+                                edit_operation_dialog(row['book_id'], conn)
+                        else:
+                            st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations (Disabled)", disabled=True)
                     with btn_col5:
-                        if st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery"):
-                            edit_inventory_delivery_dialog(row['book_id'], conn)
+                        # Delivery button (edit_inventory_delivery_dialog)
+                        if is_button_allowed("edit_inventory_delivery_dialog"):
+                            if st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery"):
+                                edit_inventory_delivery_dialog(row['book_id'], conn)
+                        else:
+                            st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery (Disabled)", disabled=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
