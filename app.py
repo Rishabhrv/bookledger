@@ -15,6 +15,14 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+# Configure logging to write to a file
+logging.basicConfig(
+    filename="streamlit.log",
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
 # Set page configuration
 st.set_page_config(
     menu_items={
