@@ -61,11 +61,12 @@ ACCESS_TO_BUTTON = {
 # VALID_ROLES = {"admin", "user"}
 # VALID_APPS = {"main", "operations"}
 
-FLASK_VALIDATE_URL = "https://crmserver.agvolumes.com/validate_token"
-FLASK_USER_DETAILS_URL = "https://crmserver.agvolumes.com/user_details"
+FLASK_VALIDATE_URL = "http://127.0.0.1:5001/validate_token"
+FLASK_USER_DETAILS_URL = "http://127.0.0.1:5001/user_details"
+FLASK_LOGOUT_URL = "http://127.0.0.1:5001/logout"
+FLASK_LOGIN_URL = "http://127.0.0.1:5001/logout"
+
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
-FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
-FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 VALID_ROLES = {"admin", "user"}
 VALID_APPS = {"main", "operations"}
 
