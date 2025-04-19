@@ -210,11 +210,16 @@ def clear_auth_session():
 # Run validation
 validate_token()
 
+# st.session_state.role = 'admin'
+# st.session_state.username = 'Yogesh Sharma'
+# st.session_state.app = 'main'
+
 user_role = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
+
 
 #UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
 UPLOAD_DIR = "/home/rishabhvyas/bookledger/uploads"
@@ -4331,11 +4336,8 @@ def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, e
 c1,c2 = st.columns([14,1], vertical_alignment="bottom")
 
 with c1:
-    col1, col2 = st.columns([1,9])
-    with col1:
-        st.markdown("## 📚 AGPH Books")
-    with col2:
-        st.caption(f"Welcome {user_name} ({user_role})")
+    st.markdown("## 📚 AGPH Books")
+    st.caption(f":material/account_circle: Welcome! {user_name} ({user_role})")
 
 with c2:
     if st.button(":material/refresh: Refresh", key="refresh_books", type="tertiary"):
