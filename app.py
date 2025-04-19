@@ -10,14 +10,28 @@ import requests
 import datetime
 import time
 import logging
+from logging.handlers import RotatingFileHandler
+from typing import Dict, List, Set
+
+# Custom filter to exclude watchdog logs
+class NoWatchdogFilter(logging.Filter):
+    def filter(self, record):
+        return not record.name.startswith('watchdog')
 
 # Configure logging
-logging.basicConfig(
-    filename='streamlit.log',
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('streamlit_app')
+logger.setLevel(logging.DEBUG)
+
+# Remove any existing handlers to avoid duplicate logs
+logger.handlers = []
+
+# Create a rotating file handler (max 1MB, keep 3 backups)
+handler = RotatingFileHandler('streamlit.log', maxBytes=1_000_000, backupCount=3)
+handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+handler.addFilter(NoWatchdogFilter())
+logger.addHandler(handler)
 
 # Set page configuration
 st.set_page_config(
@@ -125,7 +139,7 @@ def validate_token():
         logger.debug(f"Requesting user details: {FLASK_USER_DETAILS_URL}")
         details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=10)
         logger.debug(f"User details response: status={details_response.status_code}, body={details_response.text}")
-        if details_response.status_code != 200 or not details_response.json().get('valid'):
+        if details_response.status_code != 200 or not response.json().get('valid'):
             error = details_response.json().get('error', 'Unable to fetch user details')
             logger.error(f"User details fetch failed: {error}")
             raise jwt.InvalidTokenError(f"User details error: {error}")
@@ -204,7 +218,7 @@ def validate_token():
 
 def clear_auth_session():
     logger.info("Clearing authentication session")
-    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'exp']
+    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'end_date', 'exp']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
