@@ -9,7 +9,11 @@ import jwt
 import requests
 import datetime
 import time
+import logging
 
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Set page configuration
 st.set_page_config(
@@ -81,17 +85,22 @@ def validate_token():
     try:
         # Local validation: only check for user_id and exp
         decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        logger.debug(f"Decoded token: {decoded}")
         if 'user_id' not in decoded or 'exp' not in decoded:
             raise jwt.InvalidTokenError("Missing user_id or exp")
 
         # Server-side token validation
-        response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=5)
+        logger.debug(f"Requesting {FLASK_VALIDATE_URL}")
+        response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=10)
+        logger.debug(f"Validate response: {response.status_code}, {response.text}")
         if response.status_code != 200 or not response.json().get('valid'):
             error = response.json().get('error', 'Invalid token')
             raise jwt.InvalidTokenError(error)
 
         # Fetch user details
-        details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=5)
+        logger.debug(f"Requesting {FLASK_USER_DETAILS_URL}")
+        details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=10)
+        logger.debug(f"User details response: {details_response.status_code}, {details_response.text}")
         if details_response.status_code != 200 or not details_response.json().get('valid'):
             error = details_response.json().get('error', 'Unable to fetch user details')
             raise jwt.InvalidTokenError(f"User details error: {error}")
@@ -118,13 +127,13 @@ def validate_token():
             if not (len(access) == 1 and access[0] in valid_access):
                 raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
 
-        st.session_state.user_id = decoded['user_id']  # Store user_id
+        st.session_state.user_id = decoded['user_id']
         st.session_state.email = email
         st.session_state.role = role
         st.session_state.app = app
         st.session_state.access = access
-        st.session_state.exp = decoded['exp']
         st.session_state.start_date = start_date
+        st.session_state.exp = decoded['exp']
 
     except jwt.ExpiredSignatureError:
         st.error("Access denied: Token expired. Please log in again.")
@@ -146,11 +155,24 @@ def validate_token():
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
-    except requests.RequestException:
+    except requests.RequestException as e:
+        logger.error(f"Request failed: {str(e)}")
         st.error("Access denied: Unable to contact authentication server. Please try again later.")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
+
+def clear_auth_session():
+    # Clear authentication-related session state keys
+    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'end_date', 'exp']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    # Clear query parameters to prevent token reuse
+    st.query_params.clear()
+
+# Run validation
+validate_token()
 
 def clear_auth_session():
     # Clear authentication-related session state keys
