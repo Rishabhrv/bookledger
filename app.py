@@ -11,7 +11,6 @@ import datetime
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Dict, List, Set
 
 # Custom filter to exclude watchdog logs
 class NoWatchdogFilter(logging.Filter):
@@ -101,7 +100,7 @@ def validate_token():
     try:
         test_response = requests.get("http://127.0.0.1:5001", timeout=5)
         logger.debug(f"Test request to Flask: status={test_response.status_code}, response={test_response.text}")
-        st.write(f"Test request to Flask: status={test_response.status_code}, response={test_response.text}")
+        # Removed st.write to avoid displaying HTML in UI
     except requests.RequestException as e:
         logger.error(f"Test request to Flask failed: {str(e)}", exc_info=True)
         st.error(f"Test request to Flask failed: {str(e)}")
