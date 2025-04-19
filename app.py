@@ -12,14 +12,10 @@ import time
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-
-# Configure logging to write to a file
 logging.basicConfig(
-    filename="streamlit.log",
+    filename='streamlit.log',
     level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -69,15 +65,15 @@ ACCESS_TO_BUTTON = {
 # VALID_ROLES = {"admin", "user"}
 # VALID_APPS = {"main", "operations"}
 
-FLASK_VALIDATE_URL = "http://127.0.0.1:5001/validate_token"
-FLASK_USER_DETAILS_URL = "http://127.0.0.1:5001/user_details"
-FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"  # Keep this as is if externally accessible
-FLASK_LOGOUT_URL = "http://127.0.0.1:5001/logout"
+# FLASK_VALIDATE_URL = "http://127.0.0.1:5001/validate_token"
+# FLASK_USER_DETAILS_URL = "http://127.0.0.1:5001/user_details"
+# FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"  # Keep this as is if externally accessible
+# FLASK_LOGOUT_URL = "http://127.0.0.1:5001/logout"
 
-# FLASK_VALIDATE_URL = "https://crmserver.agvolumes.com/validate_token"
-# FLASK_USER_DETAILS_URL = "https://crmserver.agvolumes.com/user_details"
-# FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
-# FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
+FLASK_VALIDATE_URL = "https://crmserver.agvolumes.com/validate_token"
+FLASK_USER_DETAILS_URL = "https://crmserver.agvolumes.com/user_details"
+FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
+FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
@@ -85,38 +81,53 @@ VALID_APPS = {"main", "operations"}
 
 
 def validate_token():
-    # Check if token exists in session state or query params
+    logger.info("Starting token validation")
+    
+    # Test connectivity to Flask
+    try:
+        test_response = requests.get("http://127.0.0.1:5001", timeout=5)
+        logger.debug(f"Test request to Flask: status={test_response.status_code}, response={test_response.text}")
+        st.write(f"Test request to Flask: status={test_response.status_code}, response={test_response.text}")
+    except requests.RequestException as e:
+        logger.error(f"Test request to Flask failed: {str(e)}", exc_info=True)
+        st.error(f"Test request to Flask failed: {str(e)}")
+    
+    # Check if token exists
     if 'token' not in st.session_state:
         token = st.query_params.get("token")
         if not token:
+            logger.error("No token provided")
             st.error("Access denied: Please log in first")
             st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
             st.stop()
         st.session_state.token = token if isinstance(token, str) else token[0]
+        logger.debug(f"Token received from query params: {st.session_state.token}")
 
     token = st.session_state.token
 
     try:
-        # Local validation: only check for user_id and exp
+        # Local validation
         decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
         logger.debug(f"Decoded token: {decoded}")
         if 'user_id' not in decoded or 'exp' not in decoded:
             raise jwt.InvalidTokenError("Missing user_id or exp")
 
         # Server-side token validation
-        logger.debug(f"Requesting {FLASK_VALIDATE_URL}")
+        logger.debug(f"Requesting validation: {FLASK_VALIDATE_URL}")
         response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=10)
-        logger.debug(f"Validate response: {response.status_code}, {response.text}")
+        logger.debug(f"Validate response: status={response.status_code}, body={response.text}")
         if response.status_code != 200 or not response.json().get('valid'):
             error = response.json().get('error', 'Invalid token')
+            logger.error(f"Token validation failed: {error}")
             raise jwt.InvalidTokenError(error)
 
         # Fetch user details
-        logger.debug(f"Requesting {FLASK_USER_DETAILS_URL}")
+        logger.debug(f"Requesting user details: {FLASK_USER_DETAILS_URL}")
         details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=10)
-        logger.debug(f"User details response: {details_response.status_code}, {details_response.text}")
+        logger.debug(f"User details response: status={details_response.status_code}, body={details_response.text}")
         if details_response.status_code != 200 or not details_response.json().get('valid'):
             error = details_response.json().get('error', 'Unable to fetch user details')
+            logger.error(f"User details fetch failed: {error}")
             raise jwt.InvalidTokenError(f"User details error: {error}")
 
         user_details = details_response.json()
@@ -127,18 +138,22 @@ def validate_token():
         start_date = user_details['start_date']
 
         if role not in VALID_ROLES:
+            logger.error(f"Invalid role: {role}")
             raise jwt.InvalidTokenError(f"Invalid role '{role}'")
         if app not in VALID_APPS:
+            logger.error(f"Invalid app: {app}")
             raise jwt.InvalidTokenError(f"Invalid app '{app}'")
         
         # Validate access based on app
         if app == 'main':
             valid_access = set(ACCESS_TO_BUTTON.keys())
             if not all(acc in valid_access for acc in access):
+                logger.error(f"Invalid access for main app: {access}")
                 raise jwt.InvalidTokenError(f"Invalid access for main app: {access}")
         elif app == 'operations':
             valid_access = {"writer", "proofreader", "formatter", "cover_designer"}
             if not (len(access) == 1 and access[0] in valid_access):
+                logger.error(f"Invalid access for operations app: {access}")
                 raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
 
         st.session_state.user_id = decoded['user_id']
@@ -148,54 +163,53 @@ def validate_token():
         st.session_state.access = access
         st.session_state.start_date = start_date
         st.session_state.exp = decoded['exp']
+        logger.info(f"Token validated successfully for user: {email}")
 
-    except jwt.ExpiredSignatureError:
+    except jwt.ExpiredSignatureError as e:
+        logger.error(f"Token expired: {str(e)}", exc_info=True)
         st.error("Access denied: Token expired. Please log in again.")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
-    except jwt.InvalidSignatureError:
+    except jwt.InvalidSignatureError as e:
+        logger.error(f"Invalid token signature: {str(e)}", exc_info=True)
         st.error("Access denied: Invalid token signature. Please log in again.")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
-    except jwt.DecodeError:
+    except jwt.DecodeError as e:
+        logger.error(f"Token decoding failed: {str(e)}", exc_info=True)
         st.error("Access denied: Token decoding failed. Please log in again.")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
     except jwt.InvalidTokenError as e:
+        logger.error(f"Invalid token: {str(e)}", exc_info=True)
         st.error(f"Access denied: {str(e)}. Please log in again.")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
     except requests.RequestException as e:
-        logger.error(f"Request failed: {str(e)}")
-        st.error("Access denied: Unable to contact authentication server. Please try again later.")
+        logger.error(f"Request to Flask failed: {str(e)}", exc_info=True)
+        st.error(f"Access denied: Unable to contact authentication server. Error: {str(e)}")
+        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        clear_auth_session()
+        st.stop()
+    except Exception as e:
+        logger.error(f"Unexpected error in validate_token: {str(e)}", exc_info=True)
+        st.error(f"Access denied: An unexpected error occurred. Error: {str(e)}")
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
 
 def clear_auth_session():
-    # Clear authentication-related session state keys
+    logger.info("Clearing authentication session")
     keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'end_date', 'exp']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
-    # Clear query parameters to prevent token reuse
     st.query_params.clear()
-
-# Run validation
-validate_token()
-
-def clear_auth_session():
-    # Clear authentication-related session state keys
-    keys_to_clear = ['token', 'email', 'role', 'app', 'access', 'exp']
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-    # Clear query parameters to prevent token reuse
-    st.query_params.clear()
+    logger.debug("Session and query params cleared")
 
 # Run validation
 validate_token()
