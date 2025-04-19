@@ -204,7 +204,7 @@ def validate_token():
 
 def clear_auth_session():
     logger.info("Clearing authentication session")
-    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'end_date', 'exp']
+    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'exp']
     for key in keys_to_clear:
         if key in st.session_state:
             del st.session_state[key]
