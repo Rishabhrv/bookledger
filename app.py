@@ -5,12 +5,11 @@ from datetime import date
 import time
 import re
 import os
-import jwt
-import requests
 import datetime
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from auth import validate_token
 
 # Custom filter to exclude watchdog logs
 class NoWatchdogFilter(logging.Filter):
@@ -32,6 +31,7 @@ handler.setFormatter(formatter)
 handler.addFilter(NoWatchdogFilter())
 logger.addHandler(handler)
 
+
 # Set page configuration
 st.set_page_config(
     menu_items={
@@ -44,6 +44,15 @@ st.set_page_config(
     page_title="AGPH Books",
 )
 
+logo = "logo/logo_black.png"
+fevicon = "logo/favicon_black.ico"
+small_logo = "logo/favicon_white.ico"
+
+st.logo(logo,
+size = "large",
+icon_image = small_logo
+)
+
 # Inject CSS to remove the menu (optional)
 hide_menu_style = """
     <style>
@@ -54,7 +63,6 @@ hide_menu_style = """
 
 st.markdown(hide_menu_style, unsafe_allow_html=True)
 
-
 # Define mapping of access values to button functions
 ACCESS_TO_BUTTON = {
     # Loop buttons (table)
@@ -63,152 +71,15 @@ ACCESS_TO_BUTTON = {
     "Authors": "edit_author_dialog",
     "Operations": "edit_operation_dialog",
     "Printing & Delivery": "edit_inventory_delivery_dialog",
+    "DatadashBoard": "datadashoard",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
 }
 
-
-# Configuration
-# FLASK_VALIDATE_URL = "http://localhost:5000/validate_token"
-# FLASK_USER_DETAILS_URL = "http://localhost:5000/user_details"
-# JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
-# FLASK_LOGIN_URL = "http://localhost:5000/login"
-# FLASK_LOGOUT_URL = "http://localhost:5000/logout"
-# VALID_ROLES = {"admin", "user"}
-# VALID_APPS = {"main", "operations"}
-
-
-FLASK_VALIDATE_URL = "https://crmserver.agvolumes.com/validate_token"
-FLASK_USER_DETAILS_URL = "https://crmserver.agvolumes.com/user_details"
-FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
-FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
-
-JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
-VALID_ROLES = {"admin", "user"}
-VALID_APPS = {"main", "operations"}
-
-
-def validate_token():
-    # Check if token exists
-    if 'token' not in st.session_state:
-        token = st.query_params.get("token")
-        if not token:
-            logger.error("No token provided")
-            st.error("Access denied: Please log in first")
-            st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-            st.stop()
-        st.session_state.token = token if isinstance(token, str) else token[0]
-
-    token = st.session_state.token
-
-    try:
-        # Local validation
-        decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-        if 'user_id' not in decoded or 'exp' not in decoded:
-            raise jwt.InvalidTokenError("Missing user_id or exp")
-
-        # Server-side token validation
-        response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=10)
-        if response.status_code != 200 or not response.json().get('valid'):
-            error = response.json().get('error', 'Invalid token')
-            logger.error(f"Token validation failed: {error}")
-            raise jwt.InvalidTokenError(error)
-
-        # Fetch user details
-        details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=10)
-        if details_response.status_code != 200 or not details_response.json().get('valid'):
-            error = details_response.json().get('error', 'Unable to fetch user details')
-            logger.error(f"User details fetch failed: {error}")
-            raise jwt.InvalidTokenError(f"User details error: {error}")
-
-        user_details = details_response.json()
-        role = user_details['role'].lower()
-        app = user_details['app'].lower()
-        access = user_details['access']
-        email = user_details['email']
-        start_date = user_details['start_date']
-        username = user_details['username']
-
-        if role not in VALID_ROLES:
-            logger.error(f"Invalid role: {role}")
-            raise jwt.InvalidTokenError(f"Invalid role '{role}'")
-        
-        # Skip app and access validation for admins
-        if role != 'admin':
-            if app not in VALID_APPS:
-                logger.error(f"Invalid app: {app}")
-                raise jwt.InvalidTokenError(f"Invalid app '{app}'")
-            
-            # Validate access based on app
-            if app == 'main':
-                valid_access = set(ACCESS_TO_BUTTON.keys())
-                if not all(acc in valid_access for acc in access):
-                    logger.error(f"Invalid access for main app: {access}")
-                    raise jwt.InvalidTokenError(f"Invalid access for main app: {access}")
-            elif app == 'operations':
-                valid_access = {"writer", "proofreader", "formatter", "cover_designer"}
-                if not (len(access) == 1 and access[0] in valid_access):
-                    logger.error(f"Invalid access for operations app: {access}")
-                    raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
-
-        st.session_state.user_id = decoded['user_id']
-        st.session_state.email = email
-        st.session_state.role = role
-        st.session_state.app = app
-        st.session_state.access = access
-        st.session_state.start_date = start_date
-        st.session_state.username = username
-        st.session_state.exp = decoded['exp']
-        logger.info(f"Token validated successfully for user: {email}")
-
-    except jwt.ExpiredSignatureError as e:
-        logger.error(f"Token expired: {str(e)}", exc_info=True)
-        st.error("Access denied: Token expired. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-    except jwt.InvalidSignatureError as e:
-        logger.error(f"Invalid token signature: {str(e)}", exc_info=True)
-        st.error("Access denied: Invalid token signature. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-    except jwt.DecodeError as e:
-        logger.error(f"Token decoding failed: {str(e)}", exc_info=True)
-        st.error("Access denied: Token decoding failed. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-    except jwt.InvalidTokenError as e:
-        logger.error(f"Invalid token: {str(e)}", exc_info=True)
-        st.error(f"Access denied: {str(e)}. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-    except requests.RequestException as e:
-        logger.error(f"Request to Flask failed: {str(e)}", exc_info=True)
-        st.error(f"Access denied: Unable to contact authentication server. Error: {str(e)}")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-    except Exception as e:
-        logger.error(f"Unexpected error in validate_token: {str(e)}", exc_info=True)
-        st.error(f"Access denied: An unexpected error occurred. Error: {str(e)}")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
-
-def clear_auth_session():
-    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'username', 'exp']
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.query_params.clear()
-    logger.info("Session and query params cleared")
-
 # Run validation
 validate_token()
+
 
 # st.session_state.role = 'admin'
 # st.session_state.username = 'Yogesh Sharma'
@@ -290,8 +161,8 @@ if user_role == "user" and user_app == "main":
             st.error(f"Error applying date filter: {e}")
             books = books.iloc[0:0]  # Empty DataFrame on error
     else:
-        st.warning("Please select a valid start date.")
-        books = books.iloc[0:0]  # Empty DataFrame if no start date
+        st.warning("⚠️ Problem in Date. Contact Admin for Valid date.")
+        st.stop()
 elif user_role != "admin":
     books = books.iloc[0:0]  # No data for invalid roles or user with app!='main'
 
@@ -1789,9 +1660,6 @@ def insert_author(conn, name, email, phone):
             # Commit the transaction to ensure the insert is persisted
             s.commit()
             
-            # Debug: Log the insert details
-            st.write(f"Debug: Inserted author_id = {author_id} for {name}, {email}, {phone}, rows affected = {result.rowcount}")
-            
             # Verify the author_id exists after commit
             result = s.execute(
                 text("SELECT author_id FROM authors WHERE author_id = :author_id"),
@@ -3021,9 +2889,9 @@ def edit_author_dialog(book_id, conn):
                         if authors_added:
                             st.cache_data.clear()
                             st.success("✔️ New authors added successfully!")
+                            del st.session_state.new_authors
                             time.sleep(2)
                             st.rerun()
-                            del st.session_state.new_authors
                         else:
                             st.error("❌ No authors were added due to errors.")
                     except Exception as e:
@@ -4322,13 +4190,15 @@ def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, e
         filtered_df = filtered_df[filtered_df['date'] <= end_date]
     return filtered_df
 
-c1,c2 = st.columns([14,1], vertical_alignment="bottom")
+c1,c2, c3 = st.columns([10,30,3], vertical_alignment="bottom")
 
 with c1:
     st.markdown("## 📚 AGPH Books")
+    
+with c2:
     st.caption(f":material/account_circle: Welcome! {user_name} ({user_role})")
 
-with c2:
+with c3:
     if st.button(":material/refresh: Refresh", key="refresh_books", type="tertiary"):
         st.cache_data.clear()
 
@@ -4554,18 +4424,25 @@ with srcol3:
         st.button(":material/add: Book", type="secondary", help="Add New Book (Disabled)", use_container_width=True, disabled=True)
 
 with srcol4:
-    with st.popover("More", use_container_width=True, help="More Options"):
-        # Edit Authors button
-        if is_button_allowed("edit_author_detail"):
-            if st.button(":material/edit: Edit Authors", key="edit_author_btn", type="tertiary"):
-                edit_author_detail(conn)
-        else:
-            st.button(":material/edit: Edit Authors", key="edit_author_btn", type="tertiary", help="Edit Authors (Disabled)", disabled=True)
-        
-        # User Access button (hidden for non-admin)
-        if st.session_state.get("role") == "admin":
-            if st.button(":material/manage_accounts: User Access", key="user_access", type="tertiary"):
-                manage_users(conn)
+        with st.popover("More", use_container_width=True, help="More Options"):
+
+             # DataDashboard button
+            if is_button_allowed("datadashoard"):
+                if st.button("📊 DataDashboard", key="edit_", type="tertiary"):
+                    st.switch_page("pages/dashboard.py")
+            else:
+                st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Disabled)", disabled=True)
+            # Edit Authors button
+            if is_button_allowed("edit_author_detail"):
+                if st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary"):
+                    edit_author_detail(conn)
+            else:
+                st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary", help="Edit Authors (Disabled)", disabled=True)
+            
+            # User Access button (only for admin)
+            if st.session_state.get("role") == "admin":
+                if st.button("👥 User Access", key="user_access", type="tertiary"):
+                    manage_users(conn)
     
 
 # Pagination Logic (Modified)
@@ -4792,6 +4669,3 @@ with cont:
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
         #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
-
-
-
