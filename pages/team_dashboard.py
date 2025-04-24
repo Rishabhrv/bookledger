@@ -315,10 +315,10 @@ def render_month_selector(books_df):
 from datetime import datetime, timedelta
 
 def render_worker_completion_graph(books_df, selected_month, section):
-    # Convert selected_month to date range
+    # Convert selected_month to year and month for filtering
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
-    month_start = pd.to_datetime(selected_month_dt.replace(day=1))
-    month_end = pd.to_datetime((selected_month_dt.replace(day=1) + timedelta(days=31)).replace(day=1) - timedelta(days=1))
+    selected_year = selected_month_dt.year
+    selected_month_str = selected_month_dt.strftime('%B')
 
     # Filter books where {section}_end is within the selected month
     end_col = f'{section.capitalize()} End'
@@ -326,8 +326,8 @@ def render_worker_completion_graph(books_df, selected_month, section):
     completed_books = books_df[
         books_df[end_col].notnull() &
         (books_df[end_col] != '0000-00-00 00:00:00') &
-        (books_df[end_col] >= month_start) &
-        (books_df[end_col] <= month_end)
+        (books_df[end_col].dt.strftime('%Y') == str(selected_year)) &
+        (books_df[end_col].dt.strftime('%B') == selected_month_str)
     ]
 
     # Group by worker and count completed books
