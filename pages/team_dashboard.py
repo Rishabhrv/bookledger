@@ -317,23 +317,31 @@ from datetime import datetime, timedelta
 def render_worker_completion_graph(books_df, selected_month, section):
     # Convert selected_month to year and month for filtering
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
-    selected_year = selected_month_dt.year
-    selected_month_str = selected_month_dt.strftime('%B')
+    target_period = pd.Timestamp(selected_month_dt).to_period('M')
 
-    # Filter books where {section}_end is within the selected month
+    # Filter books where {section}_by and {section}_end are not null, and {section}_end is in the selected month
     end_col = f'{section.capitalize()} End'
     by_col = f'{section.capitalize()} By'
     completed_books = books_df[
+        books_df[by_col].notnull() &
         books_df[end_col].notnull() &
-        (books_df[end_col] != '0000-00-00 00:00:00') &
-        (books_df[end_col].dt.strftime('%Y') == str(selected_year)) &
-        (books_df[end_col].dt.strftime('%B') == selected_month_str)
+        (books_df[end_col].dt.to_period('M') == target_period)
     ]
 
-    # Group by worker and count completed books
+    # Enhanced debugging output
+    st.write(f"Total rows in books_df: {len(books_df)}")
+    st.write(f"Rows with {by_col} not null: {len(books_df[books_df[by_col].notnull()])}")
+    st.write(f"Rows with {end_col} not null: {len(books_df[books_df[end_col].notnull()])}")
+    st.write(f"Filtered books (both {by_col} and {end_col} not null, and {end_col} in {selected_month}): {len(completed_books)}")
+    st.write(f"Sample of {end_col}: {books_df[end_col].head()}")
+    st.write(f"Sample of {by_col}: {books_df[by_col].head()}")
+    st.write(f"Month distribution of {end_col} (for non-null entries):")
+    st.write(books_df[books_df[end_col].notnull()][end_col].dt.to_period('M').value_counts())
+
+    # Group by worker and count books
     worker_counts = completed_books.groupby(by_col).size().reset_index(name='Book Count')
     if worker_counts.empty:
-        st.warning(f"No books completed in {selected_month} for {section.capitalize()}.")
+        st.warning(f"No books assigned and completed in {selected_month} for {section.capitalize()}.")
         return
 
     # Sort by book count (descending) for better visualization
@@ -366,7 +374,7 @@ def render_worker_completion_graph(books_df, selected_month, section):
     chart = (bar + text).properties(
         title="",
         width='container',
-        height=alt.Step(70)  # Dynamic height
+        height=alt.Step(50 * len(worker_counts))  # Dynamic height
     ).configure_title(
         fontSize=16,
         anchor='start',
@@ -383,29 +391,31 @@ def render_metrics(books_df, selected_month, section, user_role):
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
     month_start = selected_month_dt.replace(day=1).date()
     month_end = (selected_month_dt.replace(day=1) + timedelta(days=31)).replace(day=1).date() - timedelta(days=1)
-    filtered_books = books_df[(books_df['Date'] >= month_start) & (books_df['Date'] <= month_end)]
 
-    total_books = len(filtered_books)
+    # Filter books based on enrollment Date for metrics
+    filtered_books_metrics = books_df[(books_df['Date'] >= month_start) & (books_df['Date'] <= month_end)]
+
+    total_books = len(filtered_books_metrics)
     
     # Completion and pending logic for all sections
-    completed_books = len(filtered_books[
-        filtered_books[f'{section.capitalize()} End'].notnull() & 
-        (filtered_books[f'{section.capitalize()} End'] != '0000-00-00 00:00:00')
+    completed_books = len(filtered_books_metrics[
+        filtered_books_metrics[f'{section.capitalize()} End'].notnull() & 
+        (filtered_books_metrics[f'{section.capitalize()} End'] != '0000-00-00 00:00:00')
     ])
     if section == "cover":
-        pending_books = len(filtered_books[
-            filtered_books['Formatting End'].notnull() & 
-            (filtered_books['Formatting End'] != '0000-00-00 00:00:00') & 
-            (filtered_books['Cover Start'].isnull() | (filtered_books['Cover Start'] == '0000-00-00 00:00:00'))
+        pending_books = len(filtered_books_metrics[
+            filtered_books_metrics['Formatting End'].notnull() & 
+            (filtered_books_metrics['Formatting End'] != '0000-00-00 00:00:00') & 
+            (filtered_books_metrics['Cover Start'].isnull() | (filtered_books_metrics['Cover Start'] == '0000-00-00 00:00:00'))
         ])
     else:
-        pending_books = len(filtered_books[
-            filtered_books[f'{section.capitalize()} Start'].isnull() | 
-            (filtered_books[f'{section.capitalize()} Start'] == '0000-00-00 00:00:00')
+        pending_books = len(filtered_books_metrics[
+            filtered_books_metrics[f'{section.capitalize()} Start'].isnull() | 
+            (filtered_books_metrics[f'{section.capitalize()} Start'] == '0000-00-00 00:00:00')
         ])
 
     # Render UI
-    col1, col2, col3 = st.columns([10,1, 1], vertical_alignment="bottom")
+    col1, col2, col3 = st.columns([10, 1, 1], vertical_alignment="bottom")
     with col1:
         st.subheader(f"Metrics of {selected_month}")
         st.caption(f"Welcome {user_name}!")
@@ -418,7 +428,6 @@ def render_metrics(books_df, selected_month, section, user_role):
             if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
                 st.switch_page('app.py')
 
-
     col1, col2, col3 = st.columns(3, border=True)
     with col1:
         st.metric(f"Books in {selected_month}", total_books)
@@ -427,12 +436,12 @@ def render_metrics(books_df, selected_month, section, user_role):
     with col3:
         st.metric(f"Pending in {selected_month}", pending_books)
     
-    # Render worker completion graph for non-Cover sections in an expander
+    # Render worker completion graph for non-Cover sections in an expander using full books_df
     if section != "cover":
         with st.expander(f"Show Completion Graph {section.capitalize()}, {selected_month}"):
-            render_worker_completion_graph(filtered_books, selected_month, section)
+            render_worker_completion_graph(books_df, selected_month, section)
     
-    return filtered_books
+    return filtered_books_metrics
 
 # Helper function to fetch unique names (assumed to exist or can be added)
 def fetch_unique_names(column_name, conn):
