@@ -63,6 +63,7 @@ hide_menu_style = """
 
 st.markdown(hide_menu_style, unsafe_allow_html=True)
 
+
 # Define mapping of access values to button functions
 ACCESS_TO_BUTTON = {
     # Loop buttons (table)
@@ -4426,23 +4427,27 @@ with srcol3:
 with srcol4:
         with st.popover("More", use_container_width=True, help="More Options"):
 
-             # DataDashboard button
+            # DataDashboard button
             if is_button_allowed("datadashoard"):
                 if st.button("📊 DataDashboard", key="edit_", type="tertiary"):
                     st.switch_page("pages/dashboard.py")
             else:
-                st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Disabled)", disabled=True)
+                st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
+
             # Edit Authors button
             if is_button_allowed("edit_author_detail"):
                 if st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary"):
                     edit_author_detail(conn)
             else:
-                st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary", help="Edit Authors (Disabled)", disabled=True)
+                st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary", help="Edit Authors (Not Authorized)", disabled=True)
             
             # User Access button (only for admin)
             if st.session_state.get("role") == "admin":
+                if st.button("📊 Team dashboard", key="edit_team", type="tertiary"):
+                    st.switch_page("pages/team_dashboard.py")
                 if st.button("👥 User Access", key="user_access", type="tertiary"):
                     manage_users(conn)
+
     
 
 # Pagination Logic (Modified)

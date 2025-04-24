@@ -45,9 +45,6 @@ VALID_APPS = {"main", "operations"}
 # FLASK_LOGIN_URL = "http://localhost:5001/login"
 # FLASK_LOGOUT_URL = "http://localhost:5001/logout"
 
-
-
-# Define mapping of access values to button functions
 ACCESS_TO_BUTTON = {
     # Loop buttons (table)
     "ISBN": "manage_isbn_dialog",
