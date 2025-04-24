@@ -328,16 +328,6 @@ def render_worker_completion_graph(books_df, selected_month, section):
         (books_df[end_col].dt.to_period('M') == target_period)
     ]
 
-    # Enhanced debugging output
-    st.write(f"Total rows in books_df: {len(books_df)}")
-    st.write(f"Rows with {by_col} not null: {len(books_df[books_df[by_col].notnull()])}")
-    st.write(f"Rows with {end_col} not null: {len(books_df[books_df[end_col].notnull()])}")
-    st.write(f"Filtered books (both {by_col} and {end_col} not null, and {end_col} in {selected_month}): {len(completed_books)}")
-    st.write(f"Sample of {end_col}: {books_df[end_col].head()}")
-    st.write(f"Sample of {by_col}: {books_df[by_col].head()}")
-    st.write(f"Month distribution of {end_col} (for non-null entries):")
-    st.write(books_df[books_df[end_col].notnull()][end_col].dt.to_period('M').value_counts())
-
     # Group by worker and count books
     worker_counts = completed_books.groupby(by_col).size().reset_index(name='Book Count')
     if worker_counts.empty:
@@ -374,7 +364,7 @@ def render_worker_completion_graph(books_df, selected_month, section):
     chart = (bar + text).properties(
         title="",
         width='container',
-        height=alt.Step(50 * len(worker_counts))  # Dynamic height
+        height=alt.Step(70)  # Dynamic height
     ).configure_title(
         fontSize=16,
         anchor='start',
