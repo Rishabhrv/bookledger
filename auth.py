@@ -53,6 +53,7 @@ ACCESS_TO_BUTTON = {
     "Operations": "edit_operation_dialog",
     "Printing & Delivery": "edit_inventory_delivery_dialog",
     "DatadashBoard": "datadashoard",
+    "Advance Search": "advance_search",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

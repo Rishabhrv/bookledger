@@ -73,6 +73,7 @@ ACCESS_TO_BUTTON = {
     "Operations": "edit_operation_dialog",
     "Printing & Delivery": "edit_inventory_delivery_dialog",
     "DatadashBoard": "datadashoard",
+    "Advance Search": "advance_search",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -80,7 +81,6 @@ ACCESS_TO_BUTTON = {
 
 # Run validation
 validate_token()
-
 
 # st.session_state.role = 'admin'
 # st.session_state.username = 'Yogesh Sharma'
@@ -4204,15 +4204,24 @@ with c3:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol2, srcol3, srcol4, srcol5 = st.columns([7, 4, 1.1, 1, 1], gap="small") 
+srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 3, 1, 1, 1], gap="small") 
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @author...", key="search_bar",
                                  label_visibility="collapsed")
     filtered_books = filter_books(books, search_query)
 
-# Add filtering popover next to the Add New Book button
 with srcol2:
+    # Add Book button
+    if is_button_allowed("advance_search"):
+        if st.button("🔍", type="secondary", help="Advance Search", use_container_width=True):
+            st.switch_page("pages/adsearch.py")
+    else:
+        st.button("🔍", type="secondary", help="Advance Search (Not Authorized)", use_container_width=True, disabled=True)
+
+
+# Add filtering popover next to the Add New Book button
+with srcol3:
     with st.popover("Filter by Date, Status & Publisher", use_container_width=True):
         # Extract unique publishers and years from the dataset
         unique_publishers = sorted(books['publisher'].dropna().unique())
@@ -4408,23 +4417,17 @@ with srcol2:
             st.success(f"Filter {', '.join(applied_filters)}")
 
 
-# Add page size selection
-with srcol5:
-    page_size_options = [40, 100, "All"]
-    if 'page_size' not in st.session_state:
-        st.session_state.page_size = page_size_options[0]  # Default page size
-    st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
-                                              label_visibility="collapsed")
-
-with srcol3:
+with srcol4:
     # Add Book button
     if is_button_allowed("add_book_dialog"):
         if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
             add_book_dialog(conn)
     else:
-        st.button(":material/add: Book", type="secondary", help="Add New Book (Disabled)", use_container_width=True, disabled=True)
+        st.button(":material/add: Book", type="secondary", help="Add New Book (Not Authorized)", use_container_width=True, disabled=True)
 
-with srcol4:
+
+
+with srcol5:
         with st.popover("More", use_container_width=True, help="More Options"):
 
             # DataDashboard button
@@ -4448,7 +4451,16 @@ with srcol4:
                 if st.button("👥 User Access", key="user_access", type="tertiary"):
                     manage_users(conn)
 
-    
+
+# Add page size selection
+with srcol6:
+    page_size_options = [40, 100, "All"]
+    if 'page_size' not in st.session_state:
+        st.session_state.page_size = page_size_options[0]  # Default page size
+    st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
+                                              label_visibility="collapsed")
+
+
 
 # Pagination Logic (Modified)
 if 'current_page' not in st.session_state:

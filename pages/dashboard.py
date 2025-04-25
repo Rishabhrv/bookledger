@@ -76,6 +76,12 @@ def connect_db():
 
 # SQL query to consolidate book data with updated conditions
 query = """
+WITH RankedAuthors AS (
+    SELECT 
+        ba.*,
+        ROW_NUMBER() OVER (PARTITION BY ba.book_id ORDER BY ba.author_position, ba.id) AS rn
+    FROM book_authors ba
+)
 SELECT 
     b.book_id AS `Book ID`,
     b.title AS `Book Title`,
@@ -157,58 +163,52 @@ SELECT
     MAX(CASE WHEN rn = 3 THEN CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Confirmation 3`,
     MAX(CASE WHEN rn = 4 THEN CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Confirmation 4`,
     CASE WHEN b.ready_to_print = 1 THEN 'TRUE' ELSE 'FALSE' END AS `Ready to Print`,
-    b.print_status AS `Print`,
+    CASE WHEN b.print_status = 1 THEN 'TRUE' ELSE 'FALSE' END AS `Print`,
     b.amazon_link AS `Amazon Link`,
     b.agph_link AS `AGPH Link`,
     b.google_link AS `Google Link`,
     b.flipkart_link AS `Flipkart Link`,
     NULL AS `Final Mail`,
     CASE WHEN b.deliver = 1 THEN 'TRUE' ELSE 'FALSE' END AS `Deliver`,
-    b.google_review AS `Google Review`,
+    CASE WHEN b.google_review = 1 THEN 'TRUE' ELSE 'FALSE' END AS `Google Review`,
     NULL AS `Remark`,
     MAX(ba.delivery_date) AS `Delivery Date`,
     CASE WHEN b.writing_end IS NOT NULL THEN 'TRUE' ELSE 'FALSE' END AS `Writing Complete`,
     b.writing_by AS `Writing By`,
-    b.writing_start AS `Writing Start Date`,
-    TIME(b.writing_start) AS `Writing Start Time`,
-    b.writing_end AS `Writing End Date`,
-    TIME(b.writing_end) AS `Writing End Time`,
+    DATE(b.writing_start) AS `Writing Start Date`,
+    TIME_FORMAT(b.writing_start, '%H:%i:%s') AS `Writing Start Time`,
+    DATE(b.writing_end) AS `Writing End Date`,
+    TIME_FORMAT(b.writing_end, '%H:%i:%s') AS `Writing End Time`,
     CASE WHEN b.proofreading_end IS NOT NULL THEN 'TRUE' ELSE 'FALSE' END AS `Proofreading Complete`,
     b.proofreading_by AS `Proofreading By`,
-    b.proofreading_start AS `Proofreading Start Date`,
-    TIME(b.proofreading_start) AS `Proofreading Start Time`,
-    b.proofreading_end AS `Proofreading End Date`,
-    TIME(b.proofreading_end) AS `Proofreading End Time`,
+    DATE(b.proofreading_start) AS `Proofreading Start Date`,
+    TIME_FORMAT(b.proofreading_start, '%H:%i:%s') AS `Proofreading Start Time`,
+    DATE(b.proofreading_end) AS `Proofreading End Date`,
+    TIME_FORMAT(b.proofreading_end, '%H:%i:%s') AS `Proofreading End Time`,
     CASE WHEN b.formatting_end IS NOT NULL THEN 'TRUE' ELSE 'FALSE' END AS `Formating Complete`,
     b.formatting_by AS `Formating By`,
-    b.formatting_start AS `Formating Start Date`,
-    TIME(b.formatting_start) AS `Formating Start Time`,
-    b.formatting_end AS `Formating End Date`,
-    TIME(b.formatting_end) AS `Formating End Time`,
+    DATE(b.formatting_start) AS `Formating Start Date`,
+    TIME_FORMAT(b.formatting_start, '%H:%i:%s') AS `Formating Start Time`,
+    DATE(b.formatting_end) AS `Formating End Date`,
+    TIME_FORMAT(b.formatting_end, '%H:%i:%s') AS `Formating End Time`,
     MONTHNAME(b.date) AS `Month`,
     YEAR(b.date) AS `Year`,
     DATEDIFF(CURDATE(), b.date) AS `Since Enrolled`
 FROM books b
-LEFT JOIN (
-    SELECT 
-        ba.*,
-        ROW_NUMBER() OVER (PARTITION BY ba.book_id ORDER BY ba.author_position, ba.id) AS rn
-    FROM book_authors ba
-) ba ON b.book_id = ba.book_id AND ba.rn <= 4
+LEFT JOIN RankedAuthors ba ON b.book_id = ba.book_id AND ba.rn <= 4
 LEFT JOIN authors a ON ba.author_id = a.author_id
-GROUP BY b.book_id, b.title, b.date, b.apply_isbn, b.isbn, b.ready_to_print, b.print_status, b.deliver, 
-         b.google_review, b.flipkart_link, b.google_link, b.agph_link, b.amazon_link, 
-         b.writing_by, b.proofreading_by, b.formatting_by, b.writing_start, b.writing_end, 
-         b.proofreading_start, b.proofreading_end, b.formatting_start, b.formatting_end, 
-         b.cover_by
+GROUP BY 
+    b.book_id, b.title, b.date, b.apply_isbn, b.isbn, b.ready_to_print, b.print_status, b.deliver, 
+    b.google_review, b.flipkart_link, b.google_link, b.agph_link, b.amazon_link, 
+    b.writing_by, b.proofreading_by, b.formatting_by, 
+    b.writing_start, b.writing_end, b.proofreading_start, b.proofreading_end, 
+    b.formatting_start, b.formatting_end, b.cover_by
 ORDER BY b.book_id;
 """
 
 with st.spinner("Data fetching in progress...", show_time=True):
     conn = connect_db()
-    df = conn.query(query, show_spinner=False)
-
-operations_sheet_data_preprocess = df.copy()
+    operations_sheet_data_preprocess = conn.query(query, show_spinner=False)
 
 unique_year = operations_sheet_data_preprocess['Year'].unique()[~np.isnan(operations_sheet_data_preprocess['Year'].unique())]
 
