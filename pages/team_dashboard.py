@@ -65,10 +65,6 @@ validate_token()
 role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 
-if user_app != "operations":
-    st.error("Access denied: You do not have permission to access this page.")
-    st.stop()
-
 if role_user == "admin":
     selected = st.pills("Select Section", ["writer", "proofreader", "formatter", "cover_designer"], default="writer", key="section_selector", label_visibility='collapsed')
     st.session_state.access = selected
