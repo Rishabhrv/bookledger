@@ -64,16 +64,35 @@ validate_token()
 
 role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
-
-if role_user == "admin":
-    selected = st.pills("Select Section", ["writer", "proofreader", "formatter", "cover_designer"], default="writer", key="section_selector", label_visibility='collapsed')
-    st.session_state.access = selected
-    user_role = selected
-
-else:
-    user_role = st.session_state.get("access", [])[0]
-
 user_name = st.session_state.get("username", "Unknown")
+
+# Admin can switch roles using pills
+if role_user == "admin":
+    selected = st.pills(
+        "Select Section", 
+        ["writer", "proofreader", "formatter", "cover_designer"],
+        default="writer",
+        key="section_selector",
+        label_visibility='collapsed'
+    )
+    st.session_state.access = [selected]  # Store as list to match user format
+    user_role = selected
+else:
+    # Regular users get their first access role
+    user_role = st.session_state.get("access", [""])[0]
+
+# Access Control Logic
+if role_user == "admin":
+    # Admins can always access
+    pass
+elif role_user == "user" and user_app == "operations":
+    # Users must have 'operations' app access
+    pass
+else:
+    # Show access denied and stop execution
+    st.error("You don't have permission to access this page.")
+    st.stop()  # Critical - prevents rendering of subsequent content
+
 
 st.cache_data.clear()
 

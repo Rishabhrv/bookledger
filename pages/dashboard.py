@@ -39,10 +39,19 @@ icon_image = small_logo
 validate_token()
 
 user_role = st.session_state.get("role", "Guest")
+user_app = st.session_state.get("app", None)
 
-if user_role != "admin":    
-    st.error("Access Denied: Admin Role Required")
-    st.stop()
+# Access Control Logic
+if user_role == "admin":
+    # Admin has full access
+    pass
+elif user_role == "user" and user_app == "main":
+    # User with 'main' app has access
+    pass
+else:
+    # Show access denied and stop execution
+    st.error("You don't have permission to access this page.")
+    st.stop() 
 
 # Initialize session state for new visitors
 if "visited" not in st.session_state:
