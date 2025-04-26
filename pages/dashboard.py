@@ -40,12 +40,13 @@ validate_token()
 
 user_role = st.session_state.get("role", "Guest")
 user_app = st.session_state.get("app", None)
+user_access = st.session_state.get("access", None)
 
 # Access Control Logic
 if user_role == "admin":
     # Admin has full access
     pass
-elif user_role == "user" and user_app == "main":
+elif user_role == "user" and user_app == "main" and "DatadashBoard" in user_access:
     # User with 'main' app has access
     pass
 else:
