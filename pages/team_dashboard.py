@@ -53,21 +53,13 @@ icon_image = small_logo
 # Run validation
 validate_token()
 
-#st.session_state.role = "admin"
-#st.session_state.access = "writer"
-
-#user_role = st.session_state.get("access", [])
-#role_user = st.session_state.get("role", [])
-
-# st.write(f"User access: {user_role}")
-# st.write(f"User Role: {role_user}")
-
 role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
+user_access = st.session_state.get("access", [])
 
-# Admin can switch roles using pills
-if role_user == "admin":
+# Admin or allowed users get role selector pills
+if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team Dashboard" in user_access):
     selected = st.pills(
         "Select Section", 
         ["writer", "proofreader", "formatter", "cover_designer"],
@@ -77,21 +69,15 @@ if role_user == "admin":
     )
     st.session_state.access = [selected]  # Store as list to match user format
     user_role = selected
-else:
-    # Regular users get their first access role
-    user_role = st.session_state.get("access", [""])[0]
 
-# Access Control Logic
-if role_user == "admin":
-    # Admins can always access
-    pass
 elif role_user == "user" and user_app == "operations":
-    # Users must have 'operations' app access
-    pass
+    # Set user_role from their first access item
+    user_role = user_access[0] if user_access else ""
+
 else:
-    # Show access denied and stop execution
+    # Access Denied
     st.error("You don't have permission to access this page.")
-    st.stop()  # Critical - prevents rendering of subsequent content
+    st.stop()
 
 
 st.cache_data.clear()
@@ -433,10 +419,12 @@ def render_metrics(books_df, selected_month, section, user_role):
         if st.button(":material/refresh: Refresh", key=f"refresh_{section}", type="tertiary"):
             st.cache_data.clear()
 
-    if user_role == "admin":
+    # Go Back Button - Same Access as Pills
+    if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team Dashboard" in user_access):
         with col3:
             if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
                 st.switch_page('app.py')
+
 
     col1, col2, col3 = st.columns(3, border=True)
     with col1:
@@ -1243,9 +1231,6 @@ for section, config in sections.items():
         render_table(pending_books, f"{section.capitalize()} Pending", column_sizes_pending, config["color"], section, config["role"], is_running=False)
         if st.button(f"Show {section.capitalize()} Completed Books", key=f"show_{section}_completed"):
             render_table(completed_books, f"{section.capitalize()} Completed", column_sizes_completed, config["color"], section, config["role"], is_running=False)
-
-
-
 
 
 

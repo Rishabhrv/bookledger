@@ -74,6 +74,7 @@ ACCESS_TO_BUTTON = {
     "Printing & Delivery": "edit_inventory_delivery_dialog",
     "DatadashBoard": "datadashoard",
     "Advance Search": "advance_search",
+    "Team Dashboard": "team_dashboard",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -4437,6 +4438,13 @@ with srcol5:
             else:
                 st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
 
+            # Team dashboard
+            if is_button_allowed("team_dashboard"):
+                if st.button("📊 Team dashboard", key="edit_team", type="tertiary"):
+                    st.switch_page("pages/team_dashboard.py")
+            else:
+                st.button("📊 Team dashboard", key="edit_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
+
             # Edit Authors button
             if is_button_allowed("edit_author_detail"):
                 if st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary"):
@@ -4446,8 +4454,6 @@ with srcol5:
             
             # User Access button (only for admin)
             if st.session_state.get("role") == "admin":
-                if st.button("📊 Team dashboard", key="edit_team", type="tertiary"):
-                    st.switch_page("pages/team_dashboard.py")
                 if st.button("👥 User Access", key="user_access", type="tertiary"):
                     manage_users(conn)
 
