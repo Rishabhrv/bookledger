@@ -4829,5 +4829,3 @@ with cont:
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
         #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
-
-st.dataframe(books, use_container_width=True)
