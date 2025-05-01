@@ -35,9 +35,9 @@ logger.addHandler(handler)
 # Set page configuration
 st.set_page_config(
     menu_items={
-        'About': "AGPH",
+        'About': None,
         'Get Help': None,
-        'Report a bug': None,   
+        'Report a bug': None
     },
     layout="wide",  # Set layout to wide mode
     initial_sidebar_state="collapsed",
@@ -53,15 +53,15 @@ size = "large",
 icon_image = small_logo
 )
 
-# Inject CSS to remove the menu (optional)
-hide_menu_style = """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
-"""
+# # Inject CSS to remove the menu (optional)
+# hide_menu_style = """
+#     <style>
+#     #MainMenu {visibility: hidden;}
+#     footer {visibility: hidden;}
+#     </style>
+# """
 
-st.markdown(hide_menu_style, unsafe_allow_html=True)
+# st.markdown(hide_menu_style, unsafe_allow_html=True)
 
 
 # Define mapping of access values to button functions
@@ -98,6 +98,8 @@ user_name = st.session_state.get("username", "Unknown")
 UPLOAD_DIR = "/home/rishabhvyas/bookledger/uploads"
 
 st.cache_data.clear()
+
+import pandas as pd
 
 # Function to check if a button is allowed for the user's role and access
 def is_button_allowed(button_name, debug=False):
@@ -145,6 +147,8 @@ conn = connect_db()
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path is_publish_only, publisher FROM books"
 books = conn.query(query,show_spinner = False)
+
+
 
 # Apply date range filtering
 if user_role == "user" and user_app == "main":
@@ -1367,7 +1371,7 @@ def manage_price_dialog(book_id, current_price, conn):
     with contrn:
         # Section 1: Book Price
         st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-        col1,col2 = st.columns([1,1])
+        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
         with col1:
             price_str = st.text_input(
                 "Book Price (₹)",
@@ -1375,7 +1379,8 @@ def manage_price_dialog(book_id, current_price, conn):
                 key=f"price_{book_id}",
                 placeholder="Enter whole amount"
             )
-            
+
+        with col2:
             if st.button("Save Book Price", key=f"save_price_{book_id}"):
                 with st.spinner("Saving..."):
                     time.sleep(1)
@@ -1384,7 +1389,6 @@ def manage_price_dialog(book_id, current_price, conn):
                         if price is not None and price < 0:
                             st.error("Price cannot be negative")
                             return
-                            
                         with conn.session as s:
                             s.execute(
                                 text("UPDATE books SET price = :price WHERE book_id = :book_id"),
@@ -1445,7 +1449,7 @@ def manage_price_dialog(book_id, current_price, conn):
                     )
 
                     # EMI Payments with Dates, Payment Mode, and Transaction ID
-                    st.markdown("#### EMI Details")
+                    #st.markdown("#### EMI Details")
                     payment_modes = ["Cash", "UPI", "Bank Deposit"]
 
                     # EMI 1
@@ -1455,7 +1459,8 @@ def manage_price_dialog(book_id, current_price, conn):
                         emi1_str = st.text_input(
                             "Amount (₹)",
                             value=str(emi1) if emi1 > 0 else "",
-                            key=f"emi1_{row['id']}"
+                            key=f"emi1_{row['id']}",
+                            placeholder="Enter EMI amount"
                         )
                     with col2:
                         emi1_date_new = st.date_input(
@@ -1487,7 +1492,8 @@ def manage_price_dialog(book_id, current_price, conn):
                         emi2_str = st.text_input(
                             "Amount (₹)",
                             value=str(emi2) if emi2 > 0 else "",
-                            key=f"emi2_{row['id']}"
+                            key=f"emi2_{row['id']}",
+                            placeholder="Enter EMI amount"
                         )
                     with col2:
                         emi2_date_new = st.date_input(
@@ -1519,7 +1525,8 @@ def manage_price_dialog(book_id, current_price, conn):
                         emi3_str = st.text_input(
                             "Amount (₹)",
                             value=str(emi3) if emi3 > 0 else "",
-                            key=f"emi3_{row['id']}"
+                            key=f"emi3_{row['id']}",
+                            placeholder="Enter EMI amount"
                         )
                     with col2:
                         emi3_date_new = st.date_input(
@@ -1613,7 +1620,7 @@ def fetch_book_authors(book_id, conn):
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
-           ba.digital_book_sent, ba.digital_book_approved, ba.plagiarism_report, 
+           ba.digital_book_sent, 
            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
            ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
            ba.emi1_date, ba.emi2_date, ba.emi3_date,
@@ -1915,6 +1922,14 @@ def edit_author_dialog(book_id, conn):
                                 help="Select the author's position in the book.",
                                 key=f"author_position_{row['id']}"
                             )
+                            updates['number_of_books'] = st.number_input(
+                                        "Number of Books",
+                                        min_value=0,
+                                        step=1,
+                                        value=int(row['number_of_books'] or 0),
+                                        help="Enter the number of books to deliver.",
+                                        key=f"number_of_books_{row['id']}"
+                                    )
                         with col4:
                             updates['corresponding_agent'] = st.text_input(
                                 "Corresponding Agent",
@@ -1922,40 +1937,35 @@ def edit_author_dialog(book_id, conn):
                                 help="Enter the name of the corresponding agent.",
                                 key=f"corresponding_agent_{row['id']}"
                             )
-                        updates['publishing_consultant'] = st.text_input(
-                            "Publishing Consultant",
-                            value=row['publishing_consultant'] or "",
-                            help="Enter the name of the publishing consultant.",
-                            key=f"publishing_consultant_{row['id']}"
-                        )
+                            updates['publishing_consultant'] = st.text_input(
+                                "Publishing Consultant",
+                                value=row['publishing_consultant'] or "",
+                                help="Enter the name of the publishing consultant.",
+                                key=f"publishing_consultant_{row['id']}"
+                            )
+                        updates['delivery_address'] = st.text_area(
+                                    "Delivery Address",
+                                    value=row['delivery_address'] or "",
+                                    height=100,
+                                    help="Enter the delivery address.",
+                                    key=f"delivery_address_{row['id']}"
+                                )
 
                     # Tab 2: Checklists
                     with tab_objects[0]:
                         col5, col6 = st.columns(2)
                         with col5:
                             updates['welcome_mail_sent'] = st.checkbox(
-                                "✔️ Welcome Mail Sent",
+                                "📧 Welcome Mail Sent",
                                 value=bool(row['welcome_mail_sent']),
                                 help="Check if the welcome email has been sent.",
                                 key=f"welcome_mail_sent_{row['id']}"
                             )
                             updates['digital_book_sent'] = st.checkbox(
-                                "📘 Digital Book Sent",
+                                "📤 Digital Book Sent",
                                 value=bool(row['digital_book_sent']),
                                 help="Check if the digital book has been sent.",
                                 key=f"digital_book_sent_{row['id']}"
-                            )
-                            updates['digital_book_approved'] = st.checkbox(
-                                "✔️ Digital Book Approved",
-                                value=bool(row['digital_book_approved']),
-                                help="Check if the digital book has been approved.",
-                                key=f"digital_book_approved_{row['id']}"
-                            )
-                            updates['plagiarism_report'] = st.checkbox(
-                                "📝 Plagiarism Report",
-                                value=bool(row['plagiarism_report']),
-                                help="Check if the plagiarism report has been received.",
-                                key=f"plagiarism_report_{row['id']}"
                             )
                             updates['photo_recive'] = st.checkbox(
                                 "📷 Photo Received",
@@ -1963,15 +1973,15 @@ def edit_author_dialog(book_id, conn):
                                 help="Check if the author's photo has been received.",
                                 key=f"photo_recive_{row['id']}"
                             )
-                        with col6:
                             updates['id_proof_recive'] = st.checkbox(
                                 "🆔 ID Proof Received",
                                 value=bool(row['id_proof_recive']),
                                 help="Check if the author's ID proof has been received.",
                                 key=f"id_proof_recive_{row['id']}"
                             )
+                        with col6:     
                             updates['author_details_sent'] = st.checkbox(
-                                "✉️ Author Details Sent",
+                                "📥 Author Details Received",
                                 value=bool(row['author_details_sent']),
                                 help="Check if the author's details have been sent.",
                                 key=f"author_details_sent_{row['id']}"
@@ -1983,13 +1993,13 @@ def edit_author_dialog(book_id, conn):
                                 key=f"cover_agreement_sent_{row['id']}"
                             )
                             updates['agreement_received'] = st.checkbox(
-                                "✔️ Agreement Received",
+                                "✍🏻 Agreement Received",
                                 value=bool(row['agreement_received']),
                                 help="Check if the agreement has been received.",
                                 key=f"agreement_received_{row['id']}"
                             )
                             updates['printing_confirmation'] = st.checkbox(
-                                "🖨️ Printing Confirmation",
+                                "🖨️ Printing Confirmation Received",
                                 value=bool(row['printing_confirmation']),
                                 help="Check if printing confirmation has been received.",
                                 key=f"printing_confirmation_{row['id']}"
@@ -2000,20 +2010,19 @@ def edit_author_dialog(book_id, conn):
                         if print_status == 0:
                             st.warning("⚠️ Delivery details are disabled because printing status is not confirmed.")
                         else:
-                            col7, col8, col9 = st.columns(3)
+                            col7, col8 = st.columns(2)
                             with col7:
-                                updates['delivery_address'] = st.text_area(
-                                    "Delivery Address",
-                                    value=row['delivery_address'] or "",
-                                    height=100,
-                                    help="Enter the delivery address.",
-                                    key=f"delivery_address_{row['id']}"
-                                )
                                 updates['delivery_date'] = st.date_input(
                                     "Delivery Date",
                                     value=row['delivery_date'],
                                     help="Enter the delivery date.",
                                     key=f"delivery_date_{row['id']}"
+                                )
+                                updates['tracking_id'] = st.text_input(
+                                    "Tracking ID",
+                                    value=row['tracking_id'] or "",
+                                    help="Enter the tracking ID for the delivery.",
+                                    key=f"tracking_id_{row['id']}"
                                 )
                             with col8:
                                 updates['delivery_charge'] = st.number_input(
@@ -2024,21 +2033,7 @@ def edit_author_dialog(book_id, conn):
                                     help="Enter the delivery charge in INR.",
                                     key=f"delivery_charge_{row['id']}"
                                 )
-                                updates['tracking_id'] = st.text_input(
-                                    "Tracking ID",
-                                    value=row['tracking_id'] or "",
-                                    help="Enter the tracking ID for the delivery.",
-                                    key=f"tracking_id_{row['id']}"
-                                )
-                            with col9:
-                                updates['number_of_books'] = st.number_input(
-                                    "Number of Books",
-                                    min_value=0,
-                                    step=1,
-                                    value=int(row['number_of_books'] or 0),
-                                    help="Enter the number of books to deliver.",
-                                    key=f"number_of_books_{row['id']}"
-                                )
+
                                 updates['delivery_vendor'] = st.text_input(
                                     "Delivery Vendor",
                                     value=row['delivery_vendor'] or "",
@@ -3372,6 +3367,104 @@ def update_operation_details(book_id, updates):
 ##################################--------------- Edit Inventory Dialog ----------------------------##################################
 ###################################################################################################################################
 
+# Function to check if all conditions are met for ready_to_print
+def check_ready_to_print(book_id, conn):
+    query = """
+    SELECT CASE 
+        WHEN (
+            b.writing_complete = 1 
+            AND b.proofreading_complete = 1 
+            AND b.formatting_complete = 1 
+            AND b.cover_page_complete = 1
+            AND NOT EXISTS (
+                SELECT 1 
+                FROM book_authors ba 
+                WHERE ba.book_id = :book_id 
+                AND (
+                    ba.welcome_mail_sent != 1 
+                    OR ba.photo_recive != 1 
+                    OR ba.id_proof_recive != 1 
+                    OR ba.author_details_sent != 1 
+                    OR ba.cover_agreement_sent != 1 
+                    OR ba.agreement_received != 1 
+                    OR ba.digital_book_sent != 1 
+                    OR ba.printing_confirmation != 1
+                )
+            )
+        ) THEN 1 
+        ELSE 0 
+    END AS ready_to_print
+    FROM books b
+    WHERE b.book_id = :book_id
+    """
+    result = conn.query(query, params={"book_id": book_id}, ttl=0, show_spinner=False)
+    return result.iloc[0]['ready_to_print'] == 1
+
+# Function to get detailed print status (missing conditions)
+def get_print_status(book_id, conn):
+    # Query book conditions
+    book_query = """
+    SELECT 
+        writing_complete,
+        proofreading_complete,
+        formatting_complete,
+        cover_page_complete
+    FROM books
+    WHERE book_id = :book_id
+    """
+    book_result = conn.query(book_query, params={"book_id": book_id}, ttl=0, show_spinner=False).iloc[0]
+    
+    # Query author conditions
+    author_query = """
+    SELECT 
+        author_id,
+        welcome_mail_sent,
+        photo_recive,
+        id_proof_recive,
+        author_details_sent,
+        cover_agreement_sent,
+        agreement_received,
+        digital_book_sent,
+        printing_confirmation
+    FROM book_authors
+    WHERE book_id = :book_id
+    """
+    author_results = conn.query(author_query, params={"book_id": book_id}, ttl=0, show_spinner=False)
+    
+    # Process book conditions
+    status = {
+        "book": [],
+        "authors": []
+    }
+    if book_result['writing_complete'] != 1:
+        status["book"].append("Writing")
+    if book_result['proofreading_complete'] != 1:
+        status["book"].append("Proofreading")
+    if book_result['formatting_complete'] != 1:
+        status["book"].append("Formatting")
+    if book_result['cover_page_complete'] != 1:
+        status["book"].append("Cover")
+    
+    # Process author conditions with cleaner names
+    condition_names = {
+        "welcome_mail_sent": "Welcome Mail",
+        "photo_recive": "Photo",
+        "id_proof_recive": "ID Proof",
+        "author_details_sent": "Details",
+        "cover_agreement_sent": "Cover Agreement",
+        "agreement_received": "Agreement",
+        "digital_book_sent": "Digital Book",
+        "printing_confirmation": "Print Confirm"
+    }
+    for _, row in author_results.iterrows():
+        author_missing = []
+        for col, name in condition_names.items():
+            if row[col] != 1:
+                author_missing.append(name)
+        if author_missing:
+            status["authors"].append({"author_id": row['author_id'], "missing": author_missing})
+    
+    return status
 
 @st.dialog("Edit Printing & Inventory", width='large')
 def edit_inventory_delivery_dialog(book_id, conn):
@@ -3499,23 +3592,67 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
     # Printing Tab
     with tab1:
-        # Independent Checkbox with instant save
-        def save_ready_to_print():
-            updates = {"ready_to_print": st.session_state[f"ready_to_print_{book_id}"]}
+        # Check ready_to_print conditions
+        is_ready_to_print = check_ready_to_print(book_id, conn)
+        
+        # Update database if computed ready_to_print differs from current value
+        current_ready_to_print = current_data.get('ready_to_print', 0) == 1
+        if is_ready_to_print != current_ready_to_print:
+            updates = {"ready_to_print": 1 if is_ready_to_print else 0}
             update_inventory_delivery_details(book_id, updates, conn)
             st.cache_data.clear()
+            # Update current_data to reflect the change
+            current_data['ready_to_print'] = 1 if is_ready_to_print else 0
 
-        col1, _ = st.columns([1, 3])
+        # Get print status
+        print_status = get_print_status(book_id, conn)
+        missing_book = print_status["book"]
+        missing_authors = print_status["authors"]
+
+        # Display checkbox and status
+        col1, col2 = st.columns([1, 3], vertical_alignment="center")
         with col1:
-            ready_to_print = st.checkbox(
+            st.checkbox(
                 label="Ready to Print?",
-                value=current_data.get('ready_to_print', False),
+                value=is_ready_to_print,
                 key=f"ready_to_print_{book_id}",
-                help="Check if the book is ready for printing.",
-                on_change=save_ready_to_print
+                help="Automatically checked when all conditions are met.",
+                disabled=True
             )
+        with col2:
+            if is_ready_to_print:
+                st.markdown(
+                    "<span style='background-color: #e6ffe6; color: green; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>All Set ✓</span>",
+                    unsafe_allow_html=True
+                )
+            else:
+                # Compact badges for missing conditions
+                badges = []
+                for item in missing_book:
+                    badges.append(f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {item}</span>")
+                if missing_authors:
+                    count = len(missing_authors)
+                    badges.append(f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {count} Author(s)</span>")
+                st.markdown(" ".join(badges), unsafe_allow_html=True)
 
-        # Fetch print runs data (always shown, but edit/add only if ready_to_print is True)
+        # Expander with badge-style missing conditions
+        if missing_authors:
+            with st.expander("Why Not Ready?", expanded=True):
+                for author in missing_authors:
+                    author_id = author['author_id']
+                    missing_conditions = author['missing']
+                    # Create badges for each missing condition
+                    badges = [
+                        f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {condition}</span>"
+                        for condition in missing_conditions
+                    ]
+                    st.markdown(
+                        f"<b>Author ID {author_id}:</b> {' '.join(badges)}",
+                        unsafe_allow_html=True
+                    )
+                    
+
+        # Fetch print runs data
         st.markdown('<div class="section-header">Print Runs</div>', unsafe_allow_html=True)
         print_runs_query = f"""
             SELECT id, print_sent_date, print_received_date, num_copies, print_by, 
@@ -3570,7 +3707,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 st.info("No print runs found. Add a new print run below if ready.")
 
         # 2. Edit Existing Print Run Expander (only if ready_to_print and data exists)
-        if ready_to_print and not print_runs_data.empty:
+        if is_ready_to_print and not print_runs_data.empty:
             with st.expander("Edit Existing Print Run", expanded=False):
                 selected_print_run_id = st.selectbox(
                     "Select Print Run to Edit",
@@ -3688,7 +3825,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                     st.error(f"❌ Error saving print run: {str(e)}")
 
         # 3. Add New Print Run Expander (only if ready_to_print is True)
-        if ready_to_print:
+        if is_ready_to_print:
             with st.expander("Add New Print Run", expanded=False):
                 with st.form(key=f"new_print_form_{book_id}", border=False):
                     new_num_copies = st.number_input(
@@ -3702,7 +3839,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     with col1:
                         new_print_sent_date = st.date_input(
                             "Print Sent Date",
-                            value=date.today(),
+                            value=None,
                             key=f"new_print_sent_date_{book_id}"
                         )
                         print_cost = st.text_input(
@@ -3792,7 +3929,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
     with tab2:
         # Check if print_status is 1
         if not current_data.get('print_status', False):
-            st.warning("Inventory details are only available after the book has been printed. Please set 'Printed?' to true in the Printing tab.")
+            st.warning("Inventory details are only available after the book has been printed.")
         else:
             # Fetch existing print runs (for inventory calculation)
             print_runs_query = f"""
@@ -4433,7 +4570,7 @@ with srcol5:
 
             # DataDashboard button
             if is_button_allowed("datadashoard"):
-                if st.button("📊 DataDashboard", key="edit_", type="tertiary"):
+                if st.button("📊 Data Dashboard", key="edit_", type="tertiary"):
                     st.switch_page("pages/dashboard.py")
             else:
                 st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
@@ -4692,3 +4829,5 @@ with cont:
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
         #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
+
+st.dataframe(books, use_container_width=True)

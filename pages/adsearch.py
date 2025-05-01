@@ -43,7 +43,6 @@ if "visited" not in st.session_state:
 
 # Check if the user is new
 if not st.session_state.visited:
-    st.toast("Please Wait New Data is being fetched...", icon="ℹ️")  # Notify user
     st.cache_data.clear()  # Clear cache for new visitors
     st.session_state.visited = True  # Mark as visited
 

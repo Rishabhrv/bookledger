@@ -3,3 +3,7 @@ base="light"
 
 [client]
 showSidebarNavigation = false
+toolbarMode = "minimal"
+
+[server]
+runOnSave = true
