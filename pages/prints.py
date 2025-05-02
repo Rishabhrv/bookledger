@@ -30,84 +30,50 @@ def connect_db():
 
 conn = connect_db()
 
-# Function to fetch books for the table (excluding active batches)
+# Function to fetch books for the table (redesigned to avoid duplicates)
 def fetch_print_ready_books():
     query = """
     WITH ReadyToPrint AS (
-        SELECT 
-            b.book_id,
-            b.title,
-            b.date,
-            b.num_copies,
-            'Ready for Print' AS status,
-            NULL AS print_type,
-            NULL AS binding,
-            NULL AS book_size
-        FROM books b
-        WHERE 
-            b.writing_complete = 1 
-            AND b.proofreading_complete = 1 
-            AND b.formatting_complete = 1 
-            AND b.cover_page_complete = 1
-            AND b.print_status = 0
-            AND NOT EXISTS (
-                SELECT 1 
-                FROM book_authors ba 
-                WHERE ba.book_id = b.book_id 
-                AND (
-                    ba.welcome_mail_sent != 1 
-                    OR ba.photo_recive != 1 
-                    OR ba.id_proof_recive != 1 
-                    OR ba.author_details_sent != 1 
-                    OR ba.cover_agreement_sent != 1 
-                    OR ba.agreement_received != 1 
-                    OR ba.digital_book_sent != 1 
-                    OR ba.printing_confirmation != 1
-                )
+    SELECT 
+        b.book_id,
+        b.title,
+        b.date,
+        COALESCE(pr.num_copies, b.num_copies) AS num_copies,
+        'Ready for Print' AS status,
+        pr.print_type,
+        pr.binding,
+        pr.book_size
+    FROM books b
+    LEFT JOIN print_runs pr ON b.book_id = pr.book_id
+        AND pr.status = 'Planned'
+        AND pr.id = (
+            SELECT MAX(id)
+            FROM print_runs pr2
+            WHERE pr2.book_id = pr.book_id
+            AND pr2.status = 'Planned'
+        )
+    WHERE 
+        b.writing_complete = 1 
+        AND b.proofreading_complete = 1 
+        AND b.formatting_complete = 1 
+        AND b.cover_page_complete = 1
+        AND b.print_status = 0
+        AND NOT EXISTS (
+            SELECT 1 
+            FROM book_authors ba 
+            WHERE ba.book_id = b.book_id 
+            AND (
+                ba.welcome_mail_sent != 1 
+                OR ba.photo_recive != 1 
+                OR ba.id_proof_recive != 1 
+                OR ba.author_details_sent != 1 
+                OR ba.cover_agreement_sent != 1 
+                OR ba.agreement_received != 1 
+                OR ba.digital_book_sent != 1 
+                OR ba.printing_confirmation != 1
             )
-            AND NOT EXISTS (
-                SELECT 1
-                FROM batch_books bb
-                JOIN batches bt ON bb.batch_id = bt.batch_id
-                WHERE bb.book_id = b.book_id
-                AND bt.status = 'Sent'
-                AND bt.receiving_date IS NULL
-            )
-    ),
-    LatestPrintRun AS (
-        SELECT 
-            book_id,
-            num_copies,
-            print_type,
-            binding,
-            book_size
-        FROM (
-            SELECT 
-                book_id,
-                num_copies,
-                print_type,
-                binding,
-                book_size,
-                ROW_NUMBER() OVER (PARTITION BY book_id ORDER BY id DESC) AS rn
-            FROM print_runs
-            WHERE print_sent_date IS NULL
-            AND num_copies > 0
-        ) t
-        WHERE rn = 1
-    ),
-    ReprintBooks AS (
-        SELECT 
-            b.book_id,
-            b.title,
-            b.date,
-            lpr.num_copies,
-            'Ready for Reprint' AS status,
-            lpr.print_type,
-            lpr.binding,
-            lpr.book_size
-        FROM books b
-        JOIN LatestPrintRun lpr ON b.book_id = lpr.book_id
-        WHERE NOT EXISTS (
+        )
+        AND NOT EXISTS (
             SELECT 1
             FROM batch_books bb
             JOIN batches bt ON bb.batch_id = bt.batch_id
@@ -115,41 +81,80 @@ def fetch_print_ready_books():
             AND bt.status = 'Sent'
             AND bt.receiving_date IS NULL
         )
-    ),
-    CombinedBooks AS (
-        SELECT DISTINCT
-            book_id,
-            title,
-            date,
-            num_copies,
-            status,
-            print_type,
-            binding,
-            book_size
-        FROM ReadyToPrint
-        UNION
-        SELECT DISTINCT
-            book_id,
-            title,
-            date,
-            num_copies,
-            status,
-            print_type,
-            binding,
-            book_size
-        FROM ReprintBooks
-    )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM print_runs pr3
+            WHERE pr3.book_id = b.book_id
+            AND pr3.status = 'Completed'
+        )
+),
+LatestPrintRun AS (
     SELECT 
-        cb.book_id,
-        cb.title,
-        cb.date,
-        cb.num_copies,
-        cb.status,
-        cb.print_type,
-        cb.binding,
-        cb.book_size
-    FROM CombinedBooks cb
-    ORDER BY cb.title;
+        book_id,
+        num_copies,
+        print_type,
+        binding,
+        book_size
+    FROM print_runs pr
+    WHERE num_copies > 0
+    AND status = 'Planned'
+    AND id = (
+        SELECT MAX(id)
+        FROM print_runs pr2
+        WHERE pr2.book_id = pr.book_id
+        AND pr2.num_copies > 0
+        AND pr2.status = 'Planned'
+    )
+),
+ReprintBooks AS (
+    SELECT 
+        b.book_id,
+        b.title,
+        b.date,
+        lpr.num_copies,
+        'Ready for Reprint' AS status,
+        lpr.print_type,
+        lpr.binding,
+        lpr.book_size
+    FROM books b
+    JOIN LatestPrintRun lpr ON b.book_id = lpr.book_id
+    WHERE EXISTS (
+        SELECT 1
+        FROM print_runs pr
+        WHERE pr.book_id = b.book_id
+        AND pr.status = 'Completed'
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM batch_books bb
+        JOIN batches bt ON bb.batch_id = bt.batch_id
+        WHERE bb.book_id = b.book_id
+        AND bt.status = 'Sent'
+        AND bt.receiving_date IS NULL
+    )
+)
+SELECT 
+    book_id,
+    title,
+    date,
+    num_copies,
+    status,
+    print_type,
+    binding,
+    book_size
+FROM ReadyToPrint
+UNION
+SELECT 
+    book_id,
+    title,
+    date,
+    num_copies,
+    status,
+    print_type,
+    binding,
+    book_size
+FROM ReprintBooks
+ORDER BY title;
     """
     return conn.query(query, ttl=0, show_spinner=False)
 
@@ -176,9 +181,9 @@ def fetch_batch_books(batch_id):
         b.book_id,
         b.title,
         bb.num_copies,
-        pr.print_type,
-        pr.binding,
-        pr.book_size
+        COALESCE(pr.print_type, NULL) AS print_type,
+        COALESCE(pr.binding, NULL) AS binding,
+        COALESCE(pr.book_size, NULL) AS book_size
     FROM batch_books bb
     JOIN books b ON bb.book_id = b.book_id
     LEFT JOIN print_runs pr ON b.book_id = pr.book_id
@@ -201,26 +206,14 @@ def fetch_batch_history(year, month):
         bt.print_sent_date,
         bt.print_by,
         bt.receiving_date,
-        bt.status,
-        GROUP_CONCAT(CONCAT(b.title, ' (', bb.num_copies, ')') SEPARATOR ', ') AS books
+        bt.status
     FROM batches bt
-    LEFT JOIN batch_books bb ON bt.batch_id = bb.batch_id
-    LEFT JOIN books b ON bb.book_id = b.book_id
     WHERE (bt.status = 'Received' OR bt.receiving_date IS NOT NULL)
-    """
-    if year and month:
-        query += """
         AND YEAR(bt.receiving_date) = :year
         AND MONTH(bt.receiving_date) = :month
-        """
-    query += """
-    GROUP BY bt.batch_id, bt.batch_name, bt.print_sent_date, bt.print_by, bt.receiving_date, bt.status
     ORDER BY bt.receiving_date DESC;
     """
-    params = {}
-    if year and month:
-        params = {"year": year, "month": month}
-    return conn.query(query, params=params, ttl=0, show_spinner=False)
+    return conn.query(query, params={"year": year, "month": month}, ttl=0, show_spinner=False)
 
 # Dialog for batch creation
 @st.dialog("Create New Batch")
@@ -357,38 +350,31 @@ st.dataframe(
     }
 )
 
+st.stop()
+
 # Running Batches
 st.subheader("Running Print Batches")
 running_batches_df = fetch_running_batches()
 if not running_batches_df.empty:
-    st.dataframe(
-        running_batches_df[["batch_id", "batch_name", "print_sent_date", "num_books"]],
-        use_container_width=True,
-        column_config={
-            "batch_id": "Batch ID",
-            "batch_name": "Batch Name",
-            "print_sent_date": "Sent Date",
-            "num_books": "Number of Books"
-        }
-    )
     for _, batch in running_batches_df.iterrows():
-        with st.expander(f"Books in Batch {batch['batch_name']}"):
-            batch_books_df = fetch_batch_books(batch['batch_id'])
-            if not batch_books_df.empty:
-                st.dataframe(
-                    batch_books_df[["book_id", "title", "num_copies", "print_type", "binding", "book_size"]],
-                    use_container_width=True,
-                    column_config={
-                        "book_id": "Book ID",
-                        "title": "Title",
-                        "num_copies": "Copies",
-                        "print_type": "Print Type",
-                        "binding": "Binding",
-                        "book_size": "Book Size"
-                    }
-                )
-            else:
-                st.write("No books in this batch.")
+        st.subheader(f"Batch {batch['batch_name']} (ID: {batch['batch_id']}, Sent: {batch['print_sent_date']}, Books: {batch['num_books']})")
+        batch_books_df = fetch_batch_books(batch['batch_id'])
+        if not batch_books_df.empty:
+            st.dataframe(
+                batch_books_df[["book_id", "title", "num_copies", "print_type", "binding", "book_size"]],
+                use_container_width=True,
+                column_config={
+                    "book_id": "Book ID",
+                    "title": "Title",
+                    "num_copies": "Copies",
+                    "print_type": "Print Type",
+                    "binding": "Binding",
+                    "book_size": "Book Size"
+                }
+            )
+        else:
+            st.write("No books in this batch.")
+        st.divider()
 else:
     st.write("No running batches.")
 
@@ -396,32 +382,40 @@ else:
 st.subheader("Batch History (Completed Batches)")
 col1, col2 = st.columns(2)
 with col1:
-    year = st.selectbox("Select Year", [None] + list(range(2020, 2030)), index=0)
+    year = st.selectbox("Select Year", list(range(2020, 2030)), index=list(range(2020, 2030)).index(2025))
 with col2:
-    month = st.selectbox("Select Month", [None] + ["January", "February", "March", "April", "May", "June", 
-                                                  "July", "August", "September", "October", "November", "December"], index=0)
+    month = st.selectbox("Select Month", ["January", "February", "March", "April", "May", "June", 
+                                         "July", "August", "September", "October", "November", "December"], 
+                         index=4)  # Default to May
 
 # Convert month name to number
 month_map = {
     "January": 1, "February": 2, "March": 3, "April": 4, "May": 5, "June": 6,
     "July": 7, "August": 8, "September": 9, "October": 10, "November": 11, "December": 12
 }
-month_num = month_map.get(month) if month else None
+month_num = month_map[month]
 
 history_df = fetch_batch_history(year, month_num)
 if not history_df.empty:
-    st.dataframe(
-        history_df[["batch_id", "batch_name", "print_sent_date", "print_by", "receiving_date", "status", "books"]],
-        use_container_width=True,
-        column_config={
-            "batch_id": "Batch ID",
-            "batch_name": "Batch Name",
-            "print_sent_date": "Sent Date",
-            "print_by": "Print By",
-            "receiving_date": "Received Date",
-            "status": "Status",
-            "books": "Books (Copies)"
-        }
-    )
+    for _, batch in history_df.iterrows():
+        st.subheader(f"Batch {batch['batch_name']} (ID: {batch['batch_id']}, Sent: {batch['print_sent_date']}, "
+                     f"Received: {batch['receiving_date']}, Print By: {batch['print_by']}, Status: {batch['status']})")
+        batch_books_df = fetch_batch_books(batch['batch_id'])
+        if not batch_books_df.empty:
+            st.dataframe(
+                batch_books_df[["book_id", "title", "num_copies", "print_type", "binding", "book_size"]],
+                use_container_width=True,
+                column_config={
+                    "book_id": "Book ID",
+                    "title": "Title",
+                    "num_copies": "Copies",
+                    "print_type": "Print Type",
+                    "binding": "Binding",
+                    "book_size": "Book Size"
+                }
+            )
+        else:
+            st.write("No books in this batch.")
+        st.divider()
 else:
-    st.write("No completed batches found for the selected period.")
+    st.write(f"No completed batches found for {month} {year}.")
