@@ -3601,7 +3601,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
             updates = {"ready_to_print": 1 if is_ready_to_print else 0}
             update_inventory_delivery_details(book_id, updates, conn)
             st.cache_data.clear()
-            # Update current_data to reflect the change
             current_data['ready_to_print'] = 1 if is_ready_to_print else 0
 
         # Get print status
@@ -3626,7 +3625,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     unsafe_allow_html=True
                 )
             else:
-                # Compact badges for missing conditions
                 badges = []
                 for item in missing_book:
                     badges.append(f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {item}</span>")
@@ -3641,7 +3639,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 for author in missing_authors:
                     author_id = author['author_id']
                     missing_conditions = author['missing']
-                    # Create badges for each missing condition
                     badges = [
                         f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {condition}</span>"
                         for condition in missing_conditions
@@ -3650,183 +3647,141 @@ def edit_inventory_delivery_dialog(book_id, conn):
                         f"<b>Author ID {author_id}:</b> {' '.join(badges)}",
                         unsafe_allow_html=True
                     )
-                    
 
-        # Fetch print runs data
-        st.markdown('<div class="section-header">Print Runs</div>', unsafe_allow_html=True)
-        print_runs_query = f"""
-            SELECT id, print_sent_date, print_received_date, num_copies, print_by, 
-                print_cost, print_type, binding, book_size
-            FROM print_runs 
+        # Fetch print editions data
+        st.markdown('<div class="section-header">Print Editions</div>', unsafe_allow_html=True)
+        print_editions_query = f"""
+            SELECT print_id, print_date, copies_planned, print_cost, print_color, binding, book_size, edition_number
+            FROM PrintEditions 
             WHERE book_id = {book_id}
-            ORDER BY print_sent_date DESC
+            ORDER BY print_date DESC
         """
-        print_runs_data = conn.query(print_runs_query, show_spinner=False)
+        print_editions_data = conn.query(print_editions_query, show_spinner=False)
 
-        # 1. Print Run Table Expander
-        with st.expander("View Existing Print Runs", expanded=True):
-            if not print_runs_data.empty:
+        # 1. Print Editions Table Expander
+        with st.expander("View Existing Print Editions", expanded=True):
+            if not print_editions_data.empty:
                 st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
                 st.markdown("""
                     <div class="print-run-table-header">
                         <div>ID</div>
-                        <div>Sent Date</div>
-                        <div>Received Date</div>
+                        <div>Print Date</div>
                         <div>Copies</div>
-                        <div>Print By</div>
                         <div>Cost</div>
-                        <div>Type</div>
+                        <div>Color</div>
                         <div>Binding</div>
                         <div>Size</div>
-                        <div>Status</div>
+                        <div>Edition</div>
                     </div>
                 """, unsafe_allow_html=True)
                 
-                for idx, row in print_runs_data.iterrows():
-                    status = ("Received" if row['print_received_date'] 
-                            else "Sent" if row['print_sent_date'] 
-                            else "Pending")
-                    status_class = f"status-{status.lower()}"
-                    
+                for idx, row in print_editions_data.iterrows():
                     st.markdown(f"""
                         <div class="print-run-table-row">
-                            <div>{row['id']}</div>
-                            <div>{row['print_sent_date'] or 'N/A'}</div>
-                            <div>{row['print_received_date'] or 'N/A'}</div>
-                            <div>{int(row['num_copies'])}</div>
-                            <div>{row['print_by'] or 'N/A'}</div>
+                            <div>{row['print_id']}</div>
+                            <div>{row['print_date'] or 'N/A'}</div>
+                            <div>{int(row['copies_planned'])}</div>
                             <div>{row['print_cost'] or 'N/A'}</div>
-                            <div>{row['print_type']}</div>
+                            <div>{row['print_color']}</div>
                             <div>{row['binding']}</div>
                             <div>{row['book_size']}</div>
-                            <div><div class="{status_class}">{status.capitalize()}</div></div>
+                            <div>{row['edition_number']}</div>
                         </div>
                     """, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
             else:
-                st.info("No print runs found. Add a new print run below if ready.")
+                st.info("No print editions found. Add a new print edition below if ready.")
 
-        # 2. Edit Existing Print Run Expander (only if ready_to_print and data exists)
-        if is_ready_to_print and not print_runs_data.empty:
-            with st.expander("Edit Existing Print Run", expanded=False):
-                selected_print_run_id = st.selectbox(
-                    "Select Print Run to Edit",
-                    options=print_runs_data['id'].tolist(),
-                    format_func=lambda x: f"ID {x} - Sent {print_runs_data[print_runs_data['id'] == x]['print_sent_date'].iloc[0]}",
-                    key=f"select_print_run_{book_id}"
+        # 2. Edit Existing Print Edition Expander (only if ready_to_print and data exists)
+        if is_ready_to_print and not print_editions_data.empty:
+            with st.expander("Edit Existing Print Edition", expanded=False):
+                selected_print_id = st.selectbox(
+                    "Select Print Edition to Edit",
+                    options=print_editions_data['print_id'].tolist(),
+                    format_func=lambda x: f"ID {x} - Edition {print_editions_data[print_editions_data['print_id'] == x]['edition_number'].iloc[0]}",
+                    key=f"select_print_edition_{book_id}"
                 )
 
-                if selected_print_run_id:
-                    edit_row = print_runs_data[print_runs_data['id'] == selected_print_run_id].iloc[0]
+                if selected_print_id:
+                    edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
                     
-                    with st.form(key=f"edit_form_{book_id}_{selected_print_run_id}", border=False):
+                    with st.form(key=f"edit_form_{book_id}_{selected_print_id}", border=False):
                         edit_num_copies = st.number_input(
                             "Number of Copies",
                             min_value=0,
                             step=1,
-                            value=int(edit_row['num_copies']),
-                            key=f"edit_num_copies_{book_id}_{selected_print_run_id}"
+                            value=int(edit_row['copies_planned']),
+                            key=f"edit_num_copies_{book_id}_{selected_print_id}"
                         )
                         col1, col2 = st.columns(2)
                         with col1:
-                            edit_print_sent_date = st.date_input(
-                                "Print Sent Date",
-                                value=edit_row['print_sent_date'],
-                                key=f"edit_print_sent_date_{book_id}_{selected_print_run_id}"
+                            edit_print_date = st.date_input(
+                                "Print Date",
+                                value=edit_row['print_date'],
+                                key=f"edit_print_date_{book_id}_{selected_print_id}"
                             )
                             edit_print_cost = st.text_input(
                                 "Print Cost",
                                 value=str(edit_row['print_cost'] or ""),
-                                key=f"edit_print_cost_{book_id}_{selected_print_run_id}"
+                                key=f"edit_print_cost_{book_id}_{selected_print_id}"
                             )
                         with col2:
-                            edit_print_received_date = st.date_input(
-                                "Print Received Date",
-                                value=edit_row['print_received_date'],
-                                key=f"edit_print_received_date_{book_id}_{selected_print_run_id}"
+                            edit_print_color = st.selectbox(
+                                "Print Color",
+                                options=["Black & White", "Full Color"],
+                                index=["Black & White", "Full Color"].index(edit_row['print_color']),
+                                key=f"edit_print_color_{book_id}_{selected_print_id}"
                             )
-                            edit_print_by = st.text_input(
-                                "Print By",
-                                value=edit_row['print_by'] or "",
-                                key=f"edit_print_by_{book_id}_{selected_print_run_id}"
-                            )
-                        print_col1, print_col2, print_col3 = st.columns(3)
-                        with print_col1:
-                            edit_print_type = st.selectbox(
-                                "Print Type",
-                                options=["B&W", "Color"],
-                                index=["B&W", "Color"].index(edit_row['print_type']),
-                                key=f"edit_print_type_{book_id}_{selected_print_run_id}"
-                            )
-                        with print_col2:
                             edit_binding = st.selectbox(
                                 "Binding",
                                 options=["Paperback", "Hardcover"],
                                 index=["Paperback", "Hardcover"].index(edit_row['binding']),
-                                key=f"edit_binding_{book_id}_{selected_print_run_id}"
+                                key=f"edit_binding_{book_id}_{selected_print_id}"
                             )
-                        with print_col3:
-                            edit_book_size = st.selectbox(
-                                "Book Size",
-                                options=["6x9", "A4"],
-                                index=["6x9", "A4"].index(edit_row['book_size']),
-                                key=f"edit_book_size_{book_id}_{selected_print_run_id}"
-                            )
+                        edit_book_size = st.selectbox(
+                            "Book Size",
+                            options=["6x9", "8.5x11"],
+                            index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
+                            key=f"edit_book_size_{book_id}_{selected_print_id}"
+                        )
 
-                        save_edit = st.form_submit_button("💾 Save Edited Print Run", use_container_width=True)
+                        save_edit = st.form_submit_button("💾 Save Edited Print Edition", use_container_width=True)
 
                         if save_edit:
-                            with st.spinner("Saving edited print run..."):
+                            with st.spinner("Saving edited print edition..."):
                                 time.sleep(1)
                                 try:
                                     with conn.session as session:
-                                        # Update print_runs table
                                         session.execute(
                                             text("""
-                                                UPDATE print_runs 
-                                                SET print_sent_date = :print_sent_date, 
-                                                    print_received_date = :print_received_date, 
-                                                    num_copies = :num_copies, 
-                                                    print_by = :print_by, 
+                                                UPDATE PrintEditions 
+                                                SET print_date = :print_date, 
+                                                    copies_planned = :copies_planned, 
                                                     print_cost = :print_cost, 
-                                                    print_type = :print_type, 
+                                                    print_color = :print_color, 
                                                     binding = :binding, 
                                                     book_size = :book_size
-                                                WHERE id = :id
+                                                WHERE print_id = :print_id
                                             """),
                                             {
-                                                "id": selected_print_run_id,
-                                                "print_sent_date": edit_print_sent_date,
-                                                "print_received_date": edit_print_received_date,
-                                                "num_copies": edit_num_copies,
-                                                "print_by": edit_print_by,
+                                                "print_id": selected_print_id,
+                                                "print_date": edit_print_date,
+                                                "copies_planned": edit_num_copies,
                                                 "print_cost": float(edit_print_cost) if edit_print_cost else None,
-                                                "print_type": edit_print_type,
+                                                "print_color": edit_print_color,
                                                 "binding": edit_binding,
                                                 "book_size": edit_book_size
                                             }
                                         )
-                                        
-                                        # If print_received_date is set, update print_status in books table
-                                        if edit_print_received_date is not None:
-                                            session.execute(
-                                                text("""
-                                                    UPDATE books 
-                                                    SET print_status = 1 
-                                                    WHERE book_id = :book_id
-                                                """),
-                                                {"book_id": book_id}
-                                            )
-                                        
                                         session.commit()
-                                    st.success("✔️ Updated Print Run")
+                                    st.success("✔️ Updated Print Edition")
                                     st.cache_data.clear()
                                 except Exception as e:
-                                    st.error(f"❌ Error saving print run: {str(e)}")
+                                    st.error(f"❌ Error saving print edition: {str(e)}")
 
-        # 3. Add New Print Run Expander (only if ready_to_print is True)
+        # 3. Add New Print Edition Expander (only if ready_to_print is True)
         if is_ready_to_print:
-            with st.expander("Add New Print Run", expanded=False):
+            with st.expander("Add New Print Edition", expanded=False):
                 with st.form(key=f"new_print_form_{book_id}", border=False):
                     new_num_copies = st.number_input(
                         label="Number of Copies",
@@ -3837,93 +3792,74 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     )
                     col1, col2 = st.columns(2)
                     with col1:
-                        new_print_sent_date = st.date_input(
-                            "Print Sent Date",
-                            value=None,
-                            key=f"new_print_sent_date_{book_id}"
+                        new_print_date = st.date_input(
+                            "Print Date",
+                            value=datetime.now(),
+                            key=f"new_print_date_{book_id}"
                         )
                         print_cost = st.text_input(
                             "Print Cost",
                             key=f"print_cost_{book_id}"
                         )
                     with col2:
-                        new_print_received_date = st.date_input(
-                            "Print Received Date",
-                            value=None,
-                            key=f"new_print_received_date_{book_id}"
+                        print_color = st.selectbox(
+                            "Print Color",
+                            options=["Black & White", "Full Color"],
+                            key=f"print_color_{book_id}"
                         )
-                        print_by = st.text_input(
-                            "Print By",
-                            key=f"print_by_{book_id}"
-                        )
-                    print_col1, print_col2, print_col3 = st.columns(3)
-                    with print_col1:
-                        print_type = st.selectbox(
-                            "Print Type",
-                            options=["B&W", "Color"],
-                            key=f"print_type_{book_id}"
-                        )
-                    with print_col2:
                         binding = st.selectbox(
                             "Binding",
                             options=["Paperback", "Hardcover"],
                             key=f"binding_{book_id}"
                         )
-                    with print_col3:
-                        book_size = st.selectbox(
-                            "Book Size",
-                            options=["6x9", "A4"],
-                            key=f"book_size_{book_id}"
-                        )
+                    book_size = st.selectbox(
+                        "Book Size",
+                        options=["6x9", "8.5x11"],
+                        key=f"book_size_{book_id}"
+                    )
 
-                    save_new_print = st.form_submit_button("💾 Save New Print Run", use_container_width=True)
+                    save_new_print = st.form_submit_button("💾 Save New Print Edition", use_container_width=True)
 
                     if save_new_print:
-                        with st.spinner("Saving new print run..."):
+                        with st.spinner("Saving new print edition..."):
                             time.sleep(1)
                             try:
                                 if st.session_state[f"new_num_copies_{book_id}"] > 0:
                                     with conn.session as session:
-                                        # Insert into print_runs table
+                                        # Calculate edition_number
+                                        result = session.execute(
+                                            text("SELECT COALESCE(MAX(edition_number), 0) + 1 AS next_edition FROM PrintEditions WHERE book_id = :book_id"),
+                                            {"book_id": book_id}
+                                        )
+                                        edition_number = result.fetchone()[0]
+                                        
+                                        # Insert into PrintEditions table
                                         session.execute(
                                             text("""
-                                                INSERT INTO print_runs (book_id, print_sent_date, print_received_date, 
-                                                    num_copies, print_by, print_cost, print_type, binding, book_size)
-                                                VALUES (:book_id, :print_sent_date, :print_received_date, :num_copies, 
-                                                    :print_by, :print_cost, :print_type, :binding, :book_size)
+                                                INSERT INTO PrintEditions (book_id, edition_number, print_date, copies_planned, 
+                                                    print_cost, print_color, binding, book_size)
+                                                VALUES (:book_id, :edition_number, :print_date, :copies_planned, 
+                                                    :print_cost, :print_color, :binding, :book_size)
                                             """),
                                             {
                                                 "book_id": book_id,
-                                                "print_sent_date": st.session_state[f"new_print_sent_date_{book_id}"],
-                                                "print_received_date": st.session_state[f"new_print_received_date_{book_id}"],
-                                                "num_copies": st.session_state[f"new_num_copies_{book_id}"],
-                                                "print_by": st.session_state[f"print_by_{book_id}"],
+                                                "edition_number": edition_number,
+                                                "print_date": st.session_state[f"new_print_date_{book_id}"],
+                                                "copies_planned": st.session_state[f"new_num_copies_{book_id}"],
                                                 "print_cost": (float(st.session_state[f"print_cost_{book_id}"]) 
                                                             if st.session_state[f"print_cost_{book_id}"] else None),
-                                                "print_type": st.session_state[f"print_type_{book_id}"],
+                                                "print_color": st.session_state[f"print_color_{book_id}"],
                                                 "binding": st.session_state[f"binding_{book_id}"],
                                                 "book_size": st.session_state[f"book_size_{book_id}"]
                                             }
                                         )
-                                        
-                                        # If print_received_date is set, update print_status in books table
-                                        if st.session_state[f"new_print_received_date_{book_id}"] is not None:
-                                            session.execute(
-                                                text("""
-                                                    UPDATE books 
-                                                    SET print_status = 1 
-                                                    WHERE book_id = :book_id
-                                                """),
-                                                {"book_id": book_id}
-                                            )
-                                        
                                         session.commit()
-                                    st.success("✔️ Added New Print Run")
+                                    st.success("✔️ Added New Print Edition")
                                     st.cache_data.clear()
                                 else:
                                     st.warning("Please enter a number of copies greater than 0.")
                             except Exception as e:
-                                st.error(f"❌ Error saving new print run: {str(e)}") 
+                                st.error(f"❌ Error saving new print edition: {str(e)}")
 
     # Inventory Tab
     with tab2:

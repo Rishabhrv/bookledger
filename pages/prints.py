@@ -34,44 +34,95 @@ conn = connect_db()
 def fetch_print_ready_books():
     query = """
     WITH ReadyToPrint AS (
-    SELECT 
-        b.book_id,
-        b.title,
-        b.date,
-        COALESCE(pr.num_copies, b.num_copies) AS num_copies,
-        'Ready for Print' AS status,
-        pr.print_type,
-        pr.binding,
-        pr.book_size
-    FROM books b
-    LEFT JOIN print_runs pr ON b.book_id = pr.book_id
-        AND pr.status = 'Planned'
-        AND pr.id = (
+        SELECT 
+            b.book_id,
+            b.title,
+            b.date,
+            COALESCE(pr.num_copies, b.num_copies) AS num_copies,
+            'Ready for Print' AS status,
+            pr.print_type,
+            pr.binding,
+            pr.book_size
+        FROM books b
+        LEFT JOIN print_runs pr ON b.book_id = pr.book_id
+            AND pr.status = 'Planned'
+            AND pr.id = (
+                SELECT MAX(id)
+                FROM print_runs pr2
+                WHERE pr2.book_id = pr.book_id
+                AND pr2.status = 'Planned'
+            )
+        WHERE 
+            b.writing_complete = 1 
+            AND b.proofreading_complete = 1 
+            AND b.formatting_complete = 1 
+            AND b.cover_page_complete = 1
+            AND b.print_status = 0
+            AND NOT EXISTS (
+                SELECT 1 
+                FROM book_authors ba 
+                WHERE ba.book_id = b.book_id 
+                AND (
+                    ba.welcome_mail_sent != 1 
+                    OR ba.photo_recive != 1 
+                    OR ba.id_proof_recive != 1 
+                    OR ba.author_details_sent != 1 
+                    OR ba.cover_agreement_sent != 1 
+                    OR ba.agreement_received != 1 
+                    OR ba.digital_book_sent != 1 
+                    OR ba.printing_confirmation != 1
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM batch_books bb
+                JOIN batches bt ON bb.batch_id = bt.batch_id
+                WHERE bb.book_id = b.book_id
+                AND bt.status = 'Sent'
+                AND bt.receiving_date IS NULL
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM print_runs pr3
+                WHERE pr3.book_id = b.book_id
+                AND pr3.status = 'Completed'
+            )
+    ),
+    LatestPrintRun AS (
+        SELECT 
+            book_id,
+            num_copies,
+            print_type,
+            binding,
+            book_size
+        FROM print_runs pr
+        WHERE num_copies > 0
+        AND status = 'Planned'
+        AND id = (
             SELECT MAX(id)
             FROM print_runs pr2
             WHERE pr2.book_id = pr.book_id
+            AND pr2.num_copies > 0
             AND pr2.status = 'Planned'
         )
-    WHERE 
-        b.writing_complete = 1 
-        AND b.proofreading_complete = 1 
-        AND b.formatting_complete = 1 
-        AND b.cover_page_complete = 1
-        AND b.print_status = 0
-        AND NOT EXISTS (
-            SELECT 1 
-            FROM book_authors ba 
-            WHERE ba.book_id = b.book_id 
-            AND (
-                ba.welcome_mail_sent != 1 
-                OR ba.photo_recive != 1 
-                OR ba.id_proof_recive != 1 
-                OR ba.author_details_sent != 1 
-                OR ba.cover_agreement_sent != 1 
-                OR ba.agreement_received != 1 
-                OR ba.digital_book_sent != 1 
-                OR ba.printing_confirmation != 1
-            )
+    ),
+    ReprintBooks AS (
+        SELECT 
+            b.book_id,
+            b.title,
+            b.date,
+            lpr.num_copies,
+            'Ready for Reprint' AS status,
+            lpr.print_type,
+            lpr.binding,
+            lpr.book_size
+        FROM books b
+        JOIN LatestPrintRun lpr ON b.book_id = lpr.book_id
+        WHERE EXISTS (
+            SELECT 1
+            FROM print_runs pr
+            WHERE pr.book_id = b.book_id
+            AND pr.status = 'Completed'
         )
         AND NOT EXISTS (
             SELECT 1
@@ -81,80 +132,29 @@ def fetch_print_ready_books():
             AND bt.status = 'Sent'
             AND bt.receiving_date IS NULL
         )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM print_runs pr3
-            WHERE pr3.book_id = b.book_id
-            AND pr3.status = 'Completed'
-        )
-),
-LatestPrintRun AS (
+    )
     SELECT 
         book_id,
+        title,
+        date,
         num_copies,
+        status,
         print_type,
         binding,
         book_size
-    FROM print_runs pr
-    WHERE num_copies > 0
-    AND status = 'Planned'
-    AND id = (
-        SELECT MAX(id)
-        FROM print_runs pr2
-        WHERE pr2.book_id = pr.book_id
-        AND pr2.num_copies > 0
-        AND pr2.status = 'Planned'
-    )
-),
-ReprintBooks AS (
+    FROM ReadyToPrint
+    UNION
     SELECT 
-        b.book_id,
-        b.title,
-        b.date,
-        lpr.num_copies,
-        'Ready for Reprint' AS status,
-        lpr.print_type,
-        lpr.binding,
-        lpr.book_size
-    FROM books b
-    JOIN LatestPrintRun lpr ON b.book_id = lpr.book_id
-    WHERE EXISTS (
-        SELECT 1
-        FROM print_runs pr
-        WHERE pr.book_id = b.book_id
-        AND pr.status = 'Completed'
-    )
-    AND NOT EXISTS (
-        SELECT 1
-        FROM batch_books bb
-        JOIN batches bt ON bb.batch_id = bt.batch_id
-        WHERE bb.book_id = b.book_id
-        AND bt.status = 'Sent'
-        AND bt.receiving_date IS NULL
-    )
-)
-SELECT 
-    book_id,
-    title,
-    date,
-    num_copies,
-    status,
-    print_type,
-    binding,
-    book_size
-FROM ReadyToPrint
-UNION
-SELECT 
-    book_id,
-    title,
-    date,
-    num_copies,
-    status,
-    print_type,
-    binding,
-    book_size
-FROM ReprintBooks
-ORDER BY title;
+        book_id,
+        title,
+        date,
+        num_copies,
+        status,
+        print_type,
+        binding,
+        book_size
+    FROM ReprintBooks
+    ORDER BY title;
     """
     return conn.query(query, ttl=0, show_spinner=False)
 
@@ -165,7 +165,7 @@ def fetch_running_batches():
         bt.batch_id,
         bt.batch_name,
         bt.print_sent_date,
-        COUNT(bb.id) AS num_books
+        COUNT(bb.book_id) AS num_books
     FROM batches bt
     LEFT JOIN batch_books bb ON bt.batch_id = bb.batch_id
     WHERE bt.status = 'Sent' AND bt.receiving_date IS NULL
@@ -181,18 +181,11 @@ def fetch_batch_books(batch_id):
         b.book_id,
         b.title,
         bb.num_copies,
-        COALESCE(pr.print_type, NULL) AS print_type,
-        COALESCE(pr.binding, NULL) AS binding,
-        COALESCE(pr.book_size, NULL) AS book_size
+        bb.print_type,
+        bb.binding,
+        bb.book_size
     FROM batch_books bb
     JOIN books b ON bb.book_id = b.book_id
-    LEFT JOIN print_runs pr ON b.book_id = pr.book_id
-        AND pr.print_sent_date = (
-            SELECT MAX(print_sent_date)
-            FROM print_runs pr2
-            WHERE pr2.book_id = b.book_id
-            AND pr2.print_sent_date IS NOT NULL
-        )
     WHERE bb.batch_id = :batch_id;
     """
     return conn.query(query, params={"batch_id": batch_id}, ttl=0, show_spinner=False)
@@ -223,6 +216,9 @@ def create_batch_dialog(books_df):
     # Form inputs
     print_sent_date = st.date_input("Print Sent Date", value=date.today())
     print_by = st.text_input("Print By")
+    print_type = st.selectbox("Print Type", ["Hardcover", "Paperback", "Other"], index=0)
+    binding = st.selectbox("Binding", ["Sewn", "Perfect", "Spiral"], index=0)
+    book_size = st.selectbox("Book Size", ["A5", "A4", "B5"], index=0)
     
     # Book selection (all books selected by default)
     selected_books = st.multiselect(
@@ -262,39 +258,92 @@ def create_batch_dialog(books_df):
                         # Get the inserted batch_id
                         batch_id = session.execute(text("SELECT LAST_INSERT_ID()")).scalar()
                         
-                        # Insert into batch_books and update print_runs for reprints
+                        # Insert into batch_books
                         for book_title in selected_books:
                             book_row = books_df[books_df["title"] == book_title].iloc[0]
                             book_id = book_row["book_id"]
                             num_copies = book_row["num_copies"]
+                            status = book_row["status"]
                             
-                            # Insert into batch_books
+                            # Use dialog inputs for new prints, book_row for reprints
+                            batch_print_type = print_type if status == "Ready for Print" else book_row["print_type"]
+                            batch_binding = binding if status == "Ready for Print" else book_row["binding"]
+                            batch_book_size = book_size if status == "Ready for Print" else book_row["book_size"]
+                            
+                            # Check for existing book_id in batch to prevent duplicates
+                            existing = session.execute(
+                                text("""
+                                SELECT 1
+                                FROM batch_books
+                                WHERE batch_id = :batch_id AND book_id = :book_id
+                                """),
+                                {"batch_id": batch_id, "book_id": book_id}
+                            ).scalar()
+                            if existing:
+                                continue
+                            
+                            # Insert into batch_books with print_type, binding, book_size
                             session.execute(
                                 text("""
-                                INSERT INTO batch_books (batch_id, book_id, num_copies)
-                                VALUES (:batch_id, :book_id, :num_copies)
+                                INSERT INTO batch_books (batch_id, book_id, num_copies, print_type, binding, book_size)
+                                VALUES (:batch_id, :book_id, :num_copies, :print_type, :binding, :book_size)
                                 """),
                                 {
                                     "batch_id": batch_id,
                                     "book_id": book_id,
-                                    "num_copies": num_copies
+                                    "num_copies": num_copies,
+                                    "print_type": batch_print_type,
+                                    "binding": batch_binding,
+                                    "book_size": batch_book_size
                                 }
                             )
                             
-                            # If reprint, update print_runs
-                            if book_row["status"] == "Ready for Reprint":
+                            if status == "Ready for Reprint":
+                                # Update print_runs status to Sent
                                 session.execute(
                                     text("""
                                     UPDATE print_runs
-                                    SET print_sent_date = :print_sent_date
+                                    SET status = 'Sent',
+                                        print_sent_date = :print_sent_date
                                     WHERE book_id = :book_id
-                                    AND print_sent_date IS NULL
-                                    AND num_copies > 0
+                                    AND status = 'Planned'
+                                    AND id = (
+                                        SELECT MAX(id)
+                                        FROM print_runs pr2
+                                        WHERE pr2.book_id = :book_id
+                                        AND pr2.status = 'Planned'
+                                    )
                                     """),
                                     {
                                         "print_sent_date": print_sent_date,
                                         "book_id": book_id
                                     }
+                                )
+                            else:
+                                # Create new print_runs entry for new prints
+                                session.execute(
+                                    text("""
+                                    INSERT INTO print_runs (book_id, num_copies, print_type, binding, book_size, status, print_sent_date)
+                                    VALUES (:book_id, :num_copies, :print_type, :binding, :book_size, 'Sent', :print_sent_date)
+                                    """),
+                                    {
+                                        "book_id": book_id,
+                                        "num_copies": num_copies,
+                                        "print_type": batch_print_type,
+                                        "binding": batch_binding,
+                                        "book_size": batch_book_size,
+                                        "print_sent_date": print_sent_date
+                                    }
+                                )
+                                
+                                # Update print_status to 1 for new prints
+                                session.execute(
+                                    text("""
+                                    UPDATE books
+                                    SET print_status = 1
+                                    WHERE book_id = :book_id
+                                    """),
+                                    {"book_id": book_id}
                                 )
                         
                         session.commit()
@@ -349,8 +398,6 @@ st.dataframe(
         "book_size": "Book Size"
     }
 )
-
-st.stop()
 
 # Running Batches
 st.subheader("Running Print Batches")
