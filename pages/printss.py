@@ -362,7 +362,8 @@ def create_batch_dialog():
             invalid_books.append(f"{book['title']} (Missing: {', '.join(missing_fields)})")
     
     if invalid_books:
-        st.error(f"The following books have missing details:\n- {'\n- '.join(invalid_books)}")
+        error_message = "The following books have missing details:\n- " + "\n- ".join(invalid_books)
+        st.error(error_message)
         return
     
     if st.button("Add Batch"):
