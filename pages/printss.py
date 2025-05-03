@@ -39,13 +39,9 @@ def get_ready_to_print_books(conn):
         'First Print' AS print_type,
         COALESCE(pe.book_size, '6x9') AS book_size,
         COALESCE(pe.binding, 'Paperback') AS binding,
-        GROUP_CONCAT(DISTINCT a.name) AS authors
+        COALESCE(pe.print_cost, 5.00) AS print_cost
     FROM 
         books b
-    LEFT JOIN 
-        book_authors ba ON b.book_id = ba.book_id
-    LEFT JOIN 
-        authors a ON ba.author_id = a.author_id
     LEFT JOIN 
         PrintEditions pe ON b.book_id = pe.book_id 
         AND pe.edition_number = (SELECT MIN(edition_number) FROM PrintEditions WHERE book_id = b.book_id)
@@ -77,7 +73,7 @@ def get_ready_to_print_books(conn):
             AND pb.status = 'Sent'
         )
     GROUP BY 
-        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding;
+        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df
@@ -89,7 +85,6 @@ def get_reprint_eligible_books(conn):
         b.book_id, 
         b.title, 
         b.isbn,
-        GROUP_CONCAT(DISTINCT a.name) AS authors,
         'Reprint' AS print_type,
         pe.book_size,
         pe.binding,
@@ -98,10 +93,6 @@ def get_reprint_eligible_books(conn):
         pe.copies_planned
     FROM 
         books b
-    LEFT JOIN 
-        book_authors ba ON b.book_id = ba.book_id
-    LEFT JOIN 
-        authors a ON ba.author_id = a.author_id
     JOIN (
         SELECT 
             pe2.book_id,
@@ -316,7 +307,7 @@ def update_batch_receive_date(conn, batch_id, receive_date):
         session.commit()
 
 # Batch creation dialog
-@st.dialog("Create New Batch")
+@st.dialog("Create New Batch", width="large")
 def create_batch_dialog():
     conn = connect_db()
     st.subheader("New Batch Details")
@@ -339,7 +330,7 @@ def create_batch_dialog():
             'book_size': book['book_size'],
             'binding': book['binding'],
             'print_color': 'Black & White',  # Default for first prints
-            'print_cost': 5.00,  # Default for first prints
+            'print_cost': book['print_cost'],  # Use queried print_cost
             'print_type': book['print_type']
         })
     for _, book in reprint_books.iterrows():
@@ -361,6 +352,18 @@ def create_batch_dialog():
     
     # Filter selected books
     selected_books = [book for book in all_books if f"{book['title']} ({book['print_type']})" in selected_titles]
+    
+    # Validate required fields for each selected book
+    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_cost']
+    invalid_books = []
+    for book in selected_books:
+        missing_fields = [field for field in required_fields if not book.get(field)]
+        if missing_fields:
+            invalid_books.append(f"{book['title']} (Missing: {', '.join(missing_fields)})")
+    
+    if invalid_books:
+        st.error(f"The following books have missing details:\n- {'\n- '.join(invalid_books)}")
+        return
     
     if st.button("Add Batch"):
         if not selected_books:
@@ -394,47 +397,75 @@ def edit_batch_dialog(running_batches):
 
 # Streamlit app
 def print_management_page():
-    st.title("Book Print Management")
     conn = connect_db()
 
     # Section 1: Show Ready-to-Print Books (First Prints)
-    st.header("Books Ready for First Print")
     first_print_books = get_ready_to_print_books(conn)
     
-    if not first_print_books.empty:
-        st.write(f"Found {len(first_print_books)} books ready for first print:")
-        if st.button("New Batch"):
-            create_batch_dialog()
-        st.dataframe(first_print_books[['book_id', 'title', 'date', 'num_copies', 'print_type', 'binding', 'book_size']])
+    if not first_print_books.empty:    
+        col1, col2 = st.columns([18, 2])
+        with col1:
+            st.write(f" ### {len(first_print_books)} Books ready for First Print")
+        with col2:
+            if st.button(":material/add: New Batch"):
+                create_batch_dialog()
+        st.dataframe(first_print_books[['book_id', 'title', 'date', 'num_copies', 'print_type', 'binding', 'book_size', 'print_cost']], 
+                     hide_index=True, column_config={
+                         'book_id': st.column_config.TextColumn("Book ID"),
+                         'title': st.column_config.TextColumn("Title"),
+                         'date': st.column_config.DateColumn("Date"),
+                         'num_copies': st.column_config.NumberColumn("Number of Copies"),
+                         'print_type': st.column_config.TextColumn("Print Type"),
+                         'binding': st.column_config.TextColumn("Binding"),
+                         'book_size': st.column_config.TextColumn("Book Size"),
+                         'print_cost': st.column_config.NumberColumn("Print Cost")
+                     })
     else:
         st.info("No books are ready for first print.")
 
     # Section 2: Show Reprint-Eligible Books (Unbatched Editions)
-    st.header("Books Eligible for Reprint")
     reprint_eligible_books = get_reprint_eligible_books(conn)
     
     if not reprint_eligible_books.empty:
-        st.write(f"Found {len(reprint_eligible_books)} books eligible for reprint:")
-        st.dataframe(reprint_eligible_books[['book_id', 'title', 'isbn', 'print_type', 'book_size', 'binding']])
+        st.write(f"### {len(reprint_eligible_books)} Books eligible for Reprint:")
+        st.dataframe(reprint_eligible_books[['book_id', 'title','print_type', 'book_size', 'binding', 'print_cost']],
+                     hide_index=True, column_config={
+                         'book_id': st.column_config.TextColumn("Book ID"),
+                         'title': st.column_config.TextColumn("Title"),
+                         'print_type': st.column_config.TextColumn("Print Type"),
+                         'book_size': st.column_config.TextColumn("Book Size"),
+                         'binding': st.column_config.TextColumn("Binding"),
+                         'print_cost': st.column_config.NumberColumn("Print Cost")
+                     })
     else:
         st.info("No books are eligible for reprint.")
 
     # Section 3: Manage Existing Batches
-    st.header("Manage Existing Batches")
-    
     # Running Batches with Book Details
-    st.subheader("Running Batches")
     running_batches = get_running_batches(conn)
     if not running_batches.empty:
-        st.write(f"Found {len(running_batches)} running batches (status: Sent):")
-        if st.button("Edit Batch"):
-            edit_batch_dialog(running_batches)
+        col1, col2 = st.columns([18, 2])
+        with col1:
+            st.write(f"### {len(running_batches)} Running Batches (status: Sent):")
+        with col2:
+            if st.button(":material/edit: Edit Batch"):
+                edit_batch_dialog(running_batches)
         for _, batch in running_batches.iterrows():
-            st.markdown(f"### Batch: {batch['batch_name']} (ID: {batch['batch_id']})")
+            st.markdown(f"##### Batch: {batch['batch_name']} (ID: {batch['batch_id']})")
             st.write(f"Created: {batch['created_at']}, Sent: {batch['print_sent_date']}, Total Copies: {batch['total_copies']}, Printer: {batch['printer_name']}")
             batch_books = get_batch_books(conn, batch['batch_id'])
             if not batch_books.empty:
-                st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number']])
+                st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number']],
+                             hide_index=True, column_config={
+                                 'book_id': st.column_config.TextColumn("Book ID"),
+                                 'title': st.column_config.TextColumn("Title"),
+                                 'copies_in_batch': st.column_config.NumberColumn("Copies in Batch"),
+                                 'book_size': st.column_config.TextColumn("Book Size"),
+                                 'binding': st.column_config.TextColumn("Binding"),
+                                 'print_color': st.column_config.TextColumn("Print Color"),
+                                 'print_cost': st.column_config.NumberColumn("Print Cost"),
+                                 'edition_number': st.column_config.NumberColumn("Edition Number")
+                             })
             else:
                 st.info("No books found in this batch.")
     else:
@@ -445,17 +476,36 @@ def print_management_page():
     batches = get_batches(conn)
     if not batches.empty:
         st.write(f"Found {len(batches)} total batches:")
-        st.dataframe(batches[['batch_id', 'batch_name', 'created_at', 'print_sent_date', 'print_receive_date', 'status', 'total_copies']])
+        st.dataframe(batches[['batch_id', 'batch_name', 'created_at', 'print_sent_date', 'print_receive_date', 'status', 'total_copies']],
+                     hide_index=True, column_config={
+                         'batch_id': st.column_config.TextColumn("Batch ID"),
+                         'batch_name': st.column_config.TextColumn("Batch Name"),
+                         'created_at': st.column_config.DateColumn("Created At"),
+                         'print_sent_date': st.column_config.DateColumn("Print Sent Date"),
+                         'print_receive_date': st.column_config.DateColumn("Print Receive Date"),
+                         'status': st.column_config.TextColumn("Status"),
+                         'total_copies': st.column_config.NumberColumn("Total Copies")
+                     })
         
         st.subheader("Completed Batch Details")
         completed_batches = batches[batches['status'] == 'Received']
         if not completed_batches.empty:
             for _, batch in completed_batches.iterrows():
-                st.markdown(f"### Batch: {batch['batch_name']} (ID: {batch['batch_id']})")
+                st.markdown(f"##### Batch: {batch['batch_name']} (ID: {batch['batch_id']})")
                 st.write(f"Created: {batch['created_at']}, Sent: {batch['print_sent_date']}, Received: {batch['print_receive_date']}, Total Copies: {batch['total_copies']}, Printer: {batch['printer_name']}")
                 batch_books = get_batch_books(conn, batch['batch_id'])
                 if not batch_books.empty:
-                    st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number']])
+                    st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number']],
+                                 hide_index=True, column_config={
+                                     'book_id': st.column_config.TextColumn("Book ID"),
+                                     'title': st.column_config.TextColumn("Title"),
+                                     'copies_in_batch': st.column_config.NumberColumn("Copies in Batch"),
+                                     'book_size': st.column_config.TextColumn("Book Size"),
+                                     'binding': st.column_config.TextColumn("Binding"),
+                                     'print_color': st.column_config.TextColumn("Print Color"),
+                                     'print_cost': st.column_config.NumberColumn("Print Cost"),
+                                     'edition_number': st.column_config.NumberColumn("Edition Number")
+                                 })
                 else:
                     st.info("No books found in this batch.")
         else:
