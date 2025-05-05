@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 from sqlalchemy import text
 from io import BytesIO
+from auth import validate_token
 
 
 logo = "logo/logo_black.png"
@@ -15,6 +16,21 @@ st.logo(logo,
 size = "large",
 icon_image = small_logo
 )
+
+validate_token()
+
+user_role = st.session_state.get("role", None)
+user_app = st.session_state.get("app", None)
+user_access = st.session_state.get("access", None)
+
+
+if user_role != 'admin' and not (
+    user_role == 'user' and 
+    user_app == 'main' and 
+    'Print Management' in user_access 
+):
+    st.error("⚠️ Access Denied: You don't have permission to access this page.")
+    st.stop()
 
 st.markdown("""
     <style>

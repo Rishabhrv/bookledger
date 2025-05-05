@@ -8,3 +8,4 @@ seaborn==0.13.2
 SQLAlchemy==2.0.38
 streamlit==1.44.1
 mysqlclient
+XlsxWriter
