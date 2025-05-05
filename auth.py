@@ -55,6 +55,7 @@ ACCESS_TO_BUTTON = {
     "DatadashBoard": "datadashoard",
     "Advance Search": "advance_search",
     "Team Dashboard": "team_dashboard",
+    "Print Management": "print_management",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

@@ -75,6 +75,7 @@ ACCESS_TO_BUTTON = {
     "DatadashBoard": "datadashoard",
     "Advance Search": "advance_search",
     "Team Dashboard": "team_dashboard",
+    "Print Management": "print_management",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -4506,17 +4507,24 @@ with srcol5:
 
             # DataDashboard button
             if is_button_allowed("datadashoard"):
-                if st.button("📊 Data Dashboard", key="edit_", type="tertiary"):
+                if st.button("📊 Dashboard", key="dashboard", type="tertiary"):
                     st.switch_page("pages/dashboard.py")
             else:
-                st.button("📊 DataDashboard", key="edit_", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
+                st.button("📊 DataDashboard", key="dashboard", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
 
             # Team dashboard
             if is_button_allowed("team_dashboard"):
-                if st.button("📊 Team dashboard", key="edit_team", type="tertiary"):
+                if st.button("📊 Operations", key="dashboard_team", type="tertiary"):
                     st.switch_page("pages/team_dashboard.py")
             else:
-                st.button("📊 Team dashboard", key="edit_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
+                st.button("📊 Team dashboard", key="dashboard_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
+            
+            # Print Managment
+            if is_button_allowed("print_management"):
+                if st.button("🖨️ Manage Prints", key="print_management", type="tertiary"):
+                    st.switch_page("pages/prints.py")
+            else:
+                st.button("📊 Manage Prints", key="print_management", type="tertiary", help="Manage Prints (Not Authorized)", disabled=True)
 
             # Edit Authors button
             if is_button_allowed("edit_author_detail"):
