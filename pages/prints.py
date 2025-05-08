@@ -32,6 +32,8 @@ if user_role != 'admin' and not (
     st.error("⚠️ Access Denied: You don't have permission to access this page.")
     st.stop()
 
+st.cache_data.clear()
+
 st.markdown("""
     <style>
             
@@ -485,9 +487,19 @@ def edit_batch_dialog(running_batches):
     conn = connect_db()
     st.subheader("Edit Running Batch")
     
+    if running_batches.empty:
+        st.warning("No batch found")
+        return
+
     batch_options = {f"{row['batch_name']} (ID: {row['batch_id']})": row['batch_id'] for _, row in running_batches.iterrows()}
-    selected_batch = st.selectbox("Select Batch", list(batch_options.keys()))
-    batch_id = batch_options[selected_batch]
+
+    selected_batch_label = st.selectbox("Select Batch", list(batch_options.keys()))
+
+    if not selected_batch_label:
+        st.warning("No batch selected")
+        return
+
+    batch_id = batch_options.get(selected_batch_label)
     receive_date = st.date_input("Print Receive Date", value=datetime.now())
     
     if st.button("Update Batch"):
@@ -497,6 +509,7 @@ def edit_batch_dialog(running_batches):
             st.rerun()  # Close dialog and refresh page
         except Exception as e:
             st.error(f"Error updating batch: {str(e)}")
+
 
 # Batch details dialog for completed batches
 @st.dialog("Batch Books Details", width="large")
@@ -552,10 +565,13 @@ def print_management_page():
     conn = connect_db()
 
 
-    col1, col2 = st.columns([8, 1], vertical_alignment="bottom")
+    col1, col2, col3 = st.columns([4,8, 1], vertical_alignment="bottom")
     with col1:
         st.write("## 📖 Print Management")
     with col2:
+        if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
+            st.cache_data.clear()
+    with col3:
         if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
             st.switch_page('app.py')
     
@@ -631,14 +647,13 @@ def print_management_page():
     # Section 3: Manage Running Batches
     running_batches = get_running_batches(conn)
     with st.container():
+        col1, col2 = st.columns([16, 2],vertical_alignment="bottom")
+        with col1:
+            st.markdown(f'<div class="status-badge-yellow">Running Batches (Sent) <span class="badge-count">{len(running_batches)}</span></div>', unsafe_allow_html=True)
+        with col2:
+            if st.button(":material/edit: Edit Batch", type="secondary"):
+                edit_batch_dialog(running_batches)
         if not running_batches.empty:
-            col1, col2 = st.columns([16, 2],vertical_alignment="bottom")
-            with col1:
-                st.markdown(f'<div class="status-badge-yellow">Running Batches (Sent) <span class="badge-count">{len(running_batches)}</span></div>', unsafe_allow_html=True)
-            with col2:
-                if st.button(":material/edit: Edit Batch", type="secondary"):
-                    edit_batch_dialog(running_batches)
-            
             for _, batch in running_batches.iterrows():
                 with st.container(border=True):
                     # Batch details in a clean layout
