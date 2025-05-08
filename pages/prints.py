@@ -206,51 +206,41 @@ def get_ready_to_print_books(conn):
     df = conn.query(query, ttl=0)  # Disable caching
     return df
 
-# Fetch books eligible for reprint (latest unbatched edition only, not in running batches)
 def get_reprint_eligible_books(conn):
     query = """
         SELECT 
-        b.book_id, 
-        b.title, 
-        b.isbn,
-        'Reprint' AS print_type,
-        COALESCE(pe.book_size, '6x9') AS book_size,
-        COALESCE(pe.binding, 'Paperback') AS binding,
-        COALESCE(pe.print_cost, 00.00) AS print_cost,
-        pe.print_color,
-        pe.copies_planned,
-        b.book_pages
-    FROM 
-        books b
-    JOIN (
-        SELECT 
-            pe2.book_id,
-            pe2.book_size,
-            pe2.binding,
-            pe2.print_color,
-            COALESCE(pe2.print_cost, 5.00) AS print_cost,  -- Add default value here too
-            pe2.copies_planned,
-            ROW_NUMBER() OVER (PARTITION BY pe2.book_id ORDER BY pe2.edition_number DESC, pe2.print_date DESC) AS rn
+            b.book_id, 
+            b.title, 
+            b.isbn,
+            'Reprint' AS print_type,
+            COALESCE(pe.book_size, '6x9') AS book_size,
+            COALESCE(pe.binding, 'Paperback') AS binding,
+            COALESCE(pe.print_cost, 0.00) AS print_cost,
+            pe.print_color,
+            pe.copies_planned,
+            b.book_pages
         FROM 
-            PrintEditions pe2
+            books b
+        JOIN (
+            SELECT 
+                pe2.book_id,
+                pe2.book_size,
+                pe2.binding,
+                pe2.print_color,
+                COALESCE(pe2.print_cost, 0.00) AS print_cost,
+                pe2.copies_planned,
+                pe2.print_id,
+                ROW_NUMBER() OVER (PARTITION BY pe2.book_id ORDER BY pe2.edition_number DESC, pe2.print_date DESC) AS rn
+            FROM 
+                PrintEditions pe2
+        ) pe ON b.book_id = pe.book_id AND pe.rn = 1
+        LEFT JOIN 
+            BatchDetails bd ON pe.print_id = bd.print_id
         WHERE 
-            NOT EXISTS (
-                SELECT 1 
-                FROM BatchDetails bd 
-                WHERE bd.print_id = pe2.print_id
-            )
-    ) pe ON b.book_id = pe.book_id AND pe.rn = 1
-    WHERE 
-        b.print_status = 1
-        AND NOT EXISTS (
-            SELECT 1
-            FROM BatchDetails bd
-            JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
-            WHERE bd.print_id IN (SELECT print_id FROM PrintEditions pe3 WHERE pe3.book_id = b.book_id)
-            AND pb.status = 'Sent'
-        )
-    GROUP BY 
-        b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages;
+            b.print_status = 1
+            AND bd.print_id IS NULL
+        GROUP BY 
+            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df
@@ -448,11 +438,11 @@ def create_batch_dialog():
         all_books.append({
             'book_id': book['book_id'],
             'title': book['title'],
-            'num_copies': book['copies_planned'] if book['copies_planned'] else 100,
+            'num_copies': book['copies_planned'] if book['copies_planned'] else 7,
             'book_size': book['book_size'] if book['book_size'] else '6x9',
             'binding': book['binding'] if book['binding'] else 'Paperback',
             'print_color': book['print_color'] if book['print_color'] else 'Black & White',
-            'print_cost': book['print_cost'] if book['print_cost'] else 5.00,
+            'print_cost': book['print_cost'] if book['print_cost'] else 00.00,
             'print_type': book['print_type'],
             'book_pages': book['book_pages']
         })
