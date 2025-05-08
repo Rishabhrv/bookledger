@@ -209,15 +209,15 @@ def get_ready_to_print_books(conn):
 # Fetch books eligible for reprint (latest unbatched edition only, not in running batches)
 def get_reprint_eligible_books(conn):
     query = """
-    SELECT 
+        SELECT 
         b.book_id, 
         b.title, 
         b.isbn,
         'Reprint' AS print_type,
-        pe.book_size,
-        pe.binding,
+        COALESCE(pe.book_size, '6x9') AS book_size,
+        COALESCE(pe.binding, 'Paperback') AS binding,
+        COALESCE(pe.print_cost, 00.00) AS print_cost,
         pe.print_color,
-        pe.print_cost,
         pe.copies_planned,
         b.book_pages
     FROM 
@@ -228,7 +228,7 @@ def get_reprint_eligible_books(conn):
             pe2.book_size,
             pe2.binding,
             pe2.print_color,
-            pe2.print_cost,
+            COALESCE(pe2.print_cost, 5.00) AS print_cost,  -- Add default value here too
             pe2.copies_planned,
             ROW_NUMBER() OVER (PARTITION BY pe2.book_id ORDER BY pe2.edition_number DESC, pe2.print_date DESC) AS rn
         FROM 
