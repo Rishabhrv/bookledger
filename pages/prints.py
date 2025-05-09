@@ -170,7 +170,7 @@ def get_ready_to_print_books(conn):
         COALESCE(pe.binding, 'Paperback') AS binding,
         COALESCE(pe.print_cost, 00.00) AS print_cost,
         b.book_pages,
-        pe.print_id  -- Added to fetch existing print_id
+        pe.print_id  # Added to fetch existing print_id
     FROM 
         books b
     LEFT JOIN 
@@ -222,7 +222,7 @@ def get_reprint_eligible_books(conn):
             pe.print_color,
             pe.copies_planned,
             b.book_pages,
-            pe.print_id  -- Ensure print_id is fetched
+            pe.print_id  # Ensure print_id is fetched
         FROM 
             books b
         JOIN (
@@ -319,9 +319,12 @@ def create_batch(conn, batch_name, printer_name, print_sent_date, selected_books
         )
         batch_id = result.lastrowid
         
+        # Collect print_ids and handle first print books
         first_print_ids = []
+        print_ids = []
         for book in selected_books:
             print_id = book['print_id']  # Use the existing print_id
+            print_ids.append(print_id)  # Collect print_id for status update
             session.execute(
                 text("""
                     INSERT INTO BatchDetails 
@@ -345,6 +348,13 @@ def create_batch(conn, batch_name, printer_name, print_sent_date, selected_books
                 {"book_ids": tuple(first_print_ids)}
             )
         
+        # Update PrintEditions status to 'In Printing'
+        if print_ids:
+            session.execute(
+                text("UPDATE PrintEditions SET status = 'In Printing' WHERE print_id IN :print_ids"),
+                {"print_ids": tuple(print_ids)}
+            )
+        
         session.commit()
     return batch_id
 
@@ -360,6 +370,7 @@ def update_batch_receive_date(conn, batch_id, receive_date):
         if status != 'Sent':
             raise ValueError("Only running batches can be edited")
         
+        # Update the batch status to 'Received'
         session.execute(
             text("""
                 UPDATE PrintBatches 
@@ -368,6 +379,17 @@ def update_batch_receive_date(conn, batch_id, receive_date):
             """),
             {"receive_date": receive_date, "batch_id": batch_id}
         )
+
+        # Update PrintEditions status to 'Received' for all print_ids in this batch
+        session.execute(
+            text("""
+                UPDATE PrintEditions 
+                SET status = 'Received' 
+                WHERE print_id IN (SELECT print_id FROM BatchDetails WHERE batch_id = :batch_id)
+            """),
+            {"batch_id": batch_id}
+        )
+
         session.commit()
 
 # Batch creation dialog
@@ -482,6 +504,10 @@ def view_batch_books_dialog(batch_id, batch_name):
     
     batch_books = get_batch_books(conn, batch_id)
     if not batch_books.empty:
+        # Calculate total unique books
+        total_books = len(batch_books['book_id'].unique())
+        st.markdown(f"**Total Books:** {total_books}")
+        
         st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number', 'book_pages']],
                      hide_index=True, column_config={
                          'book_id': st.column_config.TextColumn("Book ID"),
@@ -494,32 +520,6 @@ def view_batch_books_dialog(batch_id, batch_name):
                          'edition_number': st.column_config.NumberColumn("Edition Number"),
                          'book_pages': st.column_config.NumberColumn("Number of Pages")
                      })
-        
-        # Prepare Excel file
-        excel_data = pd.DataFrame({
-            'S.no.': range(1, len(batch_books) + 1),
-            'Book Title': batch_books['title'],
-            'Number of Book Copies': batch_books['copies_in_batch'],
-            'Number of Pages': batch_books['book_pages'],
-            'Book Size': batch_books['book_size'],
-            'Book Pages': 'White 70 GSM',
-            'Cover Page': '300 GSM Glossy',
-            'Binding': 'Perfect Binding',
-            'Print Cost': batch_books['print_cost']
-        })
-        
-        # Convert to Excel
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            excel_data.to_excel(writer, index=False, sheet_name='Batch Books')
-        excel_bytes = output.getvalue()
-        
-        st.download_button(
-            label="Download Batch Books as Excel",
-            data=excel_bytes,
-            file_name=f"batch_{batch_id}_books.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
     else:
         st.info("No books found in this batch.")
 
@@ -527,7 +527,7 @@ def view_batch_books_dialog(batch_id, batch_name):
 def print_management_page():
     conn = connect_db()
 
-    col1, col2, col3 = st.columns([4,8, 1], vertical_alignment="bottom")
+    col1, col2, col3 = st.columns([4, 8, 1], vertical_alignment="bottom")
     with col1:
         st.write("## 📖 Print Management")
     with col2:
@@ -548,7 +548,6 @@ def print_management_page():
             if st.button(":material/add: New Batch", type="secondary"):
                 create_batch_dialog()
         if not first_print_books.empty:    
-            
             ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
             
             with st.container(border=True):
@@ -620,14 +619,43 @@ def print_management_page():
                 with st.container(border=True):
                     # Batch details in a clean layout
                     st.markdown(f'<div class="status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
-                    details_cols = st.columns(4)
+                    details_cols = st.columns([2, 2, 2, 2, 0.8])
                     details_cols[0].write(f" **Created:** {batch['created_at'].strftime('%Y-%m-%d')}")
                     details_cols[1].write(f"**Sent:** {batch['print_sent_date'].strftime('%Y-%m-%d')}")
                     details_cols[2].write(f"**Total Copies:** {batch['total_copies']}")
                     details_cols[3].write(f"**Printer:** {batch['printer_name']}")
                     
-                    # Books table
+                    # Add Excel download button
                     batch_books = get_batch_books(conn, batch['batch_id'])
+                    if not batch_books.empty:
+                        # Prepare Excel file
+                        excel_data = pd.DataFrame({
+                            'S.no.': range(1, len(batch_books) + 1),
+                            'Book Title': batch_books['title'],
+                            'Number of Book Copies': batch_books['copies_in_batch'],
+                            'Number of Pages': batch_books['book_pages'],
+                            'Book Size': batch_books['book_size'],
+                            'Book Pages': 'White 70 GSM',
+                            'Cover Page': '300 GSM Glossy',
+                            'Binding': 'Perfect Binding',
+                            'Print Cost': batch_books['print_cost']
+                        })
+                        
+                        # Convert to Excel
+                        output = BytesIO()
+                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                            excel_data.to_excel(writer, index=False, sheet_name='Batch Books')
+                        excel_bytes = output.getvalue()
+                        
+                        details_cols[4].download_button(
+                            label=" :material/download: Export",
+                            data=excel_bytes,
+                            file_name=f"batch_{batch['batch_id']}_books.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"download_excel_{batch['batch_id']}"
+                        )
+                    
+                    # Books table
                     if not batch_books.empty:
                         st.markdown('<div style="margin-top: 10px;">Books in this batch:</div>', unsafe_allow_html=True)
                         running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2, 1]
@@ -662,27 +690,47 @@ def print_management_page():
     st.markdown('<div class="container-spacing"></div>', unsafe_allow_html=True)
 
     # Section 4: Completed Batches with Custom Table
-    completed_batches = conn.query("SELECT batch_id, batch_name, created_at, print_receive_date, total_copies FROM PrintBatches WHERE status = 'Received' ORDER BY created_at DESC", ttl=0)
+    completed_batches = conn.query("""
+        SELECT 
+            pb.batch_id, 
+            pb.batch_name, 
+            pb.created_at, 
+            pb.print_receive_date, 
+            pb.total_copies,
+            COUNT(DISTINCT bd.print_id) AS total_books
+        FROM 
+            PrintBatches pb
+        LEFT JOIN 
+            BatchDetails bd ON pb.batch_id = bd.batch_id
+        WHERE 
+            pb.status = 'Received'
+        GROUP BY 
+            pb.batch_id, pb.batch_name, pb.created_at, pb.print_receive_date, pb.total_copies
+        ORDER BY 
+            pb.created_at DESC
+    """, ttl=0)
     with st.container():
         st.markdown(f'<div class="status-badge-green">Completed Batches <span class="badge-count">{len(completed_batches)}</span></div>', unsafe_allow_html=True)
         if not completed_batches.empty:
             with st.container(border=True):
-                cols = st.columns([1, 2, 2, 2, 1, 1])
+                cols = st.columns([1, 2, 2, 2, 1, 1, 1])
                 cols[0].markdown('<div class="table-header">Batch ID</div>', unsafe_allow_html=True)
                 cols[1].markdown('<div class="table-header">Batch Name</div>', unsafe_allow_html=True)
                 cols[2].markdown('<div class="table-header">Created At</div>', unsafe_allow_html=True)
                 cols[3].markdown('<div class="table-header">Received Date</div>', unsafe_allow_html=True)
                 cols[4].markdown('<div class="table-header">Total Copies</div>', unsafe_allow_html=True)
-                cols[5].markdown('<div class="table-header">Action</div>', unsafe_allow_html=True)
+                cols[5].markdown('<div class="table-header">Total Books</div>', unsafe_allow_html=True)
+                cols[6].markdown('<div class="table-header">Action</div>', unsafe_allow_html=True)
                 
                 for _, batch in completed_batches.iterrows():
-                    cols = st.columns([1, 2, 2, 2, 1, 1], vertical_alignment="bottom")
+                    cols = st.columns([1, 2, 2, 2, 1, 1, 1], vertical_alignment="bottom")
                     cols[0].markdown(f'<div class="table-row">{batch["batch_id"]}</div>', unsafe_allow_html=True)
                     cols[1].markdown(f'<div class="table-row">{batch["batch_name"]}</div>', unsafe_allow_html=True)
                     cols[2].markdown(f'<div class="table-row">{batch["created_at"].strftime("%Y-%m-%d")}</div>', unsafe_allow_html=True)
                     cols[3].markdown(f'<div class="table-row">{batch["print_receive_date"].strftime("%Y-%m-%d") if batch["print_receive_date"] else ""}</div>', unsafe_allow_html=True)
                     cols[4].markdown(f'<div class="table-row">{batch["total_copies"]}</div>', unsafe_allow_html=True)
-                    if cols[5].button(":material/visibility:", key=f"view_{batch['batch_id']}", type="secondary"):
+                    cols[5].markdown(f'<div class="table-row">{batch["total_books"]}</div>', unsafe_allow_html=True)
+                    if cols[6].button(":material/visibility:", key=f"view_{batch['batch_id']}", type="secondary"):
                         view_batch_books_dialog(batch['batch_id'], batch['batch_name'])
         else:
             st.info("No completed batches found.")

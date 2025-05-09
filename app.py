@@ -3513,7 +3513,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
         .print-run-table-header,
         .print-run-table-row {
             display: grid;
-            grid-template-columns: 0.5fr 1fr 1fr 0.6fr 1fr 0.8fr 0.7fr 0.7fr 0.7fr 0.8fr;
+            grid-template-columns: 0.5fr 0.6fr 0.6fr 1fr 1fr 0.8fr 0.8fr 1.5fr 1fr;
             padding: 4px 6px;
             align-items: center;
             box-sizing: border-box;
@@ -3649,13 +3649,30 @@ def edit_inventory_delivery_dialog(book_id, conn):
                         unsafe_allow_html=True
                     )
 
-        # Fetch print editions data
+        # Fetch print editions data with batch details
         st.markdown('<div class="section-header">Print Editions</div>', unsafe_allow_html=True)
         print_editions_query = f"""
-            SELECT print_id, print_date, copies_planned, print_cost, print_color, binding, book_size, edition_number
-            FROM PrintEditions 
-            WHERE book_id = {book_id}
-            ORDER BY print_date DESC
+            SELECT 
+                pe.print_id, 
+                pe.copies_planned, 
+                pe.print_cost, 
+                pe.print_color, 
+                pe.binding, 
+                pe.book_size, 
+                pe.edition_number, 
+                pe.status,
+                bd.batch_id,
+                pb.batch_name
+            FROM 
+                PrintEditions pe
+            LEFT JOIN 
+                BatchDetails bd ON pe.print_id = bd.print_id
+            LEFT JOIN 
+                PrintBatches pb ON bd.batch_id = pb.batch_id
+            WHERE 
+                pe.book_id = {book_id}
+            ORDER BY 
+                pe.edition_number DESC
         """
         print_editions_data = conn.query(print_editions_query, show_spinner=False)
 
@@ -3666,27 +3683,40 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 st.markdown("""
                     <div class="print-run-table-header">
                         <div>ID</div>
-                        <div>Print Date</div>
                         <div>Copies</div>
                         <div>Cost</div>
                         <div>Color</div>
                         <div>Binding</div>
                         <div>Size</div>
                         <div>Edition</div>
+                        <div>Batch</div>
+                        <div>Status</div>
                     </div>
                 """, unsafe_allow_html=True)
                 
                 for idx, row in print_editions_data.iterrows():
+                    # Determine status badge style
+                    if row['status'] == 'Pending':
+                        status_badge = "<span style='background-color: #fff3e0; color: #f57c00; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>Pending</span>"
+                    elif row['status'] == 'In Printing':
+                        status_badge = "<span style='background-color: #e3f2fd; color: #1976d2; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>In Printing</span>"
+                    else:  # Received
+                        status_badge = "<span style='background-color: #e6ffe6; color: green; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>Received</span>"
+                    
+                    # Format batch information
+                    batch_info = f"{row['batch_name']} (ID: {row['batch_id']})" if row['batch_id'] else "Not Assigned"
+                    
                     st.markdown(f"""
                         <div class="print-run-table-row">
                             <div>{row['print_id']}</div>
-                            <div>{row['print_date'] or 'N/A'}</div>
                             <div>{int(row['copies_planned'])}</div>
                             <div>{row['print_cost'] or 'N/A'}</div>
                             <div>{row['print_color']}</div>
                             <div>{row['binding']}</div>
                             <div>{row['book_size']}</div>
                             <div>{row['edition_number']}</div>
+                            <div>{batch_info}</div>
+                            <div>{status_badge}</div>
                         </div>
                     """, unsafe_allow_html=True)
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -3707,44 +3737,48 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
                     
                     with st.form(key=f"edit_form_{book_id}_{selected_print_id}", border=False):
-                        edit_num_copies = st.number_input(
-                            "Number of Copies",
-                            min_value=0,
-                            step=1,
-                            value=int(edit_row['copies_planned']),
-                            key=f"edit_num_copies_{book_id}_{selected_print_id}"
-                        )
-                        col1, col2 = st.columns(2)
+                        # Compact layout: Use a single row with 5 columns
+                        col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
                         with col1:
-                            edit_print_date = st.date_input(
-                                "Print Date",
-                                value=edit_row['print_date'],
-                                key=f"edit_print_date_{book_id}_{selected_print_id}"
-                            )
-                            edit_print_cost = st.text_input(
-                                "Print Cost",
-                                value=str(edit_row['print_cost'] or ""),
-                                key=f"edit_print_cost_{book_id}_{selected_print_id}"
+                            edit_num_copies = st.number_input(
+                                "Copies",
+                                min_value=0,
+                                step=1,
+                                value=int(edit_row['copies_planned']),
+                                key=f"edit_num_copies_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
                             )
                         with col2:
+                            edit_print_cost = st.text_input(
+                                "Cost",
+                                value=str(edit_row['print_cost'] or ""),
+                                key=f"edit_print_cost_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
+                            )
+                        with col3:
                             edit_print_color = st.selectbox(
-                                "Print Color",
+                                "Color",
                                 options=["Black & White", "Full Color"],
                                 index=["Black & White", "Full Color"].index(edit_row['print_color']),
-                                key=f"edit_print_color_{book_id}_{selected_print_id}"
+                                key=f"edit_print_color_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
                             )
+                        with col4:
                             edit_binding = st.selectbox(
                                 "Binding",
                                 options=["Paperback", "Hardcover"],
                                 index=["Paperback", "Hardcover"].index(edit_row['binding']),
-                                key=f"edit_binding_{book_id}_{selected_print_id}"
+                                key=f"edit_binding_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
                             )
-                        edit_book_size = st.selectbox(
-                            "Book Size",
-                            options=["6x9", "8.5x11"],
-                            index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
-                            key=f"edit_book_size_{book_id}_{selected_print_id}"
-                        )
+                        with col5:
+                            edit_book_size = st.selectbox(
+                                "Size",
+                                options=["6x9", "8.5x11"],
+                                index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
+                                key=f"edit_book_size_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
+                            )
 
                         save_edit = st.form_submit_button("💾 Save Edited Print Edition", use_container_width=True)
 
@@ -3756,8 +3790,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                         session.execute(
                                             text("""
                                                 UPDATE PrintEditions 
-                                                SET print_date = :print_date, 
-                                                    copies_planned = :copies_planned, 
+                                                SET copies_planned = :copies_planned, 
                                                     print_cost = :print_cost, 
                                                     print_color = :print_color, 
                                                     binding = :binding, 
@@ -3766,7 +3799,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                             """),
                                             {
                                                 "print_id": selected_print_id,
-                                                "print_date": edit_print_date,
                                                 "copies_planned": edit_num_copies,
                                                 "print_cost": float(edit_print_cost) if edit_print_cost else None,
                                                 "print_color": edit_print_color,
@@ -3784,40 +3816,44 @@ def edit_inventory_delivery_dialog(book_id, conn):
         if is_ready_to_print:
             with st.expander("Add New Print Edition", expanded=False):
                 with st.form(key=f"new_print_form_{book_id}", border=False):
-                    new_num_copies = st.number_input(
-                        label="Number of Copies",
-                        min_value=0,
-                        step=1,
-                        value=0,
-                        key=f"new_num_copies_{book_id}"
-                    )
-                    col1, col2 = st.columns(2)
+                    # Compact layout: Use a single row with 5 columns
+                    col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
                     with col1:
-                        new_print_date = st.date_input(
-                            "Print Date",
-                            value=datetime.now(),
-                            key=f"new_print_date_{book_id}"
-                        )
-                        print_cost = st.text_input(
-                            "Print Cost",
-                            key=f"print_cost_{book_id}"
+                        new_num_copies = st.number_input(
+                            label="Copies",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"new_num_copies_{book_id}",
+                            label_visibility="visible"
                         )
                     with col2:
-                        print_color = st.selectbox(
-                            "Print Color",
-                            options=["Black & White", "Full Color"],
-                            key=f"print_color_{book_id}"
+                        print_cost = st.text_input(
+                            "Cost",
+                            key=f"print_cost_{book_id}",
+                            label_visibility="visible"
                         )
+                    with col3:
+                        print_color = st.selectbox(
+                            "Color",
+                            options=["Black & White", "Full Color"],
+                            key=f"print_color_{book_id}",
+                            label_visibility="visible"
+                        )
+                    with col4:
                         binding = st.selectbox(
                             "Binding",
                             options=["Paperback", "Hardcover"],
-                            key=f"binding_{book_id}"
+                            key=f"binding_{book_id}",
+                            label_visibility="visible"
                         )
-                    book_size = st.selectbox(
-                        "Book Size",
-                        options=["6x9", "8.5x11"],
-                        key=f"book_size_{book_id}"
-                    )
+                    with col5:
+                        book_size = st.selectbox(
+                            "Size",
+                            options=["6x9", "8.5x11"],
+                            key=f"book_size_{book_id}",
+                            label_visibility="visible"
+                        )
 
                     save_new_print = st.form_submit_button("💾 Save New Print Edition", use_container_width=True)
 
@@ -3834,18 +3870,17 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                         )
                                         edition_number = result.fetchone()[0]
                                         
-                                        # Insert into PrintEditions table
+                                        # Insert into PrintEditions table with status 'Pending'
                                         session.execute(
                                             text("""
-                                                INSERT INTO PrintEditions (book_id, edition_number, print_date, copies_planned, 
-                                                    print_cost, print_color, binding, book_size)
-                                                VALUES (:book_id, :edition_number, :print_date, :copies_planned, 
-                                                    :print_cost, :print_color, :binding, :book_size)
+                                                INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
+                                                    print_cost, print_color, binding, book_size, status)
+                                                VALUES (:book_id, :edition_number, :copies_planned, 
+                                                    :print_cost, :print_color, :binding, :book_size, 'Pending')
                                             """),
                                             {
                                                 "book_id": book_id,
                                                 "edition_number": edition_number,
-                                                "print_date": st.session_state[f"new_print_date_{book_id}"],
                                                 "copies_planned": st.session_state[f"new_num_copies_{book_id}"],
                                                 "print_cost": (float(st.session_state[f"print_cost_{book_id}"]) 
                                                             if st.session_state[f"print_cost_{book_id}"] else None),
@@ -3868,29 +3903,31 @@ def edit_inventory_delivery_dialog(book_id, conn):
         if not current_data.get('print_status', False):
             st.warning("Inventory details are only available after the book has been printed.")
         else:
-            # Fetch existing print runs (for inventory calculation)
-            print_runs_query = f"""
-                SELECT print_date, num_copies 
-                FROM print_runs 
-                WHERE book_id = {book_id}
-                ORDER BY print_date
+            # Fetch total copies printed from PrintEditions where the associated batch is 'Received'
+            print_editions_query = f"""
+                SELECT pe.copies_planned
+                FROM PrintEditions pe
+                LEFT JOIN BatchDetails bd ON pe.print_id = bd.print_id
+                LEFT JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
+                WHERE pe.book_id = {book_id}
+                AND (pb.status = 'Received' OR pb.batch_id IS NULL)
             """
-            print_runs_data = conn.query(print_runs_query,show_spinner = False)
+            print_editions_data = conn.query(print_editions_query, show_spinner=False)
             
+            # Calculate total copies printed (only for received batches)
+            total_copies_printed = int(print_editions_data['copies_planned'].sum()) if not print_editions_data.empty else 0
+
             # Fetch existing inventory details (assuming you have an inventory table)
             inventory_query = f"""
                 SELECT rack_number, amazon_sales, flipkart_sales, website_sales, direct_sales 
                 FROM inventory 
                 WHERE book_id = {book_id}
             """
-            inventory_data = conn.query(inventory_query,show_spinner = False)
+            inventory_data = conn.query(inventory_query, show_spinner=False)
             
             inventory_current = inventory_data.iloc[0] if not inventory_data.empty else {
                 'rack_number': '', 'amazon_sales': 0, 'flipkart_sales': 0, 'website_sales': 0, 'direct_sales': 0
             }
-
-            # Calculate current inventory (convert to integers)
-            total_copies_printed = int(print_runs_data['num_copies'].sum()) if not print_runs_data.empty else 0
 
             # Fetch copies sent to authors from book_authors table
             author_copies_query = f"""
@@ -3898,13 +3935,14 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 FROM book_authors 
                 WHERE book_id = {book_id}
             """
-            author_copies_data = conn.query(author_copies_query,show_spinner = False)
+            author_copies_data = conn.query(author_copies_query, show_spinner=False)
             copies_sent_to_authors = int(author_copies_data.iloc[0]['total_author_copies'] or 0) if not author_copies_data.empty else 0
 
+            # Calculate total sales and current inventory
             total_sales = int(inventory_current.get('amazon_sales', 0) + 
-                              inventory_current.get('flipkart_sales', 0) + 
-                              inventory_current.get('website_sales', 0) + 
-                              inventory_current.get('direct_sales', 0))
+                            inventory_current.get('flipkart_sales', 0) + 
+                            inventory_current.get('website_sales', 0) + 
+                            inventory_current.get('direct_sales', 0))
             current_inventory = int(total_copies_printed - total_sales - copies_sent_to_authors)
 
             # Determine color class for Current Inventory based on thresholds
@@ -3941,14 +3979,13 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     </div>
                 </div>
             """, unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
 
             with st.form(key=f"new_inventory_form_{book_id}", border=False):
                 # Pricing Section
                 st.markdown('<div class="section-header">Pricing & Storage</div>', unsafe_allow_html=True)
-                with st.container(border = True):
+                with st.container(border=True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
-                    col1,col2 = st.columns(2)
+                    col1, col2 = st.columns(2)
 
                     with col1:
                         book_mrp = st.text_input(
@@ -3959,15 +3996,15 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                     with col2:
                         rack_number = st.text_input(
-                        "Rack Number", 
-                        value=inventory_current.get('rack_number', ''),
-                        key=f"rack_number_{book_id}"
-                    )
+                            "Rack Number", 
+                            value=inventory_current.get('rack_number', ''),
+                            key=f"rack_number_{book_id}"
+                        )
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 # Sales Tracking Section
                 st.markdown('<div class="section-header">Sales Tracking</div>', unsafe_allow_html=True)
-                with st.container(border = True):
+                with st.container(border=True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
@@ -4041,7 +4078,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     help="Click to save changes to inventory details."
                 )
 
-                # Handle form submission (moved inside the form context)
+                # Handle form submission
                 if save_inventory:
                     with st.spinner("Saving Inventory details..."):
                         time.sleep(1)
@@ -4057,7 +4094,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                             }
                             update_inventory_delivery_details(book_id, book_updates, conn)
 
-                            # Update inventory details (using MariaDB/MySQL syntax)
+                            # Update inventory details
                             inventory_updates = {
                                 "book_id": book_id,
                                 "rack_number": st.session_state[f"rack_number_{book_id}"] if st.session_state[f"rack_number_{book_id}"] else None,
