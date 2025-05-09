@@ -169,7 +169,8 @@ def get_ready_to_print_books(conn):
         COALESCE(pe.book_size, '6x9') AS book_size,
         COALESCE(pe.binding, 'Paperback') AS binding,
         COALESCE(pe.print_cost, 00.00) AS print_cost,
-        b.book_pages
+        b.book_pages,
+        pe.print_id  -- Added to fetch existing print_id
     FROM 
         books b
     LEFT JOIN 
@@ -203,7 +204,7 @@ def get_ready_to_print_books(conn):
             AND pb.status = 'Sent'
         )
     GROUP BY 
-        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost, b.book_pages;
+        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost, b.book_pages, pe.print_id;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df
@@ -220,7 +221,8 @@ def get_reprint_eligible_books(conn):
             COALESCE(pe.print_cost, 0.00) AS print_cost,
             pe.print_color,
             pe.copies_planned,
-            b.book_pages
+            b.book_pages,
+            pe.print_id  -- Ensure print_id is fetched
         FROM 
             books b
         JOIN (
@@ -242,7 +244,7 @@ def get_reprint_eligible_books(conn):
             b.print_status = 1
             AND bd.print_id IS NULL
         GROUP BY 
-            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages;
+            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages, pe.print_id;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df
@@ -295,38 +297,6 @@ def get_batch_books(conn, batch_id):
     df = conn.query(query, ttl=0, params={"batch_id": batch_id})
     return df
 
-# Create a new print edition for a book
-def create_print_edition(conn, book_id, num_copies, book_size, binding, print_color, print_cost):
-    with conn.session as session:
-        # Calculate next edition number
-        result = session.execute(
-            text("SELECT COALESCE(MAX(edition_number), 0) + 1 AS next_edition FROM PrintEditions WHERE book_id = :book_id"),
-            {"book_id": book_id}
-        )
-        edition_number = result.fetchone()[0]
-        
-        # Insert new print edition
-        result = session.execute(
-            text("""
-                INSERT INTO PrintEditions 
-                    (book_id, edition_number, book_size, binding, print_color, print_cost, copies_planned, print_date)
-                VALUES 
-                    (:book_id, :edition_number, :book_size, :binding, :print_color, :print_cost, :copies_planned, CURDATE())
-            """),
-            {
-                "book_id": book_id,
-                "edition_number": edition_number,
-                "book_size": book_size,
-                "binding": binding,
-                "print_color": print_color,
-                "print_cost": print_cost,
-                "copies_planned": num_copies
-            }
-        )
-        print_id = result.lastrowid
-        session.commit()
-    return print_id
-
 # Create a new batch and assign books
 def create_batch(conn, batch_name, printer_name, print_sent_date, selected_books):
     total_copies = sum(book['num_copies'] for book in selected_books)
@@ -351,15 +321,7 @@ def create_batch(conn, batch_name, printer_name, print_sent_date, selected_books
         
         first_print_ids = []
         for book in selected_books:
-            print_id = create_print_edition(
-                conn, 
-                book['book_id'], 
-                book['num_copies'], 
-                book['book_size'], 
-                book['binding'], 
-                book['print_color'], 
-                book['print_cost']
-            )
+            print_id = book['print_id']  # Use the existing print_id
             session.execute(
                 text("""
                     INSERT INTO BatchDetails 
@@ -434,7 +396,8 @@ def create_batch_dialog():
             'print_color': 'Black & White',  # Default for first prints
             'print_cost': book['print_cost'],  # Use queried print_cost
             'print_type': book['print_type'],
-            'book_pages': book['book_pages']
+            'book_pages': book['book_pages'],
+            'print_id': book['print_id']  # Include print_id
         })
     for _, book in reprint_books.iterrows():
         all_books.append({
@@ -444,9 +407,10 @@ def create_batch_dialog():
             'book_size': book['book_size'] if book['book_size'] else '6x9',
             'binding': book['binding'] if book['binding'] else 'Paperback',
             'print_color': book['print_color'] if book['print_color'] else 'Black & White',
-            'print_cost': book['print_cost'] if book['print_cost'] else 00.00,
+            'print_cost': book['print_cost'] if book['print_cost'] else 0.00,
             'print_type': book['print_type'],
-            'book_pages': book['book_pages']
+            'book_pages': book['book_pages'],
+            'print_id': book['print_id']  # Include print_id
         })
     
     # Multiselect with all books pre-selected
@@ -458,7 +422,7 @@ def create_batch_dialog():
     selected_books = [book for book in all_books if f"{book['title']} ({book['print_type']})" in selected_titles]
     
     # Validate required fields for each selected book
-    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_cost']
+    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_cost', 'print_id']
     invalid_books = []
     for book in selected_books:
         missing_fields = [field for field in required_fields if not book.get(field)]
@@ -509,7 +473,6 @@ def edit_batch_dialog(running_batches):
             st.rerun()  # Close dialog and refresh page
         except Exception as e:
             st.error(f"Error updating batch: {str(e)}")
-
 
 # Batch details dialog for completed batches
 @st.dialog("Batch Books Details", width="large")
@@ -564,7 +527,6 @@ def view_batch_books_dialog(batch_id, batch_name):
 def print_management_page():
     conn = connect_db()
 
-
     col1, col2, col3 = st.columns([4,8, 1], vertical_alignment="bottom")
     with col1:
         st.write("## 📖 Print Management")
@@ -579,13 +541,13 @@ def print_management_page():
     first_print_books = get_ready_to_print_books(conn)
     
     with st.container():
+        col1, col2 = st.columns([16, 2], vertical_alignment="bottom")
+        with col1:
+            st.markdown(f'<div class="status-badge-red">Ready for Print <span class="badge-count">{len(first_print_books)}</span></div>', unsafe_allow_html=True)
+        with col2:
+            if st.button(":material/add: New Batch", type="secondary"):
+                create_batch_dialog()
         if not first_print_books.empty:    
-            col1, col2 = st.columns([16, 2],vertical_alignment="bottom")
-            with col1:
-                st.markdown(f'<div class="status-badge-red">Ready for Print <span class="badge-count">{len(first_print_books)}</span></div>', unsafe_allow_html=True)
-            with col2:
-                if st.button(":material/add: New Batch", type="secondary"):
-                    create_batch_dialog()
             
             ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
             
@@ -647,7 +609,7 @@ def print_management_page():
     # Section 3: Manage Running Batches
     running_batches = get_running_batches(conn)
     with st.container():
-        col1, col2 = st.columns([16, 2],vertical_alignment="bottom")
+        col1, col2 = st.columns([16, 2], vertical_alignment="bottom")
         with col1:
             st.markdown(f'<div class="status-badge-yellow">Running Batches (Sent) <span class="badge-count">{len(running_batches)}</span></div>', unsafe_allow_html=True)
         with col2:
@@ -657,7 +619,7 @@ def print_management_page():
             for _, batch in running_batches.iterrows():
                 with st.container(border=True):
                     # Batch details in a clean layout
-                    st.markdown(f'<div class = "status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
                     details_cols = st.columns(4)
                     details_cols[0].write(f" **Created:** {batch['created_at'].strftime('%Y-%m-%d')}")
                     details_cols[1].write(f"**Sent:** {batch['print_sent_date'].strftime('%Y-%m-%d')}")
