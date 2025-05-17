@@ -58,6 +58,11 @@ user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
 
+# role_user = 'admin'
+# user_app = 'main'
+# user_name = 'Akash'
+# user_access = 'Team Dashboard'
+
 # Admin or allowed users get role selector pills
 if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team Dashboard" in user_access):
     selected = st.pills(
@@ -78,7 +83,6 @@ else:
     # Access Denied
     st.error("You don't have permission to access this page.")
     st.stop()
-
 
 st.cache_data.clear()
 
@@ -400,9 +404,8 @@ def render_metrics(books_df, selected_month, section, user_role):
     ])
     if section == "cover":
         pending_books = len(filtered_books_metrics[
-            filtered_books_metrics['Formatting End'].notnull() & 
-            (filtered_books_metrics['Formatting End'] != '0000-00-00 00:00:00') & 
-            (filtered_books_metrics['Cover Start'].isnull() | (filtered_books_metrics['Cover Start'] == '0000-00-00 00:00:00'))
+            filtered_books_metrics['Cover Start'].isnull() | 
+            (filtered_books_metrics['Cover Start'] == '0000-00-00 00:00:00')
         ])
     else:
         pending_books = len(filtered_books_metrics[
@@ -424,7 +427,6 @@ def render_metrics(books_df, selected_month, section, user_role):
         with col3:
             if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
                 st.switch_page('app.py')
-
 
     col1, col2, col3 = st.columns(3, border=True)
     with col1:
@@ -873,7 +875,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             else:
                 columns.append("Action")
         elif "Completed" in title:
-            columns.append(f"{section.capitalize()} End")
+            columns.extend([f"{section.capitalize()} By", f"{section.capitalize()} End"])
         
         # Validate column sizes
         if len(column_sizes) < len(columns):
@@ -1034,7 +1036,8 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     with col_configs[col_idx]:
                         worker = row['Cover By']
                         value = worker if pd.notnull(worker) else "Not Assigned"
-                        st.markdown(f'<span class="pill worker-by-not">{value}</span>', unsafe_allow_html=True)
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
                         if st.button("Edit", key=f"edit_{section}_{row['Book ID']}"):
@@ -1052,10 +1055,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                             st.markdown('<span class="pill section-start-not">Not started</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        worker, worker_idx = get_worker_by(row['Proofreading Start'], 
-                                                          row['Proofreading By'], worker_map)
-                        class_name = f"worker-by-{worker_idx}" if worker_idx is not None else "worker-by-not"
-                        st.markdown(f'<span class="pill {class_name}">{worker}</span>', unsafe_allow_html=True)
+                        worker = row['Proofreading By']
+                        value = worker if pd.notnull(worker) else "Not Assigned"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
                         if st.button("Rate", key=f"rate_{section}_{row['Book ID']}"):
@@ -1073,10 +1076,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                             st.markdown('<span class="pill section-start-not">Not started</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        worker, worker_idx = get_worker_by(row['Writing Start'], 
-                                                          row['Writing By'], worker_map)
-                        class_name = f"worker-by-{worker_idx}" if worker_idx is not None else "worker-by-not"
-                        st.markdown(f'<span class="pill {class_name}">{worker}</span>', unsafe_allow_html=True)
+                        worker = row['Writing By']
+                        value = worker if pd.notnull(worker) else "Not Assigned"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
                         syllabus_path = row['Syllabus Path']
@@ -1113,10 +1116,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                             st.markdown('<span class="pill section-start-not">Not started</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        worker, worker_idx = get_worker_by(row[f'{section.capitalize()} Start'], 
-                                                          row[f'{section.capitalize()} By'], worker_map)
-                        class_name = f"worker-by-{worker_idx}" if worker_idx is not None else "worker-by-not"
-                        st.markdown(f'<span class="pill {class_name}">{worker}</span>', unsafe_allow_html=True)
+                        worker = row[f'{section.capitalize()} By']
+                        value = worker if pd.notnull(worker) else "Not Assigned"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
                         if st.button("Edit", key=f"edit_{section}_{row['Book ID']}"):
@@ -1135,8 +1138,36 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     with col_configs[col_idx]:
                         if st.button("Edit", key=f"edit_{section}_{row['Book ID']}"):
                             edit_section_dialog(row['Book ID'], conn, section)
-            # Completed-specific column
+            # Completed-specific columns
             elif "Completed" in title:
+                if role == "proofreader":
+                    with col_configs[col_idx]:
+                        worker = row['Proofreading By']
+                        value = worker if pd.notnull(worker) else "-"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
+                    col_idx += 1
+                elif role == "formatter":
+                    with col_configs[col_idx]:
+                        worker = row['Formatting By']
+                        value = worker if pd.notnull(worker) else "-"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
+                    col_idx += 1
+                elif role == "cover_designer":
+                    with col_configs[col_idx]:
+                        worker = row['Cover By']
+                        value = worker if pd.notnull(worker) else "-"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
+                    col_idx += 1
+                elif role == "writer":
+                    with col_configs[col_idx]:
+                        worker = row['Writing By']
+                        value = worker if pd.notnull(worker) else "-"
+                        class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
+                        st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
+                    col_idx += 1
                 with col_configs[col_idx]:
                     end_date = row[f'{section.capitalize()} End']
                     value = end_date.strftime('%Y-%m-%d') if not pd.isna(end_date) and end_date != '0000-00-00 00:00:00' else "-"
@@ -1211,19 +1242,19 @@ for section, config in sections.items():
         if section == "writing":
             column_sizes_running = [0.7, 5.5, 1, 1, 1.2, 1.2, 1, 1]  
             column_sizes_pending = [0.7, 5.5, 1, 1, 0.8, 1]            
-            column_sizes_completed = [0.7, 5.5, 1, 1, 1, 1]         
+            column_sizes_completed = [0.7, 5.5, 1, 1, 1, 1, 1]         
         elif section == "proofreading":
             column_sizes_running = [0.8, 5.5, 1, 1.2, 1, 1.2, 1.2, 1, 1] 
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 0.8] 
-            column_sizes_completed = [0.7, 5.5, 1, 1, 1.2, 1, 1,1]    
+            column_sizes_completed = [0.7, 5.5, 1, 1, 1.2, 1, 1, 1, 1]    
         elif section == "formatting":
             column_sizes_running = [0.7, 5.5, 1, 1, 1.2, 1.2, 1]      
             column_sizes_pending = [0.7, 5.5, 1, 1, 1.2, 1, 1]         
-            column_sizes_completed = [0.7, 5.5, 1, 1, 1.2, 1, 1]       
+            column_sizes_completed = [0.7, 5.5, 1, 1, 1.2, 1, 1, 1]       
         elif section == "cover":
             column_sizes_running = [0.8, 5, 1.2, 1.2, 1, 1, 1, 1, 1, 1]  
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 1]            
-            column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3]                   
+            column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3, 1]                   
         
         selected_month = render_month_selector(books_df)
         render_metrics(books_df, selected_month, section,role_user)

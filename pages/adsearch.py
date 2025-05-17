@@ -250,7 +250,7 @@ try:
     with col1:
         search_column = st.selectbox(
             "🗃️ Select Column to Search:", 
-            ['Book ID', 'Book Title', 'Author Name', 'ISBN']
+            ['Book ID', 'Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone']
         )
 
     # Check if the selected column has changed
@@ -294,6 +294,24 @@ try:
                 # Logic for ISBN
                 operations_data['ISBN'] = operations_data['ISBN'].astype(str).str.strip()
                 filtered_data = operations_data[operations_data['ISBN'] == search_query]
+            elif search_column == "Author Email":
+                # Logic for Author Email
+                mask = (operations_data['Email Address 1'].str.contains(search_query, case=False, na=False) |
+                        operations_data['Email Address 2'].str.contains(search_query, case=False, na=False) |
+                        operations_data['Email Address 3'].str.contains(search_query, case=False, na=False) |
+                        operations_data['Email Address 4'].str.contains(search_query, case=False, na=False))
+                filtered_data = operations_data[mask]
+            elif search_column == "Author Phone":
+                # Logic for Author Phone
+                # Basic validation: ensure query contains only digits, spaces, or hyphens
+                if search_query.replace(" ", "").replace("-", "").isdigit():
+                    mask = (operations_data['Contact No. 1'].str.contains(search_query, case=False, na=False) |
+                            operations_data['Contact No. 2'].str.contains(search_query, case=False, na=False) |
+                            operations_data['Contact No. 3'].str.contains(search_query, case=False, na=False) |
+                            operations_data['Contact No. 4'].str.contains(search_query, case=False, na=False))
+                    filtered_data = operations_data[mask]
+                else:
+                    st.error("Phone number must contain only digits, spaces, or hyphens!")
     except Exception:
         st.error("Something went wrong while processing your search query.")
 

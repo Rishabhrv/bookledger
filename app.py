@@ -297,6 +297,8 @@ def manage_users(conn):
                 num_rows="fixed",
                 key="user_table"
             )
+    
+    # Tab 2: Add New User
     with tab2:
         with st.container(border=True):
             col1, col2 = st.columns(2)
@@ -382,6 +384,7 @@ def manage_users(conn):
                         st.success("User Added Successfully!", icon="✔️")
                         st.rerun()
 
+    # Tab 3: Edit Users
     with tab3:
         if not users:
             st.error("❌ No users found in database.")
@@ -395,6 +398,11 @@ def manage_users(conn):
 
             with st.container(border=True):
                 st.markdown(f"### Editing: <span style='color: #4CAF50'>{selected_user.username}</span>", unsafe_allow_html=True)
+                
+                # Display warning for admin with ID 1
+                if selected_user.id == 1:
+                    st.warning("⚠️ This is the primary admin (ID: 1). Role cannot be changed, and the user cannot be deleted.")
+
                 col1, col2 = st.columns(2)
                 with col1:
                     new_username = st.text_input("Username", value=selected_user.username, key=f"username_{selected_user.id}")
@@ -405,7 +413,12 @@ def manage_users(conn):
                     current_role = selected_user.role if selected_user.role in valid_roles else "user"
                     if selected_user.role not in valid_roles:
                         st.warning(f"⚠️ Invalid role '{selected_user.role}' detected. Defaulting to 'user'.")
-                    new_role = st.selectbox("Role", options=valid_roles, index=valid_roles.index(current_role), key=f"role_{selected_user.id}")
+                    # Disable role selection for ID 1
+                    if selected_user.id == 1:
+                        st.selectbox("Role", options=["admin"], index=0, disabled=True, key=f"role_{selected_user.id}")
+                        new_role = "admin"
+                    else:
+                        new_role = st.selectbox("Role", options=valid_roles, index=valid_roles.index(current_role), key=f"role_{selected_user.id}")
 
                 col3, col4 = st.columns([1,3])
                 if new_role == "admin":
@@ -462,8 +475,10 @@ def manage_users(conn):
                                 st.rerun()
 
                 with btn_col2:
-                    if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", use_container_width=True):
-                        st.session_state.confirm_delete_user_id = selected_user.id
+                    # Disable delete button for ID 1
+                    if selected_user.id != 1:
+                        if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", use_container_width=True):
+                            st.session_state.confirm_delete_user_id = selected_user.id
 
                 if st.session_state.confirm_delete_user_id == selected_user.id:
                     st.warning(f"Are you sure you want to delete {selected_user.username} (ID: {selected_user.id})?")
@@ -4233,6 +4248,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+import pandas as pd
+import re
+
 # Function to filter books based on search query
 def filter_books(df, query):
     if not query or not query.strip():  # Handle empty or whitespace-only queries
@@ -4259,6 +4277,56 @@ def filter_books(df, query):
         # Filter the original DataFrame using these book IDs
         matching_book_ids = author_book_ids['book_id'].tolist()
         return df[df['book_id'].isin(matching_book_ids)]
+    
+    # Phone number search (starts with #)
+    elif query.startswith('#'):
+        phone_query = query[1:].lower()  # Remove # and convert to lowercase
+        # Basic phone number validation (digits, optional hyphens/spaces, 7-15 chars)
+        if re.match(r'^[\d\s-]{7,15}$', phone_query):
+            # Query to get book_ids associated with the author's phone
+            phone_book_ids_query = """
+                SELECT DISTINCT ba.book_id
+                FROM book_authors ba
+                JOIN authors a ON ba.author_id = a.author_id
+                WHERE LOWER(a.phone) LIKE :phone_query
+            """
+            # Fetch book IDs matching the phone
+            phone_book_ids = conn.query(
+                phone_book_ids_query,
+                params={"phone_query": f"%{phone_query}%"},
+                show_spinner=False
+            )
+            # Filter the original DataFrame using these book IDs
+            matching_book_ids = phone_book_ids['book_id'].tolist()
+            return df[df['book_id'].isin(matching_book_ids)]
+        else:
+            # Invalid phone number format, return empty dataframe
+            return df[df['book_id'].isna()]  # Returns empty df
+    
+    # Email search (starts with !)
+    elif query.startswith('!'):
+        email_query = query[1:].lower()  # Remove ! and convert to lowercase
+        # Basic email validation
+        if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email_query):
+            # Query to get book_ids associated with the author's email
+            email_book_ids_query = """
+                SELECT DISTINCT ba.book_id
+                FROM book_authors ba
+                JOIN authors a ON ba.author_id = a.author_id
+                WHERE LOWER(a.email) LIKE :email_query
+            """
+            # Fetch book IDs matching the email
+            email_book_ids = conn.query(
+                email_book_ids_query,
+                params={"email_query": f"%{email_query}%"},
+                show_spinner=False
+            )
+            # Filter the original DataFrame using these book IDs
+            matching_book_ids = email_book_ids['book_id'].tolist()
+            return df[df['book_id'].isin(matching_book_ids)]
+        else:
+            # Invalid email format, return empty dataframe
+            return df[df['book_id'].isna()]  # Returns empty df
     
     # Check if query is a number (for book_id)
     elif query.isdigit():
@@ -4319,7 +4387,7 @@ with c3:
 srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 3, 1, 1, 1], gap="small") 
 
 with srcol1:
-    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @author...", key="search_bar",
+    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail #authorphone..", key="search_bar",
                                  label_visibility="collapsed")
     filtered_books = filter_books(books, search_query)
 
@@ -4806,6 +4874,7 @@ with cont:
                     st.rerun()
 
                 st.markdown('</div>', unsafe_allow_html=True)
+
 
         # # Add informational message if pagination is disabled due to specific page size
         # if not pagination_enabled and st.session_state.page_size != "All":
