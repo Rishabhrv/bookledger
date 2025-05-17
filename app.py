@@ -96,7 +96,7 @@ user_name = st.session_state.get("username", "Unknown")
 
 
 #UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
-UPLOAD_DIR = "/home/rishabhvyas/bookledger/uploads"
+UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
 
 st.cache_data.clear()
 
@@ -4387,7 +4387,7 @@ with c3:
 srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 3, 1, 1, 1], gap="small") 
 
 with srcol1:
-    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail #authorphone..", key="search_bar",
+    search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail, #authorphone..", key="search_bar",
                                  label_visibility="collapsed")
     filtered_books = filter_books(books, search_query)
 
