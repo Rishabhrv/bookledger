@@ -100,7 +100,6 @@ UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
 
 st.cache_data.clear()
 
-import pandas as pd
 
 # Function to check if a button is allowed for the user's role and access
 def is_button_allowed(button_name, debug=False):
