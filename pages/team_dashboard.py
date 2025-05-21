@@ -1206,9 +1206,9 @@ for section, config in sections.items():
                 books_df['Proofreading End'].isnull()
             ]
             pending_books = books_df[
-                (books_df['Writing End'].notnull() | (books_df['Is Publish Only'] != 1)) & 
-                books_df['Proofreading Start'].isnull()
-            ]
+            ((books_df['Writing End'].notnull()) | (books_df['Is Publish Only'] == 1)) &
+            (books_df['Proofreading Start'].isnull())
+        ]
             completed_books = books_df[
                 books_df['Proofreading End'].notnull()
             ]
