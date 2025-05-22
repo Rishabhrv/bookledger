@@ -131,21 +131,21 @@ def fetch_data():
         i.direct_sales,
         COALESCE(
             (SELECT SUM(bd.copies_in_batch) 
-             FROM batchdetails bd 
-             JOIN printeditions pe ON bd.print_id = pe.print_id 
+             FROM BatchDetails bd 
+             JOIN PrintEditions pe ON bd.print_id = pe.print_id 
              WHERE pe.book_id = b.book_id), 
             0
         ) AS total_printed_books,
         (SELECT MAX(pb.print_receive_date) 
-         FROM printbatches pb 
-         JOIN batchdetails bd ON pb.batch_id = bd.batch_id 
-         JOIN printeditions pe ON bd.print_id = pe.print_id 
+         FROM PrintBatches pb 
+         JOIN BatchDetails bd ON pb.batch_id = bd.batch_id 
+         JOIN PrintEditions pe ON bd.print_id = pe.print_id 
          WHERE pe.book_id = b.book_id) AS deliver_date
     FROM books b
     JOIN inventory i ON b.book_id = i.book_id
     WHERE b.deliver = 1
     """
-    df = conn.query(query)
+    df = conn.query(query ,show_spinner = False)
     return df
 
 # Header
