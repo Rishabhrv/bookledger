@@ -10,7 +10,7 @@ logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
 small_logo = "logo/favicon_white.ico"
 
-st.set_page_config(page_title='AGPH Search', page_icon="🔍", layout="wide")
+st.set_page_config(page_title='AGPH Prints', page_icon="🖨️", layout="wide")
 
 st.logo(logo,
 size = "large",
@@ -615,75 +615,76 @@ def print_management_page():
             if st.button(":material/edit: Edit Batch", type="secondary"):
                 edit_batch_dialog(running_batches)
         if not running_batches.empty:
-            for _, batch in running_batches.iterrows():
-                with st.container(border=True):
-                    # Batch details in a clean layout
-                    st.markdown(f'<div class="status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
-                    details_cols = st.columns([2, 2, 2, 2, 0.8])
-                    details_cols[0].write(f" **Created:** {batch['created_at'].strftime('%Y-%m-%d')}")
-                    details_cols[1].write(f"**Sent:** {batch['print_sent_date'].strftime('%Y-%m-%d')}")
-                    details_cols[2].write(f"**Total Copies:** {batch['total_copies']}")
-                    details_cols[3].write(f"**Printer:** {batch['printer_name']}")
-                    
-                    # Add Excel download button
-                    batch_books = get_batch_books(conn, batch['batch_id'])
-                    if not batch_books.empty:
-                        # Prepare Excel file
-                        excel_data = pd.DataFrame({
-                            'S.no.': range(1, len(batch_books) + 1),
-                            'Book Title': batch_books['title'],
-                            'Number of Book Copies': batch_books['copies_in_batch'],
-                            'Number of Pages': batch_books['book_pages'],
-                            'Book Size': batch_books['book_size'],
-                            'Book Pages': 'White 70 GSM',
-                            'Cover Page': '300 GSM Glossy',
-                            'Binding': 'Perfect Binding',
-                            'Print Cost': batch_books['print_cost']
-                        })
+            with st.expander('Veiw Running Batches'):
+                for _, batch in running_batches.iterrows():
+                    with st.container(border=False):
+                        # Batch details in a clean layout
+                        st.markdown(f'<div class="status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
+                        details_cols = st.columns([2, 2, 2, 2, 0.8])
+                        details_cols[0].write(f" **Created:** {batch['created_at'].strftime('%Y-%m-%d')}")
+                        details_cols[1].write(f"**Sent:** {batch['print_sent_date'].strftime('%Y-%m-%d')}")
+                        details_cols[2].write(f"**Total Copies:** {batch['total_copies']}")
+                        details_cols[3].write(f"**Printer:** {batch['printer_name']}")
                         
-                        # Convert to Excel
-                        output = BytesIO()
-                        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                            excel_data.to_excel(writer, index=False, sheet_name='Batch Books')
-                        excel_bytes = output.getvalue()
+                        # Add Excel download button
+                        batch_books = get_batch_books(conn, batch['batch_id'])
+                        if not batch_books.empty:
+                            # Prepare Excel file
+                            excel_data = pd.DataFrame({
+                                'S.no.': range(1, len(batch_books) + 1),
+                                'Book Title': batch_books['title'],
+                                'Number of Book Copies': batch_books['copies_in_batch'],
+                                'Number of Pages': batch_books['book_pages'],
+                                'Book Size': batch_books['book_size'],
+                                'Book Pages': 'White 70 GSM',
+                                'Cover Page': '300 GSM Glossy',
+                                'Binding': 'Perfect Binding',
+                                'Print Cost': batch_books['print_cost']
+                            })
+                            
+                            # Convert to Excel
+                            output = BytesIO()
+                            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                excel_data.to_excel(writer, index=False, sheet_name='Batch Books')
+                            excel_bytes = output.getvalue()
+                            
+                            details_cols[4].download_button(
+                                label=" :material/download: Export",
+                                data=excel_bytes,
+                                file_name=f"batch_{batch['batch_id']}_books.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"download_excel_{batch['batch_id']}"
+                            )
                         
-                        details_cols[4].download_button(
-                            label=" :material/download: Export",
-                            data=excel_bytes,
-                            file_name=f"batch_{batch['batch_id']}_books.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key=f"download_excel_{batch['batch_id']}"
-                        )
-                    
-                    # Books table
-                    if not batch_books.empty:
-                        st.markdown('<div style="margin-top: 10px;">Books in this batch:</div>', unsafe_allow_html=True)
-                        running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2, 1]
-                        with st.container(border=True):
-                            cols = st.columns(running_batches_column)
-                            cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
-                            cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
-                            cols[2].markdown('<div class="table-header">Edition</div>', unsafe_allow_html=True)
-                            cols[3].markdown('<div class="table-header">Copies</div>', unsafe_allow_html=True)
-                            cols[4].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
-                            cols[5].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
-                            cols[6].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
-                            cols[7].markdown('<div class="table-header">Print Color</div>', unsafe_allow_html=True)
-                            cols[8].markdown('<div class="table-header">Print Cost</div>', unsafe_allow_html=True)
-
-                            for _, book in batch_books.iterrows():
+                        # Books table
+                        if not batch_books.empty:
+                            st.markdown('<div style="margin-top: 10px;">Books in this batch:</div>', unsafe_allow_html=True)
+                            running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2, 1]
+                            with st.container(border=True):
                                 cols = st.columns(running_batches_column)
-                                cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
-                                cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
-                                cols[2].markdown(f'<div class="table-row">{book["edition_number"]}</div>', unsafe_allow_html=True)
-                                cols[3].markdown(f'<div class="table-row">{book["copies_in_batch"]}</div>', unsafe_allow_html=True)
-                                cols[4].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
-                                cols[5].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
-                                cols[6].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
-                                cols[7].markdown(f'<div class="table-row">{book["print_color"]}</div>', unsafe_allow_html=True)
-                                cols[8].markdown(f'<div class="table-row">₹{book["print_cost"]:.2f}</div>', unsafe_allow_html=True)
-                    else:
-                        st.info("No books found in this batch.")
+                                cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
+                                cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
+                                cols[2].markdown('<div class="table-header">Edition</div>', unsafe_allow_html=True)
+                                cols[3].markdown('<div class="table-header">Copies</div>', unsafe_allow_html=True)
+                                cols[4].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
+                                cols[5].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
+                                cols[6].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
+                                cols[7].markdown('<div class="table-header">Print Color</div>', unsafe_allow_html=True)
+                                cols[8].markdown('<div class="table-header">Print Cost</div>', unsafe_allow_html=True)
+
+                                for _, book in batch_books.iterrows():
+                                    cols = st.columns(running_batches_column)
+                                    cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
+                                    cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
+                                    cols[2].markdown(f'<div class="table-row">{book["edition_number"]}</div>', unsafe_allow_html=True)
+                                    cols[3].markdown(f'<div class="table-row">{book["copies_in_batch"]}</div>', unsafe_allow_html=True)
+                                    cols[4].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
+                                    cols[5].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
+                                    cols[6].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
+                                    cols[7].markdown(f'<div class="table-row">{book["print_color"]}</div>', unsafe_allow_html=True)
+                                    cols[8].markdown(f'<div class="table-row">₹{book["print_cost"]:.2f}</div>', unsafe_allow_html=True)
+                        else:
+                            st.info("No books found in this batch.")
         else:
             st.info("No running batches found.")
     

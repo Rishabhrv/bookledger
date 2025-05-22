@@ -76,6 +76,7 @@ ACCESS_TO_BUTTON = {
     "Advance Search": "advance_search",
     "Team Dashboard": "team_dashboard",
     "Print Management": "print_management",
+    "Inventory" : "inventory",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -896,8 +897,8 @@ def add_book_dialog(conn):
     with st.container():
         publisher = publisher_section()
         book_data = book_details_section(publisher)
-        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         author_data = author_details_section(conn, book_data["is_single_author"], publisher)
+        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         
         # Add syllabus_file to book_data for saving
         book_data["syllabus_file"] = syllabus_file
@@ -1011,22 +1012,37 @@ from datetime import datetime
 
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    # Fetch current book details (title, date, is_publish_only, syllabus_path) from the database
+    # Fetch current book details (title, date, is_publish_only, syllabus_path, publisher) from the database
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
         st.error("❌ Book not found in database.")
         return
     
-    # Extract current title, date, is_publish_only, and syllabus_path from the DataFrame
+    # Extract current title, date, is_publish_only, syllabus_path, and publisher from the DataFrame
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Default to False if not present
     current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)  # Get syllabus path, None if not present
+    current_publisher = book_details.iloc[0].get('publisher', '')  # Get publisher, default to empty string
+
+    publisher_colors = {
+        "Cipher": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
+        "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},  # White text on deep purple
+        "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
+        "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
+        "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
+    }
+    
+    publisher_badge = ""
+    if current_publisher in publisher_colors:
+        style = publisher_colors[current_publisher]
+        publisher_style = f"color: {style['color']}; font-size: 12px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
+        publisher_badge = f'<span style="{publisher_style}">{current_publisher}</span>'
 
     # Main container
     with st.container():
-        # Header with Book ID
-        st.markdown(f"### {book_id} - {current_title}", unsafe_allow_html=True)
+        # Header with Book ID, Title, and Publisher Badge
+        st.markdown(f"### {book_id} - {current_title}{publisher_badge}", unsafe_allow_html=True)
 
         # Book Details Section
         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
@@ -1055,6 +1071,36 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 help="Enable this to mark the book as publish only (disables writing operations)"
             )
             st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
+        # Authors Section
+        with st.expander("Authors", expanded=False):
+            authors_data = fetch_book_authors(book_id, conn)
+
+            if authors_data.empty:
+                st.info("No authors associated with this book.")
+            else:
+                # Sort by position
+                authors_data = authors_data.sort_values(by='author_position')
+
+                # Header
+                with st.container(border=False):
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown("#### 👤 Author Name")
+                    with col2:
+                        st.markdown("#### 🏷️ Position")
+
+                # Rows
+                for _, author in authors_data.iterrows():
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown(f"<div style='margin-bottom: 6px;'>➤ {author['name']}</div>", unsafe_allow_html=True)
+                    with col2:
+                        position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
+                        st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
+
+
 
         # ISBN Details Section
         st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
@@ -4383,7 +4429,7 @@ with c3:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 3, 1, 1, 1], gap="small") 
+srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 4, 1, 1, 1], gap="small") 
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail, #authorphone..", key="search_bar",
@@ -4399,7 +4445,6 @@ with srcol2:
         st.button("🔍", type="secondary", help="Advance Search (Not Authorized)", use_container_width=True, disabled=True)
 
 
-# Add filtering popover next to the Add New Book button
 with srcol3:
     with st.popover("Filter by Date, Status & Publisher", use_container_width=True):
         # Extract unique publishers and years from the dataset
@@ -4418,7 +4463,9 @@ with srcol3:
         if 'status_filter' not in st.session_state:
             st.session_state.status_filter = None
         if 'publisher_filter' not in st.session_state:
-            st.session_state.publisher_filter = None  # New filter for publisher
+            st.session_state.publisher_filter = None
+        if 'isbn_filter' not in st.session_state:  # New ISBN filter state
+            st.session_state.isbn_filter = None
         if 'clear_filters_trigger' not in st.session_state:
             st.session_state.clear_filters_trigger = 0
 
@@ -4434,7 +4481,8 @@ with srcol3:
                 st.session_state.start_date_filter = None
                 st.session_state.end_date_filter = None
                 st.session_state.status_filter = None
-                st.session_state.publisher_filter = None  # Reset publisher filter
+                st.session_state.publisher_filter = None
+                st.session_state.isbn_filter = None  # Reset ISBN filter
                 st.session_state.clear_filters_trigger += 1
                 st.rerun()
 
@@ -4446,7 +4494,6 @@ with srcol3:
             key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
             label_visibility='collapsed'
         )
-        # Update session state for publisher filter
         if selected_publisher:
             st.session_state.publisher_filter = selected_publisher
         elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
@@ -4458,7 +4505,7 @@ with srcol3:
             st.write("Filter by Year:")
 
         with col2:
-            pass  # Clear button is already above
+            pass
 
         year_options = [str(year) for year in unique_years]
         selected_year = st.pills(
@@ -4467,13 +4514,12 @@ with srcol3:
             key=f"year_pills_{st.session_state.clear_filters_trigger}",
             label_visibility='collapsed'
         )
-        # Update session state only if a year is selected
         if selected_year:
             st.session_state.year_filter = int(selected_year)
         elif selected_year is None and "year_pills_callback" not in st.session_state:
             st.session_state.year_filter = None
 
-        # Month filter with pills (only shown if a year is selected)
+        # Month filter with pills
         if st.session_state.year_filter:
             year_books = books[books['date'].dt.year == st.session_state.year_filter]
             unique_months = sorted(year_books['date'].dt.month.unique())
@@ -4492,7 +4538,6 @@ with srcol3:
                 key=f"month_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='collapsed'
             )
-            # Convert selected month name back to number
             if selected_month:
                 st.session_state.month_filter = next(
                     (num for num, name in month_names.items() if name == selected_month),
@@ -4524,14 +4569,24 @@ with srcol3:
             key=end_date_key
         )
 
-        # Validate date range
         if st.session_state.start_date_filter and st.session_state.end_date_filter:
             if st.session_state.start_date_filter > st.session_state.end_date_filter:
                 st.error("Start Date must be before or equal to End Date.")
                 st.session_state.start_date_filter = None
                 st.session_state.end_date_filter = None
 
-        # Status filter with pills (Delivered, On Going, Pending Payment, single selection)
+        # ISBN filter with pills
+        st.write("Filter by ISBN Status:")
+        isbn_options = ["ISBN Not Applied", "ISBN Not Received"]
+        selected_isbn = st.pills(
+            "ISBN Status",
+            options=isbn_options,
+            key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
+            label_visibility='collapsed'
+        )
+        st.session_state.isbn_filter = selected_isbn
+
+        # Status filter with pills
         st.write("Filter by Status:")
         status_options = ["Delivered", "On Going"]
         if user_role == "admin":
@@ -4542,8 +4597,8 @@ with srcol3:
             key=f"status_pills_{st.session_state.clear_filters_trigger}",
             label_visibility='collapsed'
         )
-        # Update status_filter based on selection (None if no selection)
         st.session_state.status_filter = selected_status
+
 
         # Apply filters
         applied_filters = []
@@ -4559,26 +4614,34 @@ with srcol3:
             applied_filters.append(f"End Date={st.session_state.end_date_filter}")
         if st.session_state.status_filter:
             applied_filters.append(f"Status={st.session_state.status_filter}")
+        if st.session_state.isbn_filter:
+            applied_filters.append(f"ISBN Status={st.session_state.isbn_filter}")
 
         if applied_filters:
-            # Apply publisher filter first
+            # Apply publisher filter
             if st.session_state.publisher_filter:
                 filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
             
             # Apply date filters
             filtered_books = filter_books_by_date(
                 filtered_books, 
-                None,  # No day filter
+                None,
                 st.session_state.month_filter, 
                 st.session_state.year_filter, 
                 st.session_state.start_date_filter, 
                 st.session_state.end_date_filter
             )
+
+            # Apply ISBN filter
+            if st.session_state.isbn_filter:
+                if st.session_state.isbn_filter == "ISBN Not Applied":
+                    filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 0)]
+                elif st.session_state.isbn_filter == "ISBN Not Received":
+                    filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 1)]
             
             # Apply status filter
             if st.session_state.status_filter:
                 if st.session_state.status_filter == "Pending Payment":
-                    # Query to get book_ids with partial payments
                     pending_payment_query = """
                         SELECT DISTINCT book_id
                         FROM book_authors
@@ -4589,10 +4652,10 @@ with srcol3:
                     matching_book_ids = pending_book_ids['book_id'].tolist()
                     filtered_books = filtered_books[filtered_books['book_id'].isin(matching_book_ids)]
                 else:
-                    # Existing status filter for Delivered and On Going
                     status_mapping = {"Delivered": 1, "On Going": 0}
                     selected_status_value = status_mapping[st.session_state.status_filter]
                     filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
+
             st.success(f"Filter {', '.join(applied_filters)}")
 
 
@@ -4603,8 +4666,6 @@ with srcol4:
             add_book_dialog(conn)
     else:
         st.button(":material/add: Book", type="secondary", help="Add New Book (Not Authorized)", use_container_width=True, disabled=True)
-
-
 
 with srcol5:
         with st.popover("More", use_container_width=True, help="More Options"):
@@ -4618,17 +4679,25 @@ with srcol5:
 
             # Team dashboard
             if is_button_allowed("team_dashboard"):
-                if st.button("📊 Operations", key="dashboard_team", type="tertiary"):
+                if st.button("📈 Operations", key="dashboard_team", type="tertiary"):
                     st.switch_page("pages/team_dashboard.py")
             else:
-                st.button("📊 Team dashboard", key="dashboard_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
+                st.button("📈 Team dashboard", key="dashboard_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
             
             # Print Managment
             if is_button_allowed("print_management"):
                 if st.button("🖨️ Manage Prints", key="print_management", type="tertiary"):
                     st.switch_page("pages/prints.py")
             else:
-                st.button("📊 Manage Prints", key="print_management", type="tertiary", help="Manage Prints (Not Authorized)", disabled=True)
+                st.button("🖨️ Manage Prints", key="print_management", type="tertiary", help="Manage Prints (Not Authorized)", disabled=True)
+
+            # Inventory
+            if is_button_allowed("inventory"):
+                if st.button("📦 Inventory", key="agph_inventory", type="tertiary"):
+                    st.switch_page("pages/inventory.py")
+            else:
+                st.button("📦 Inventory", key="agph_inventory", type="tertiary", help="Inventory (Not Authorized)", disabled=True)
+
 
             # Edit Authors button
             if is_button_allowed("edit_author_detail"):
@@ -4775,22 +4844,22 @@ with cont:
                     # Handle the publisher badge with distinct colors
                     publisher = row.get('publisher', '')  # Safe access
                     publisher_colors = {
-                        "Cipher": {"color": "#ffffff", "background": "#673ab7"},  # White text on deep purple
-                        "AG Volumes": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
+                        "Cipher": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
+                        "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},  # White text on deep purple
                         "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
                         "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
                         "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
                     }
                     if publisher in publisher_colors:
                         style = publisher_colors[publisher]
-                        publisher_style = f"color: {style['color']}; font-size: 12px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
+                        publisher_style = f"color: {style['color']}; font-size: 10px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
                         publisher_badge = f'<span style="{publisher_style}">{publisher}</span>'
                     
                     # Display the title with all badges
                     st.markdown(
-                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}",
-                        unsafe_allow_html=True
-                    )
+                    f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
+                    unsafe_allow_html=True
+                )
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:
@@ -4805,16 +4874,16 @@ with cont:
                             if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
                                 manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
                         else:
-                            st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN (Disabled)", disabled=True)
+                            st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Not Authorised", disabled=True)
                     with btn_col2:
                         # Price button (manage_price_dialog)
                         publisher = row.get('publisher', '')
                         if publisher not in ["AG Kids", "NEET/JEE"] or st.session_state.get("role") == "admin":
                             if is_button_allowed("manage_price_dialog"):
-                                if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price"):
+                                if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Payments"):
                                     manage_price_dialog(row['book_id'], row['price'], conn)
                             else:
-                                st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Price (Disabled)", disabled=True)
+                                st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Not Authorised", disabled=True)
                         else:
                             st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Price management disabled for this publisher", disabled=True)
                     with btn_col3:
@@ -4822,10 +4891,10 @@ with cont:
                         publisher = row.get('publisher', '')
                         if publisher not in ["AG Kids", "NEET/JEE"] or st.session_state.get("role") == "admin":
                             if is_button_allowed("edit_author_dialog"):
-                                if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors"):
+                                if st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors Details"):
                                     edit_author_dialog(row['book_id'], conn)
                             else:
-                                st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Edit Authors (Disabled)", disabled=True)
+                                st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Not Authorised", disabled=True)
                         else:
                             st.button(author_icon, key=f"edit_author_{row['book_id']}", help="Author editing disabled for this publisher", disabled=True)
                     with btn_col4:
@@ -4834,14 +4903,14 @@ with cont:
                             if st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations"):
                                 edit_operation_dialog(row['book_id'], conn)
                         else:
-                            st.button(ops_icon, key=f"ops_{row['book_id']}", help="Edit Operations (Disabled)", disabled=True)
+                            st.button(ops_icon, key=f"ops_{row['book_id']}", help="Not Authorised", disabled=True)
                     with btn_col5:
                         # Delivery button (edit_inventory_delivery_dialog)
                         if is_button_allowed("edit_inventory_delivery_dialog"):
-                            if st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery"):
+                            if st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Print & Inventory"):
                                 edit_inventory_delivery_dialog(row['book_id'], conn)
                         else:
-                            st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Edit Delivery (Disabled)", disabled=True)
+                            st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Not Authorised", disabled=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)

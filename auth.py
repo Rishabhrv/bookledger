@@ -56,6 +56,7 @@ ACCESS_TO_BUTTON = {
     "Advance Search": "advance_search",
     "Team Dashboard": "team_dashboard",
     "Print Management": "print_management",
+    "Inventory" : "inventory",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

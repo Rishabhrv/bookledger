@@ -226,14 +226,13 @@ try:
             st.error("Something went wrong while retrieving author details.")
             return []
 
-
-    # Initialize session state for the text input field
+    # Initialize session state for the search inputs
     if "previous_search_column" not in st.session_state:
         st.session_state["previous_search_column"] = ""
     if "search_query" not in st.session_state:
         st.session_state["search_query"] = ""
 
-    col1, col2 = st.columns([8,1], vertical_alignment="bottom")
+    col1, col2 = st.columns([8, 1], vertical_alignment="bottom")
 
     with col1:
         # Title
@@ -250,7 +249,8 @@ try:
     with col1:
         search_column = st.selectbox(
             "🗃️ Select Column to Search:", 
-            ['Book ID', 'Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone']
+            ['Book ID', 'Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone'],
+            key="search_column"
         )
 
     # Check if the selected column has changed
@@ -259,13 +259,50 @@ try:
         st.session_state["search_query"] = ""
         st.session_state["previous_search_column"] = search_column
 
-    # Text input for search query
+    # Function to get unique values for select box
+    def get_unique_values(column_prefix, num_authors=4):
+        values = []
+        if column_prefix in ["ISBN", "Book Title"]:
+            # Handle single-column fields (ISBN, Book Title)
+            return sorted(operations_data[column_prefix].astype(str).str.strip().dropna().unique())
+        else:
+            # Handle author-related fields (e.g., Author Name, Email, Phone)
+            for i in range(1, num_authors + 1):
+                column = f"{column_prefix} {i}"
+                if column in operations_data.columns:
+                    values.extend(operations_data[column].dropna().unique())
+            return sorted(set(values))  # Remove duplicates and sort
+
+    # Input for search query (text input or select box based on column)
     with col2:
-        search_query = st.text_input(
-            "🔍 Enter your search term:", 
-            value=st.session_state["search_query"],
-            key="search_query"
-        )
+        if search_column in ['Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone']:
+            # Map search column to the correct column prefix in DataFrame
+            column_mapping = {
+                'Book Title': 'Book Title',
+                'Author Name': 'Author Name',
+                'ISBN': 'ISBN',
+                'Author Email': 'Email Address',
+                'Author Phone': 'Contact No.'
+            }
+            # Get unique values for the select box
+            options = get_unique_values(column_mapping[search_column])
+            # Add an empty option for clearing the selection
+            options.insert(0, "")
+            search_query = st.selectbox(
+                "🔍 Select a value:",
+                options=options,
+                index=options.index(st.session_state["search_query"]) if st.session_state["search_query"] in options else 0,
+                key="search_query_select"
+            )
+            st.session_state["search_query"] = search_query
+        else:
+            # Use text input for Book ID
+            search_query = st.text_input(
+                "🔍 Enter your search term:", 
+                value=st.session_state["search_query"],
+                key="search_query_text"
+            )
+            st.session_state["search_query"] = search_query
 
     # Filter results
     filtered_data = pd.DataFrame()
@@ -273,16 +310,14 @@ try:
         if search_query:
             if search_column == "Author Name":
                 # Logic for Author Name
-                mask = (operations_data['Author Name 1'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Author Name 2'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Author Name 3'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Author Name 4'].str.contains(search_query, case=False, na=False))
+                mask = (operations_data['Author Name 1'] == search_query) | \
+                       (operations_data['Author Name 2'] == search_query) | \
+                       (operations_data['Author Name 3'] == search_query) | \
+                       (operations_data['Author Name 4'] == search_query)
                 filtered_data = operations_data[mask]
             elif search_column == "Book Title":
                 # Logic for Book Title
-                filtered_data = operations_data[
-                    operations_data['Book Title'].str.contains(search_query, case=False, na=False)
-                ]
+                filtered_data = operations_data[operations_data['Book Title'] == search_query]
             elif search_column == "Book ID":
                 # Logic for Book ID
                 try:
@@ -296,19 +331,19 @@ try:
                 filtered_data = operations_data[operations_data['ISBN'] == search_query]
             elif search_column == "Author Email":
                 # Logic for Author Email
-                mask = (operations_data['Email Address 1'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Email Address 2'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Email Address 3'].str.contains(search_query, case=False, na=False) |
-                        operations_data['Email Address 4'].str.contains(search_query, case=False, na=False))
+                mask = (operations_data['Email Address 1'] == search_query) | \
+                       (operations_data['Email Address 2'] == search_query) | \
+                       (operations_data['Email Address 3'] == search_query) | \
+                       (operations_data['Email Address 4'] == search_query)
                 filtered_data = operations_data[mask]
             elif search_column == "Author Phone":
                 # Logic for Author Phone
-                # Basic validation: ensure query contains only digits, spaces, or hyphens
+                # Basic validation: ensure query contains only valid phone number characters
                 if search_query.replace(" ", "").replace("-", "").isdigit():
-                    mask = (operations_data['Contact No. 1'].str.contains(search_query, case=False, na=False) |
-                            operations_data['Contact No. 2'].str.contains(search_query, case=False, na=False) |
-                            operations_data['Contact No. 3'].str.contains(search_query, case=False, na=False) |
-                            operations_data['Contact No. 4'].str.contains(search_query, case=False, na=False))
+                    mask = (operations_data['Contact No. 1'] == search_query) | \
+                           (operations_data['Contact No. 2'] == search_query) | \
+                           (operations_data['Contact No. 3'] == search_query) | \
+                           (operations_data['Contact No. 4'] == search_query)
                     filtered_data = operations_data[mask]
                 else:
                     st.error("Phone number must contain only digits, spaces, or hyphens!")
@@ -453,7 +488,8 @@ try:
                                     border-radius: 12px;
                                     box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.1);
                                     padding: 15px;
-                                    margin-bottom: 20px;
+                                    font-size: 14px;
+                                    margin-bottom: 10px;
                                     border: 1px solid #dee2e6;
                                     font-family: 'Arial', sans-serif;">
                                     <h4 style="
@@ -461,6 +497,7 @@ try:
                                         background-color: #e9ecef;
                                         padding: 10px;
                                         border-radius: 8px;
+                                        font-size: 18px;
                                         margin-bottom: 15px;
                                         text-align: center;">
                                         Author {idx} 
@@ -468,22 +505,22 @@ try:
                                             ({author['Position']})
                                         </span>
                                     </h4>
-                                    <p style="font-size: 16px; font-weight: bold; color: #1c7ed6; margin-bottom: 10px;">
+                                    <p style="font-size: 15px; font-weight: bold; color: #1c7ed6; margin-bottom: 10px;">
                                         {author['Author Name']}
                                     </p>
-                                    <p><b>Author ID:</b> {author['Author ID']}</p>
-                                    <p><b>Email:</b> {author['Email']}</p>
-                                    <p><b>Contact:</b> {author['Contact']}</p>
-                                    <p><b>Publishing Consultant:</b> 
+                                    <p style="margin-bottom: 7px;"><b>Author ID:</b> {round(author['Author ID'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Email:</b> {author['Email']}</p>
+                                    <p style="margin-bottom: 7px;"><b>Contact:</b> {author['Contact']}</p>
+                                    <p style="margin-bottom: 7px;"><b>Publishing Consultant:</b> 
                                     <span style="color:rgb(236, 116, 35); font-weight: bold;">{author['Publishing Consultant']}</span>
                                     </p>
-                                    <p><b>Welcome Mail:</b> {highlight_boolean(author['Welcome Mail'])}</p>
-                                    <p><b>Photo:</b> {highlight_boolean(author['Photo'])}</p>
-                                    <p><b>ID Proof:</b> {highlight_boolean(author['ID Proof'])}</p>
-                                    <p><b>Send Cover Page:</b> {highlight_boolean(author['Send Cover Page'])}</p>
-                                    <p><b>Agreement Received:</b> {highlight_boolean(author['Agreement Received'])}</p>
-                                    <p><b>Digital Profile:</b> {highlight_boolean(author['Digital Prof'])}</p>
-                                    <p><b>Confirmation:</b> {highlight_boolean(author['Confirmation'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Welcome Mail:</b> {highlight_boolean(author['Welcome Mail'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Photo:</b> {highlight_boolean(author['Photo'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>ID Proof:</b> {highlight_boolean(author['ID Proof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Send Cover Page:</b> {highlight_boolean(author['Send Cover Page'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Agreement Received:</b> {highlight_boolean(author['Agreement Received'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Digital Profile:</b> {highlight_boolean(author['Digital Prof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Confirmation:</b> {highlight_boolean(author['Confirmation'])}</p>
                                 </div>
                                 """,
                                 unsafe_allow_html=True,
