@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import time
 from auth import validate_token
 
 
@@ -45,58 +46,57 @@ st.markdown("""
         }
             """, unsafe_allow_html=True)
 
-
 # CSS styles
 st.markdown("""
-<style>
-.status-badge-red {
-    background-color: #FFEBEE;
-    color: #F44336;
-    padding: 2px 17px;
-    border-radius: 12px;
-    font-weight: bold;
-    display: inline-flex;
-    align-items: center;
-    font-size: 20px;
-    margin-bottom: 10px;
-}
-.badge-count {
-    background-color: rgba(255, 255, 255, 0.9);
-    color: inherit;
-    padding: 2px 6px;
-    border-radius: 10px;
-    margin-left: 6px;
-    font-size: 14px;
-    font-weight: normal;
-}
-.table-header {
-    font-weight: bold;
-    font-size: 14.5px;
-    color: #333;
-    padding: 7px;
-    border-bottom: 2px solid #ddd;
-}
-.table-row {
-    padding: 7px 5px;
-    background-color: #ffffff;
-    font-size: 14px; 
-    margin-bottom: 5px;
-    margin-top: 5px;    
-}
-.table-row:hover {
-    background-color: #f1f1f1; 
-}
-.low-stock {
-    background-color: #FFEBEE !important;
-}
-.low-stock:hover {
-    background-color: #FFCDD2 !important;
-}
-.container-spacing {
-    margin-bottom: 30px;
-}
-</style>
-""", unsafe_allow_html=True)
+    <style>
+    .status-badge-red {
+        background-color: #FFEBEE;
+        color: #F44336;
+        padding: 2px 17px;
+        border-radius: 12px;
+        font-weight: bold;
+        display: inline-flex;
+        align-items: center;
+        font-size: 20px;
+        margin-bottom: 10px;
+    }
+    .badge-count {
+        background-color: rgba(255, 255, 255, 0.9);
+        color: inherit;
+        padding: 2px 6px;
+        border-radius: 10px;
+        margin-left: 6px;
+        font-size: 14px;
+        font-weight: normal;
+    }
+    .table-header {
+        font-weight: bold;
+        font-size: 14.5px;
+        color: #333;
+        padding: 7px;
+        border-bottom: 2px solid #ddd;
+    }
+    .table-row {
+        padding: 7px 5px;
+        background-color: #ffffff;
+        font-size: 14px; 
+        margin-bottom: 5px;
+        margin-top: 5px;    
+    }
+    .table-row:hover {
+        background-color: #f1f1f1; 
+    }
+    .low-stock {
+        background-color: #FFEBEE !important;
+    }
+    .low-stock:hover {
+        background-color: #FFCDD2 !important;
+    }
+    .container-spacing {
+        margin-bottom: 30px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # Database connection
 def connect_db():
@@ -143,9 +143,9 @@ def fetch_data():
          WHERE pe.book_id = b.book_id) AS deliver_date
     FROM books b
     JOIN inventory i ON b.book_id = i.book_id
-    WHERE b.deliver = 1
+    WHERE b.print_status = 1
     """
-    df = conn.query(query ,show_spinner = False)
+    df = conn.query(query, show_spinner=False)
     return df
 
 # Header
@@ -158,6 +158,7 @@ with col2:
 with col3:
     if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
         st.switch_page('app.py')
+
 
 # Initialize reset trigger
 if "reset_trigger" not in st.session_state:
@@ -264,7 +265,7 @@ with filcol4:
 with filcol3:
     with st.popover("More Filters & Sort", use_container_width=True):
         out_of_stock = st.checkbox(
-            "Show Out of Stock Books Only",
+            "Show Out of Stock Books",
             value=False if st.session_state["reset_trigger"] else st.session_state.get("out_of_stock", False),
             key="out_of_stock"
         )
@@ -285,13 +286,13 @@ with filcol3:
         sort_column = st.selectbox(
             "Sort by",
             options=df.columns,
-            index=2 if st.session_state["reset_trigger"] else st.session_state.get("sort_column_index", 1),  # Default to Book Title
+            index=2 if st.session_state["reset_trigger"] else st.session_state.get("sort_column_index", 0),  # Default to Book Title
             key="sort_column"
         )
         sort_order = st.radio(
             "Sort Order",
             ["Ascending", "Descending"],
-            index=0 if st.session_state["reset_trigger"] else st.session_state.get("sort_order_index", 0),
+            index=0 if st.session_state["reset_trigger"] else st.session_state.get("sort_order_index", 1),
             horizontal=True,
             key="sort_order"
         )
@@ -324,6 +325,7 @@ if search_term:
         filtered_df['Book Title'].str.contains(search_term, case=False, na=False) |
         filtered_df['Book ID'].astype(str).str.contains(search_term, case=False, na=False)
     ]
+     
 if cell_nos:
     filtered_df = filtered_df[filtered_df['Cell No.'].isin(cell_nos)]
 if out_of_stock:
@@ -343,11 +345,26 @@ with filcol1:
 sort_ascending = sort_order == "Ascending"
 filtered_df = filtered_df.sort_values(by=sort_column, ascending=sort_ascending)
 
-# Custom table
+# Custom table with pagination
 if not filtered_df.empty:
     # Define column widths (as provided)
     column_widths = [0.8, 3.5, 0.8, 1.2, 1, 1.2, 1, 0.6, 0.6, 0.6, 0.8]
-    
+
+    # Pagination setup
+    books_per_page = 50
+    total_books = len(filtered_df)
+    total_pages = (total_books + books_per_page - 1) // books_per_page  # Ceiling division
+
+    # Initialize current page in session state
+    if 'current_page' not in st.session_state:
+        st.session_state['current_page'] = 1
+
+    # Calculate the start and end indices for the current page
+    start_idx = (st.session_state['current_page'] - 1) * books_per_page
+    end_idx = min(start_idx + books_per_page, total_books)
+    page_df = filtered_df.iloc[start_idx:end_idx]
+
+    # Display the table
     with st.container(border=True):
         cols = st.columns(column_widths)
         cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
@@ -362,7 +379,7 @@ if not filtered_df.empty:
         cols[9].markdown('<div class="table-header">Direct</div>', unsafe_allow_html=True)
         cols[10].markdown('<div class="table-header">In Stock</div>', unsafe_allow_html=True)
 
-        for _, row in filtered_df.iterrows():
+        for _, row in page_df.iterrows():
             cols = st.columns(column_widths)
             deliver_date = row['Deliver Date'].strftime('%Y-%m-%d') if pd.notnull(row['Deliver Date']) else ''
             # Apply low stock highlight
@@ -378,6 +395,33 @@ if not filtered_df.empty:
             cols[8].markdown(f'<div class="{row_class}">{int(row["Filpkart"])}</div>', unsafe_allow_html=True)
             cols[9].markdown(f'<div class="{row_class}">{int(row["Direct"])}</div>', unsafe_allow_html=True)
             cols[10].markdown(f'<div class="{row_class}">{int(row["In Stock"])}</div>', unsafe_allow_html=True)
+
+    # Display "Showing X-Y of Z books"
+    st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Showing {start_idx + 1}-{end_idx} of {total_books} books</div>", unsafe_allow_html=True)
+
+    # Page navigation (at bottom)
+    col1, col2, col3, col4, col5, col6  = st.columns([1, 2, 4, 1, 1, 1], vertical_alignment="bottom")
+    with col1:
+        if st.button("First", disabled=(st.session_state['current_page'] == 1)):
+            st.session_state['current_page'] = 1
+    with col2:
+        if st.button("Previous", disabled=(st.session_state['current_page'] == 1)):
+            st.session_state['current_page'] -= 1
+    with col3:
+        st.markdown(f"<div style='text-align: center;'>Page {st.session_state['current_page']} of {total_pages}</div>", unsafe_allow_html=True)
+    with col4:
+        if st.button("Next", disabled=(st.session_state['current_page'] == total_pages)):
+            st.session_state['current_page'] += 1
+    with col5:
+        if st.button("Last", disabled=(st.session_state['current_page'] == total_pages)):
+            st.session_state['current_page'] = total_pages
+
+    # Page selector dropdown (at bottom)
+    page_options = list(range(1, total_pages + 1))
+    with col6:
+        selected_page = st.selectbox("Go to page:", page_options, index=st.session_state['current_page'] - 1, key="page_selector")
+        if selected_page != st.session_state['current_page']:
+            st.session_state['current_page'] = selected_page
 
 else:
     st.info("No books match the current filters.")

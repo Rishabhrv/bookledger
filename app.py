@@ -149,8 +149,6 @@ conn = connect_db()
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path is_publish_only, publisher FROM books"
 books = conn.query(query,show_spinner = False)
 
-
-
 # Apply date range filtering
 if user_role == "user" and user_app == "main":
     start_date = st.session_state.get("start_date")
@@ -1012,25 +1010,24 @@ from datetime import datetime
 
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    # Fetch current book details (title, date, is_publish_only, syllabus_path, publisher) from the database
+    # Fetch current book details (title, date, is_publish_only, publisher) from the database
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
         st.error("❌ Book not found in database.")
         return
     
-    # Extract current title, date, is_publish_only, syllabus_path, and publisher from the DataFrame
+    # Extract current title, date, is_publish_only, and publisher from the DataFrame
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
-    current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1  # Default to False if not present
-    current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)  # Get syllabus path, None if not present
-    current_publisher = book_details.iloc[0].get('publisher', '')  # Get publisher, default to empty string
+    current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
+    current_publisher = book_details.iloc[0].get('publisher', '')
 
     publisher_colors = {
-        "Cipher": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
-        "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},  # White text on deep purple
-        "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
-        "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
-        "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
+        "Cipher": {"color": "#ffffff", "background": "#8f1b83"},
+        "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},
+        "AG Classics": {"color": "#ffffff", "background": "#d81b60"},
+        "AG Kids": {"color": "#ffffff", "background": "#f57c00"},
+        "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}
     }
     
     publisher_badge = ""
@@ -1063,7 +1060,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                     key=f"date_{book_id}",
                     help="Select the book date"
                 )
-            # Add is_publish_only toggle
             new_is_publish_only = st.toggle(
                 "Publish Only?",
                 value=current_is_publish_only,
@@ -1073,25 +1069,18 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
             st.markdown('</div>', unsafe_allow_html=True)
         
         st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
-        # Authors Section
         with st.expander("Authors", expanded=False):
             authors_data = fetch_book_authors(book_id, conn)
-
             if authors_data.empty:
                 st.info("No authors associated with this book.")
             else:
-                # Sort by position
                 authors_data = authors_data.sort_values(by='author_position')
-
-                # Header
                 with st.container(border=False):
                     col1, col2 = st.columns([2, 1])
                     with col1:
                         st.markdown("#### 👤 Author Name")
                     with col2:
                         st.markdown("#### 🏷️ Position")
-
-                # Rows
                 for _, author in authors_data.iterrows():
                     col1, col2 = st.columns([2, 1])
                     with col1:
@@ -1099,8 +1088,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                     with col2:
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
-
-
 
         # ISBN Details Section
         st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
@@ -1119,7 +1106,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 disabled=not apply_isbn,
                 help="Check if ISBN has been received (requires ISBN Applied)"
             )
-            
             if apply_isbn and receive_isbn:
                 col3, col4 = st.columns(2)
                 with col3:
@@ -1132,7 +1118,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 with col4:
                     default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
                     isbn_receive_date = st.date_input(
-                        "ISBN Receive Date",
+                        "ISBN Receive / Allotment Date",
                         value=default_date,
                         key=f"date_input_{book_id}",
                         help="Select the date ISBN was received"
@@ -1142,83 +1128,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                 isbn_receive_date = None
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Book Syllabus Section
-        st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-        with st.container(border=True):
-            st.markdown('<div class="info-box">', unsafe_allow_html=True)
-            # Display current syllabus if it exists
-            if current_syllabus_path:
-                st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
-                # Provide download link (if file exists)
-                if os.path.exists(current_syllabus_path):
-                    with open(current_syllabus_path, "rb") as f:
-                        st.download_button(
-                            label=":material/download: Download",
-                            data=f,
-                            file_name=os.path.basename(current_syllabus_path),
-                            key=f"download_syllabus_{book_id}"
-                        )
-                else:
-                    st.warning("Current syllabus file not found on server.")
-            
-            # Syllabus uploader
-            syllabus_file = None
-            if not new_is_publish_only:
-                syllabus_file = st.file_uploader(
-                    "Upload New Syllabus",
-                    type=["pdf", "docx", "jpg", "jpeg", "png"],
-                    key=f"syllabus_upload_{book_id}",
-                    help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image)."
-                )
-                # Warn about overwrite if a new file is uploaded and a current syllabus exists
-                if syllabus_file and current_syllabus_path:
-                    st.warning("Uploading a new syllabus will replace the existing one.")
-            else:
-                st.info("Syllabus upload is disabled for Publish Only books.")
-            st.markdown('</div>', unsafe_allow_html=True)
-
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
             with st.spinner("Saving changes..."):
-                os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-                # Handle syllabus file upload
-                new_syllabus_path = current_syllabus_path  # Keep existing path by default
-                if syllabus_file and not new_is_publish_only:
-                    # Debug file details
-                    st.write(f"Received file: {syllabus_file.name}, size: {syllabus_file.size}")
-                    
-                    # Generate a unique filename
-                    file_extension = os.path.splitext(syllabus_file.name)[1]
-                    unique_filename = f"syllabus_{new_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
-                    new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
-                    
-                    # Verify directory permissions
-                    if not os.access(UPLOAD_DIR, os.W_OK):
-                        st.error(f"No write permission for {UPLOAD_DIR}.")
-                        raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
-                    
-                    # Save the new file
-                    try:
-                        with open(new_syllabus_path_temp, "wb") as f:
-                            f.write(syllabus_file.getbuffer())
-                        new_syllabus_path = new_syllabus_path_temp
-                        st.write(f"New syllabus saved to: {new_syllabus_path}")
-                        
-                        # Delete the old syllabus file (if it exists and is different)
-                        if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
-                            try:
-                                os.remove(current_syllabus_path)
-                                st.write(f"Old syllabus deleted: {current_syllabus_path}")
-                            except OSError as e:
-                                st.warning(f"Could not delete old syllabus file: {str(e)}")
-                    except PermissionError:
-                        st.error(f"Permission denied: Cannot write to {new_syllabus_path_temp}.")
-                        raise
-                    except Exception as e:
-                        st.error(f"Failed to save syllabus file: {str(e)}")
-                        raise
-
                 with conn.session as s:
                     try:
                         if apply_isbn and receive_isbn and new_isbn:
@@ -1230,8 +1142,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                         isbn_receive_date = :isbn_receive_date, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only,
-                                        syllabus_path = :syllabus_path
+                                        is_publish_only = :is_publish_only
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -1241,7 +1152,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
-                                    "syllabus_path": new_syllabus_path,
                                     "book_id": book_id
                                 }
                             )
@@ -1254,8 +1164,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                         isbn_receive_date = NULL, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only,
-                                        syllabus_path = :syllabus_path
+                                        is_publish_only = :is_publish_only
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -1263,7 +1172,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
-                                    "syllabus_path": new_syllabus_path,
                                     "book_id": book_id
                                 }
                             )
@@ -1276,8 +1184,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                         isbn_receive_date = NULL, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only,
-                                        syllabus_path = :syllabus_path
+                                        is_publish_only = :is_publish_only
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -1285,7 +1192,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
-                                    "syllabus_path": new_syllabus_path,
                                     "book_id": book_id
                                 }
                             )
@@ -2973,12 +2879,14 @@ def fetch_unique_names(column):
 
 @st.dialog("Edit Operation Details", width='large')
 def edit_operation_dialog(book_id, conn):
-    # Fetch book details for title and is_publish_only
+    # Fetch book details for title, is_publish_only, and syllabus_path
     book_details = fetch_book_details(book_id, conn)
     is_publish_only = False
+    current_syllabus_path = None
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
         is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
+        current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)
         col1, col2 = st.columns([6, 1])
         with col1:
             st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
@@ -3175,9 +3083,82 @@ def edit_operation_dialog(book_id, conn):
                 disabled=is_publish_only
             )
 
+            # Book Syllabus Section
+            st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                # Display current syllabus if it exists
+                if current_syllabus_path:
+                    st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
+                    # Provide download link (if file exists)
+                    if os.path.exists(current_syllabus_path):
+                        with open(current_syllabus_path, "rb") as f:
+                            st.download_button(
+                                label=":material/download: Download",
+                                data=f,
+                                file_name=os.path.basename(current_syllabus_path),
+                                key=f"download_syllabus_{book_id}"
+                            )
+                    else:
+                        st.warning("Current syllabus file not found on server.")
+                
+                # Syllabus uploader
+                syllabus_file = None
+                if not is_publish_only:
+                    syllabus_file = st.file_uploader(
+                        "Upload New Syllabus",
+                        type=["pdf", "docx", "jpg", "jpeg", "png"],
+                        key=f"syllabus_upload_{book_id}",
+                        help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image)."
+                    )
+                    # Warn about overwrite if a new file is uploaded and a current syllabus exists
+                    if syllabus_file and current_syllabus_path:
+                        st.warning("Uploading a new syllabus will replace the existing one.")
+                else:
+                    st.info("Syllabus upload is disabled for Publish Only books.")
+                st.markdown('</div>', unsafe_allow_html=True)
+
             if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
                 with st.spinner("Saving Writing details..."):
-                    time.sleep(1)
+                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+                    # Handle syllabus file upload
+                    new_syllabus_path = current_syllabus_path  # Keep existing path by default
+                    if syllabus_file and not is_publish_only:
+                        # Debug file details
+                        st.write(f"Received file: {syllabus_file.name}, size: {syllabus_file.size}")
+                        
+                        # Generate a unique filename
+                        file_extension = os.path.splitext(syllabus_file.name)[1]
+                        unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
+                        new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                        
+                        # Verify directory permissions
+                        if not os.access(UPLOAD_DIR, os.W_OK):
+                            st.error(f"No write permission for {UPLOAD_DIR}.")
+                            raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
+                        
+                        # Save the new file
+                        try:
+                            with open(new_syllabus_path_temp, "wb") as f:
+                                f.write(syllabus_file.getbuffer())
+                            new_syllabus_path = new_syllabus_path_temp
+                            st.write(f"New syllabus saved to: {new_syllabus_path}")
+                            
+                            # Delete the old syllabus file (if it exists and is different)
+                            if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
+                                try:
+                                    os.remove(current_syllabus_path)
+                                    st.write(f"Old syllabus deleted: {current_syllabus_path}")
+                                except OSError as e:
+                                    st.warning(f"Could not delete old syllabus file: {str(e)}")
+                        except PermissionError:
+                            st.error(f"Permission denied: Cannot write to {new_syllabus_path_temp}.")
+                            raise
+                        except Exception as e:
+                            st.error(f"Failed to save syllabus file: {str(e)}")
+                            raise
+
                     writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
                     writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
                     if writing_start and writing_end and writing_start > writing_end:
@@ -3187,7 +3168,8 @@ def edit_operation_dialog(book_id, conn):
                             "writing_start": writing_start,
                             "writing_end": writing_end,
                             "writing_by": writing_by if writing_by else None,
-                            "book_pages": book_pages
+                            "book_pages": book_pages,
+                            "syllabus_path": new_syllabus_path
                         }
                         update_operation_details(book_id, updates)
                         st.success("✔️ Updated Writing details")
@@ -4442,7 +4424,7 @@ with srcol2:
         if st.button("🔍", type="secondary", help="Advance Search", use_container_width=True):
             st.switch_page("pages/adsearch.py")
     else:
-        st.button("🔍", type="secondary", help="Advance Search (Not Authorized)", use_container_width=True, disabled=True)
+        st.button("🔍", type="secondary", help="Not Authorized", use_container_width=True, disabled=True)
 
 
 with srcol3:
@@ -4844,7 +4826,7 @@ with cont:
                     # Handle the publisher badge with distinct colors
                     publisher = row.get('publisher', '')  # Safe access
                     publisher_colors = {
-                        "Cipher": {"color": "#ffffff", "background": "#8f1b83"},  # White text on deep purple
+                        "Cipher": {"color": "#ffffff", "background": "#9178e3"},  # White text on deep purple
                         "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},  # White text on deep purple
                         "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
                         "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
