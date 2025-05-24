@@ -146,7 +146,7 @@ def connect_db():
 conn = connect_db()
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path is_publish_only, publisher FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, is_publish_only, publisher, author_type FROM books"
 books = conn.query(query,show_spinner = False)
 
 # Apply date range filtering
@@ -625,6 +625,7 @@ def edit_author_detail(conn):
 ##################################--------------- Add New Book & Auhtor ----------------------------##################################
 ###################################################################################################################################
 
+
 @st.dialog("Add Book and Authors", width="large")
 def add_book_dialog(conn):
 
@@ -664,33 +665,38 @@ def add_book_dialog(conn):
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
             
-            # Determine if toggles should be enabled based on publisher
+            # Determine if toggles and author type should be enabled based on publisher
             toggles_enabled = publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
-            
+
+            col3, col4 = st.columns([4,2], vertical_alignment="bottom")
+
+            with col3:
+                # Author type selection
+                author_type = st.radio(
+                    "Author Type",
+                    ["Multiple", "Single", "Double", "Triple"],
+                    key="author_type_select",
+                    horizontal=True,
+                    help="Select the number of authors for the book. 'Multiple' allows up to 4 authors.",
+                    disabled=not toggles_enabled
+                )
             # Columns for toggles
-            col3, col4 = st.columns(2)
-            is_single_author = col3.toggle(
-                "Single Author Book?",
-                value=False,
-                key="single_author_toggle",
-                help="Enable this to restrict the book to a single author.",
-                disabled=not toggles_enabled
-            )
-            is_publish_only = col4.toggle(
-                "Publish Only?",
-                value=False,
-                key="publish_only_toggle",
-                help="Enable this to mark the book as publish only.",
-                disabled=not toggles_enabled
-            )
+            with col4:
+                is_publish_only = st.toggle(
+                    "Publish Only?",
+                    value=False,
+                    key="publish_only_toggle",
+                    help="Enable this to mark the book as publish only.",
+                    disabled=not toggles_enabled
+                )
             
             if not toggles_enabled:
-                st.warning("Single Author and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
+                st.warning("Author Type and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
             
             return {
                 "title": book_title,
                 "date": book_date,
-                "is_single_author": is_single_author if toggles_enabled else False,
+                "author_type": author_type if toggles_enabled else "Multiple",
                 "is_publish_only": is_publish_only if toggles_enabled else False,
                 "publisher": publisher
             }
@@ -713,7 +719,7 @@ def add_book_dialog(conn):
                     st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
             return syllabus_file
 
-    def author_details_section(conn, is_single_author, publisher):
+    def author_details_section(conn, author_type, publisher):
         # Check if author section should be disabled
         author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
 
@@ -750,6 +756,14 @@ def add_book_dialog(conn):
         agent_options = ["Select Agent"] + ["Add New..."] + unique_agents 
         consultant_options = ["Select Consultant"] + ["Add New..."] + unique_consultants 
 
+        # Determine max authors based on author_type
+        max_authors = {
+            "Single": 1,
+            "Double": 2,
+            "Triple": 3,
+            "Multiple": 4
+        }.get(author_type, 4)
+
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Author Details</h5>", unsafe_allow_html=True)
             
@@ -761,10 +775,10 @@ def add_book_dialog(conn):
             tabs = st.tabs(tab_titles)
 
             for i, tab in enumerate(tabs):
-                disabled = is_single_author and i > 0
+                disabled = i >= max_authors or author_section_disabled
                 with tab:
                     if disabled:
-                        st.warning("Can't Add More Authors in 'Single Author' Mode")
+                        st.warning(f"Cannot add Author {i+1}. Maximum allowed authors: {max_authors} for {author_type} author type.")
                     else:
                         selected_author = st.selectbox(
                             f"Select Author {i+1}",
@@ -844,7 +858,7 @@ def add_book_dialog(conn):
         """Check if an author is 'active' (i.e., has at least one non-empty field)."""
         return bool(author["name"] or author["email"] or author["phone"] or author["corresponding_agent"] or author["publishing_consultant"])
 
-    def validate_form(book_data, author_data, is_single_author, publisher):
+    def validate_form(book_data, author_data, author_type, publisher):
         """Validate that all required fields are filled for book and active authors, and positions are unique."""
         errors = []
 
@@ -863,9 +877,10 @@ def add_book_dialog(conn):
             if not active_authors:
                 errors.append("At least one author must be provided.")
 
-            # If "Single Author" is toggled on, ensure exactly one author is active
-            if is_single_author and len(active_authors) > 1:
-                errors.append("Only one author is allowed when 'Single Author' is selected.")
+            # Validate number of authors based on author_type
+            max_authors = {"Single": 1, "Double": 2, "Triple": 3, "Multiple": 4}.get(author_type, 4)
+            if len(active_authors) > max_authors:
+                errors.append(f"Too many authors. {author_type} allows up to {max_authors} authors.")
 
             # Track existing author IDs to prevent duplicates
             existing_author_ids = set()
@@ -895,7 +910,7 @@ def add_book_dialog(conn):
     with st.container():
         publisher = publisher_section()
         book_data = book_details_section(publisher)
-        author_data = author_details_section(conn, book_data["is_single_author"], publisher)
+        author_data = author_details_section(conn, book_data["author_type"], publisher)
         syllabus_file = syllabus_upload_section(book_data["is_publish_only"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         
         # Add syllabus_file to book_data for saving
@@ -905,7 +920,7 @@ def add_book_dialog(conn):
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            errors = validate_form(book_data, author_data, book_data["is_single_author"], publisher)
+            errors = validate_form(book_data, author_data, book_data["author_type"], publisher)
             if errors:
                 st.error("\n".join(errors), icon="🚨")
             else:
@@ -942,14 +957,14 @@ def add_book_dialog(conn):
                                     st.error(f"Failed to save syllabus file: {str(e)}")
                                     raise
                             
-                            # Insert book with publisher, syllabus path, and other fields
+                            # Insert book with publisher, syllabus path, author type, and other fields
                             s.execute(text("""
-                                INSERT INTO books (title, date, is_single_author, is_publish_only, publisher, syllabus_path)
-                                VALUES (:title, :date, :is_single_author, :is_publish_only, :publisher, :syllabus_path)
+                                INSERT INTO books (title, date, author_type, is_publish_only, publisher, syllabus_path)
+                                VALUES (:title, :date, :author_type, :is_publish_only, :publisher, :syllabus_path)
                             """), params={
                                 "title": book_data["title"],
                                 "date": book_data["date"],
-                                "is_single_author": book_data["is_single_author"],
+                                "author_type": book_data["author_type"],
                                 "is_publish_only": book_data["is_publish_only"],
                                 "publisher": book_data["publisher"],
                                 "syllabus_path": syllabus_path
@@ -1928,11 +1943,11 @@ def edit_author_dialog(book_id, conn):
                                 help="Check if the welcome email has been sent.",
                                 key=f"welcome_mail_sent_{row['id']}"
                             )
-                            updates['digital_book_sent'] = st.checkbox(
-                                "📤 Digital Book Sent",
-                                value=bool(row['digital_book_sent']),
-                                help="Check if the digital book has been sent.",
-                                key=f"digital_book_sent_{row['id']}"
+                            updates['author_details_sent'] = st.checkbox(
+                                "📥 Author Details Received",
+                                value=bool(row['author_details_sent']),
+                                help="Check if the author's details have been sent.",
+                                key=f"author_details_sent_{row['id']}"
                             )
                             updates['photo_recive'] = st.checkbox(
                                 "📷 Photo Received",
@@ -1946,13 +1961,13 @@ def edit_author_dialog(book_id, conn):
                                 help="Check if the author's ID proof has been received.",
                                 key=f"id_proof_recive_{row['id']}"
                             )
-                        with col6:     
-                            updates['author_details_sent'] = st.checkbox(
-                                "📥 Author Details Received",
-                                value=bool(row['author_details_sent']),
-                                help="Check if the author's details have been sent.",
-                                key=f"author_details_sent_{row['id']}"
-                            )
+                        with col6:    
+                            updates['digital_book_sent'] = st.checkbox(
+                                "📤 Digital Book Sent",
+                                value=bool(row['digital_book_sent']),
+                                help="Check if the digital book has been sent.",
+                                key=f"digital_book_sent_{row['id']}"
+                            ) 
                             updates['cover_agreement_sent'] = st.checkbox(
                                 "📜 Cover Agreement Sent",
                                 value=bool(row['cover_agreement_sent']),
@@ -3703,6 +3718,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 pe.book_size, 
                 pe.edition_number, 
                 pe.status,
+                pe.color_pages,
                 bd.batch_id,
                 pb.batch_name
             FROM 
@@ -3778,7 +3794,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 if selected_print_id:
                     edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
                     
-                    with st.form(key=f"edit_form_{book_id}_{selected_print_id}", border=False):
+                    with st.container():
                         # Compact layout: Use a single row with 5 columns
                         col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
                         with col1:
@@ -3822,12 +3838,37 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                 label_visibility="visible"
                             )
 
-                        save_edit = st.form_submit_button("💾 Save Edited Print Edition", use_container_width=True)
+                        # Conditional input for color pages
+                        edit_color_pages = None
+                        if edit_print_color == "Full Color":
+                            edit_color_pages = st.number_input(
+                                "Number of Color Pages",
+                                min_value=0,
+                                step=1,
+                                value=int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0,
+                                key=f"edit_color_pages_{book_id}_{selected_print_id}",
+                                label_visibility="visible"
+                            )
+
+                        save_edit = st.button("💾 Save Edited Print Edition", use_container_width=True, key=f"save_edit_print_{book_id}_{selected_print_id}")
 
                         if save_edit:
                             with st.spinner("Saving edited print edition..."):
                                 time.sleep(1)
                                 try:
+                                    if edit_num_copies <= 0:
+                                        st.error("Copies must be greater than 0.")
+                                        return
+                                    if edit_print_cost:
+                                        try:
+                                            float(edit_print_cost)
+                                        except ValueError:
+                                            st.error("Print cost must be a valid number or empty.")
+                                            return
+                                    if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
+                                        st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                                        return
+
                                     with conn.session as session:
                                         session.execute(
                                             text("""
@@ -3836,7 +3877,8 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                                     print_cost = :print_cost, 
                                                     print_color = :print_color, 
                                                     binding = :binding, 
-                                                    book_size = :book_size
+                                                    book_size = :book_size,
+                                                    color_pages = :color_pages
                                                 WHERE print_id = :print_id
                                             """),
                                             {
@@ -3845,7 +3887,8 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                                 "print_cost": float(edit_print_cost) if edit_print_cost else None,
                                                 "print_color": edit_print_color,
                                                 "binding": edit_binding,
-                                                "book_size": edit_book_size
+                                                "book_size": edit_book_size,
+                                                "color_pages": edit_color_pages if edit_print_color == "Full Color" else None
                                             }
                                         )
                                         session.commit()
@@ -3857,7 +3900,8 @@ def edit_inventory_delivery_dialog(book_id, conn):
         # 3. Add New Print Edition Expander (only if ready_to_print is True)
         if is_ready_to_print:
             with st.expander("Add New Print Edition", expanded=False):
-                with st.form(key=f"new_print_form_{book_id}", border=False):
+               # PrintEdition form (replacing st.form with dynamic inputs)
+                with st.container():
                     # Compact layout: Use a single row with 5 columns
                     col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
                     with col1:
@@ -3897,13 +3941,35 @@ def edit_inventory_delivery_dialog(book_id, conn):
                             label_visibility="visible"
                         )
 
-                    save_new_print = st.form_submit_button("💾 Save New Print Edition", use_container_width=True)
+                    # Conditional input for color pages
+                    color_pages = None
+                    if print_color == "Full Color":
+                        color_pages = st.number_input(
+                            "Number of Color Pages",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"color_pages_{book_id}",
+                            label_visibility="visible"
+                        )
+
+                    save_new_print = st.button("💾 Save New Print Edition", use_container_width=True, key=f"save_print_{book_id}")
 
                     if save_new_print:
                         with st.spinner("Saving new print edition..."):
                             time.sleep(1)
                             try:
-                                if st.session_state[f"new_num_copies_{book_id}"] > 0:
+                                if new_num_copies > 0:
+                                    if print_cost:
+                                        try:
+                                            float(print_cost)
+                                        except ValueError:
+                                            st.error("Print cost must be a valid number or empty.")
+                                            return
+                                    if print_color == "Full Color" and (color_pages is None or color_pages <= 0):
+                                        st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                                        return
+
                                     with conn.session as session:
                                         # Calculate edition_number
                                         result = session.execute(
@@ -3916,19 +3982,19 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                         session.execute(
                                             text("""
                                                 INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
-                                                    print_cost, print_color, binding, book_size, status)
+                                                    print_cost, print_color, binding, book_size, status, color_pages)
                                                 VALUES (:book_id, :edition_number, :copies_planned, 
-                                                    :print_cost, :print_color, :binding, :book_size, 'Pending')
+                                                    :print_cost, :print_color, :binding, :book_size, 'Pending', :color_pages)
                                             """),
                                             {
                                                 "book_id": book_id,
                                                 "edition_number": edition_number,
-                                                "copies_planned": st.session_state[f"new_num_copies_{book_id}"],
-                                                "print_cost": (float(st.session_state[f"print_cost_{book_id}"]) 
-                                                            if st.session_state[f"print_cost_{book_id}"] else None),
-                                                "print_color": st.session_state[f"print_color_{book_id}"],
-                                                "binding": st.session_state[f"binding_{book_id}"],
-                                                "book_size": st.session_state[f"book_size_{book_id}"]
+                                                "copies_planned": new_num_copies,
+                                                "print_cost": float(print_cost) if print_cost else None,
+                                                "print_color": print_color,
+                                                "binding": binding,
+                                                "book_size": book_size,
+                                                "color_pages": color_pages if print_color == "Full Color" else None
                                             }
                                         )
                                         session.commit()
@@ -4411,7 +4477,7 @@ with c3:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol2, srcol3, srcol4, srcol5, srcol6 = st.columns([6, .6, 4, 1, 1, 1], gap="small") 
+srcol1, srcol2, srcol3, srcol4, srcol5 = st.columns([6, .6, 4, 1, 1], gap="small") 
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail, #authorphone..", key="search_bar",
@@ -4694,53 +4760,6 @@ with srcol5:
                     manage_users(conn)
 
 
-# Add page size selection
-with srcol6:
-    page_size_options = [40, 100, "All"]
-    if 'page_size' not in st.session_state:
-        st.session_state.page_size = page_size_options[0]  # Default page size
-    st.session_state.page_size = st.selectbox("Books per page", options=page_size_options, index=0, key="page_size_select",
-                                              label_visibility="collapsed")
-
-
-
-# Pagination Logic (Modified)
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = 1
-
-# Apply sorting to the filtered books (sort by date in descending order)
-filtered_books = filtered_books.sort_values(by='date', ascending=False)
-
-# Determine if pagination should be enabled
-# Pagination is enabled only if page_size is "All" and no search/filter is applied
-pagination_enabled = st.session_state.page_size == "All" and not (
-    search_query or any([
-        st.session_state.month_filter,
-        st.session_state.year_filter,
-        st.session_state.start_date_filter,
-        st.session_state.end_date_filter
-    ])
-)
-
-# Apply pagination or limit the number of books based on page size
-if pagination_enabled:
-    # Pagination is enabled: Show all books with pagination
-    page_size = 40  # Default page size for pagination when "All" is selected
-    total_books = len(filtered_books)
-    total_pages = max(1, (total_books + page_size - 1) // page_size)
-    st.session_state.current_page = min(st.session_state.current_page, total_pages)  # Ensure current page is valid
-    start_idx = (st.session_state.current_page - 1) * page_size
-    end_idx = start_idx + page_size
-    paginated_books = filtered_books.iloc[start_idx:end_idx]
-else:
-    # Pagination is disabled: Show only the top N books based on page_size
-    if st.session_state.page_size == "All":
-        paginated_books = filtered_books
-    else:
-        page_size = st.session_state.page_size
-        paginated_books = filtered_books.head(page_size)
-
-
 # :material/done: (Simple check mark)
 # :material/task_alt: (Check mark in a circle, modern)
 # :material/verified: (Verified badge with check)
@@ -4777,6 +4796,21 @@ delivery_icon = ":material/local_shipping:"
 # ops_icon = ":material/check_circle:"
 # delivery_icon = ":material/hourglass_top:"
 
+# Pagination Logic
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+
+# Apply sorting to the filtered books (sort by date in descending order)
+filtered_books = filtered_books.sort_values(by='date', ascending=False)
+
+# Apply pagination with fixed page size of 40
+page_size = 40
+total_books = len(filtered_books)
+total_pages = max(1, (total_books + page_size - 1) // page_size)  # Ceiling division
+st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages))  # Clamp current page
+start_idx = (st.session_state.current_page - 1) * page_size
+end_idx = min(start_idx + page_size, total_books)
+paginated_books = filtered_books.iloc[start_idx:end_idx]
 
 # Display the table
 column_size = [0.5, 4, 1, 1, 1, 2]
@@ -4787,7 +4821,7 @@ with cont:
         st.warning("No books available.")
     else:
         if search_query:
-            st.warning(f"Showing {len(paginated_books)} results for '{search_query}'")
+            st.warning(f"Showing {total_books} results for '{search_query}'")
 
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
@@ -4839,9 +4873,9 @@ with cont:
                     
                     # Display the title with all badges
                     st.markdown(
-                    f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
-                    unsafe_allow_html=True
-                )
+                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
+                        unsafe_allow_html=True
+                    )
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:
@@ -4897,35 +4931,47 @@ with cont:
 
         st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown(
+            f"<div style='text-align: center; margin-bottom: 10px;'>"
+            f"Showing <span style='font-weight: bold; color: #286e1a;'>{start_idx + 1}</span>-"
+            f"<span style='font-weight: bold; color: #286e1a;'>{end_idx}</span> of "
+            f"<span style='font-weight: bold; color: #286e1a;'>{total_books}</span> books"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
-        # Pagination Controls (only show if pagination is enabled)
-        if pagination_enabled:
-            total_books = len(filtered_books)
-            total_pages = max(1, (total_books + page_size - 1) // page_size)
-            current_page = st.session_state.current_page
 
-            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        # Pagination Controls (always show since page_size is fixed at 40)
+        if total_pages > 1:  # Only show pagination if there are multiple pages
+            col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 4, 1, 1, 1], vertical_alignment="center")
             with col1:
-                st.markdown('<div class="pagination-container">', unsafe_allow_html=True)
-                prev_disabled = current_page == 1
-                next_disabled = current_page == total_pages
+                if st.button("First", key="first_page", disabled=(st.session_state.current_page == 1)):
+                    st.session_state.current_page = 1
+                    st.rerun()
             with col2:
-                # Previous Button
-                if st.button("Previous", key="prev_page", disabled=prev_disabled, help="Go to previous page"):
+                if st.button("Previous", key="prev_page", disabled=(st.session_state.current_page == 1)):
                     st.session_state.current_page -= 1
                     st.rerun()
             with col3:
-                # Page Info
-                st.markdown(f'<span class="pagination-info">Page {current_page} of {total_pages}</span>', unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</div>", unsafe_allow_html=True)
             with col4:
-                # Next Button
-                if st.button("Next", key="next_page", disabled=next_disabled, help="Go to next page"):
+                if st.button("Next", key="next_page", disabled=(st.session_state.current_page == total_pages)):
                     st.session_state.current_page += 1
                     st.rerun()
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
-
-        # # Add informational message if pagination is disabled due to specific page size
-        # if not pagination_enabled and st.session_state.page_size != "All":
-        #     st.info(f"Showing the {st.session_state.page_size} most recent books. Pagination is disabled. To view all books with pagination, select 'All' in the 'Books per page' dropdown.")
+            with col5:
+                if st.button("Last", key="last_page", disabled=(st.session_state.current_page == total_pages)):
+                    st.session_state.current_page = total_pages
+                    st.rerun()
+            with col6:
+                page_options = list(range(1, total_pages + 1)) if total_pages > 0 else [1]
+                current_index = min(st.session_state.current_page - 1, len(page_options) - 1)
+                selected_page = st.selectbox(
+                    "Go to page:",
+                    page_options,
+                    index=current_index,
+                    key="page_selector",
+                    label_visibility="collapsed"
+                )
+                if selected_page != st.session_state.current_page:
+                    st.session_state.current_page = selected_page
+                    st.rerun()
