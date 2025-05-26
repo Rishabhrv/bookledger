@@ -4484,6 +4484,7 @@ with srcol2:
 
 
 with srcol3:
+    # Popover for filtering
     with st.popover("Filter by Date, Status, Publisher & Author Type", use_container_width=True):
         # Extract unique publishers, years, and author types from the dataset
         unique_publishers = sorted(books['publisher'].dropna().unique())
@@ -4529,10 +4530,8 @@ with srcol3:
         # Tabs for filter categories
         tabs = st.tabs(["Publisher", "Status", "Author", "Date"])
 
-        # Date Filters Tab
         with tabs[3]:
-           
-            # Year filter
+            # Date Filters Expander
             year_options = [str(year) for year in unique_years]
             selected_year = st.pills(
                 "Year",
@@ -4550,8 +4549,8 @@ with srcol3:
                 year_books = books[books['date'].dt.year == st.session_state.year_filter]
                 unique_months = sorted(year_books['date'].dt.month.unique())
                 month_names = {
-                    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 
-                    5: "May", 6: "Jun", 7: "Jul", 8: "Aug", 
+                    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
+                    5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
                     9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
                 }
                 month_options = [month_names[month] for month in unique_months]
@@ -4571,36 +4570,34 @@ with srcol3:
             else:
                 st.session_state.month_filter = None
 
-
-            st.caption("Filter by Range:")
             # Date range filter
             min_date = books['date'].min().date()
             max_date = books['date'].max().date()
             start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
             end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
             st.session_state.start_date_filter = st.date_input(
-                "Start", 
-                value=st.session_state.start_date_filter, 
-                min_value=min_date, 
-                max_value=max_date, 
+                "Start Date",
+                value=st.session_state.start_date_filter,
+                min_value=min_date,
+                max_value=max_date,
                 key=start_date_key,
                 label_visibility="visible"
             )
             st.session_state.end_date_filter = st.date_input(
-                "End", 
-                value=st.session_state.end_date_filter, 
-                min_value=min_date, 
-                max_value=max_date, 
+                "End Date",
+                value=st.session_state.end_date_filter,
+                min_value=min_date,
+                max_value=max_date,
                 key=end_date_key,
                 label_visibility="visible"
             )
             if st.session_state.start_date_filter and st.session_state.end_date_filter:
                 if st.session_state.start_date_filter > st.session_state.end_date_filter:
-                    st.error("Start Date must be before or equal to End Date.")
+                    st.error("Start Date must be before End Date.")
                     st.session_state.start_date_filter = None
                     st.session_state.end_date_filter = None
 
-        # Publisher Filters Tab
+        # Publisher Filters Expander
         with tabs[0]:
             publisher_options = unique_publishers
             selected_publisher = st.pills(
@@ -4614,9 +4611,8 @@ with srcol3:
             elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
                 st.session_state.publisher_filter = None
 
-        # Status Filters Tab
+        # Status Filters Expander
         with tabs[1]:
-        
             # Status filter
             status_options = ["Delivered", "On Going"]
             if user_role == "admin":
@@ -4629,20 +4625,18 @@ with srcol3:
             )
             st.session_state.status_filter = selected_status
 
-        
             # ISBN filter
             isbn_options = ["Not Applied", "Not Received"]
             selected_isbn = st.pills(
-                "ISBN",
+                "ISBN Status",
                 options=isbn_options,
                 key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
             )
-            st.session_state.isbn_filter = "ISBN " + selected_isbn if selected_isbn else None
+            st.session_state.isbn_filter = selected_isbn
 
-        # Author Filters Tab
+        # Author Filters Expander
         with tabs[2]:
-            
             # Author type filter
             author_type_options = ["Single", "Double", "Triple", "Multiple"]
             selected_author_type = st.pills(
@@ -4653,7 +4647,6 @@ with srcol3:
             )
             st.session_state.author_type_filter = selected_author_type
 
-        
             # Multiple with open positions filter
             multiple_open_positions_options = ["Open Positions"]
             selected_multiple_open_positions = st.pills(
@@ -4664,9 +4657,8 @@ with srcol3:
             )
             st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
 
-        # Apply filters
+        # Collect applied filters after all selections
         applied_filters = []
-        filtered_books = books.copy()
         if st.session_state.publisher_filter:
             applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
         if st.session_state.month_filter:
@@ -4674,9 +4666,9 @@ with srcol3:
         if st.session_state.year_filter:
             applied_filters.append(f"Year={st.session_state.year_filter}")
         if st.session_state.start_date_filter:
-            applied_filters.append(f"Start={st.session_state.start_date_filter}")
+            applied_filters.append(f"Start Date={st.session_state.start_date_filter}")
         if st.session_state.end_date_filter:
-            applied_filters.append(f"End={st.session_state.end_date_filter}")
+            applied_filters.append(f"End Date={st.session_state.end_date_filter}")
         if st.session_state.status_filter:
             applied_filters.append(f"Status={st.session_state.status_filter}")
         if st.session_state.isbn_filter:
@@ -4686,28 +4678,29 @@ with srcol3:
         if st.session_state.multiple_open_positions_filter:
             applied_filters.append(f"Author Status={st.session_state.multiple_open_positions_filter}")
 
+        # Apply filters only if there are any
         if applied_filters:
             # Apply publisher filter
             if st.session_state.publisher_filter:
                 filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
-            
+
             # Apply date filters
             filtered_books = filter_books_by_date(
-                filtered_books, 
+                filtered_books,
                 None,
-                st.session_state.month_filter, 
-                st.session_state.year_filter, 
-                st.session_state.start_date_filter, 
+                st.session_state.month_filter,
+                st.session_state.year_filter,
+                st.session_state.start_date_filter,
                 st.session_state.end_date_filter
             )
 
             # Apply ISBN filter
             if st.session_state.isbn_filter:
-                if st.session_state.isbn_filter == "ISBN Not Applied":
+                if st.session_state.isbn_filter == "Not Applied":
                     filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 0)]
-                elif st.session_state.isbn_filter == "ISBN Not Received":
+                elif st.session_state.isbn_filter == "Not Received":
                     filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 1)]
-            
+
             # Apply status filter
             if st.session_state.status_filter:
                 if st.session_state.status_filter == "Pending Payment":
@@ -4736,7 +4729,7 @@ with srcol3:
                     (filtered_books['book_id'].map(author_count_dict) < 4)
                 ]
 
-            st.success(f"Applied: {', '.join(applied_filters)}")
+            st.success(f"Applied Filters: {', '.join(applied_filters)}")
 
 
 with srcol4:
@@ -4843,6 +4836,7 @@ st.session_state.current_page = max(1, min(st.session_state.current_page, total_
 start_idx = (st.session_state.current_page - 1) * page_size
 end_idx = min(start_idx + page_size, total_books)
 paginated_books = filtered_books.iloc[start_idx:end_idx]
+
 
 # Display the table
 column_size = [0.5, 4, 1, 1, 1, 2]
