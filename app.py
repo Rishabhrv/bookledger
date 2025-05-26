@@ -1038,6 +1038,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
     current_publisher = book_details.iloc[0].get('publisher', '')
 
     publisher_colors = {
+        "AGPH": {"color": "#ffffff", "background": "#e4be17"},
         "Cipher": {"color": "#ffffff", "background": "#8f1b83"},
         "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},
         "AG Classics": {"color": "#ffffff", "background": "#d81b60"},
@@ -1874,7 +1875,7 @@ def edit_author_dialog(book_id, conn):
 
             # Display author details in a styled box
             with st.container():
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                #st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**📌 Author ID:** {row['author_id']}")
@@ -1882,7 +1883,7 @@ def edit_author_dialog(book_id, conn):
                 with col2:
                     st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
                     st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
-                st.markdown('</div>', unsafe_allow_html=True)
+                #st.markdown('</div>', unsafe_allow_html=True)
 
                 # Tabs for organizing fields (disable Delivery tab if print_status is 0)
                 tab_titles = ["Checklists", "Basic Info", "Delivery"]
@@ -2662,42 +2663,29 @@ def edit_author_dialog(book_id, conn):
                     st.rerun()
 
     else:
+        # Fetch current book details and authors
         book_authors = fetch_book_authors(book_id, conn)
         existing_author_count = len(book_authors)
-        toggle_editable = existing_author_count <= 1
 
-        if existing_author_count == 1:
-            with st.columns([3, 4])[0]:
-                new_is_single_author = st.toggle(
-                    "Single Author?",
-                    value=is_single_author,
-                    key=f"single_author_toggle_{book_id}",
-                    disabled=not toggle_editable
-                )
-                if toggle_editable and new_is_single_author != is_single_author:
-                    try:
-                        with st.spinner("Updating author mode..."):
-                            with conn.session as s:
-                                time.sleep(1)
-                                s.execute(
-                                    text("UPDATE books SET is_single_author = :is_single_author WHERE book_id = :book_id"),
-                                    {"is_single_author": int(new_is_single_author), "book_id": book_id}
-                                )
-                                s.commit()
-                            st.success(f"✔️ Updated to {'Single' if new_is_single_author else 'Multiple'} Author mode")
-                            st.cache_data.clear()
-                            is_single_author = new_is_single_author
-                    except Exception as e:
-                        st.error(f"❌ Error updating author mode: {e}")
+        # Fetch current author_type from books table
+        with conn.session as s:
+            result = s.execute(
+                text("SELECT author_type FROM books WHERE book_id = :book_id"),
+                {"book_id": book_id}
+            ).fetchone()
+            current_author_type = result[0] if result else "Multiple"
 
-        available_slots = MAX_AUTHORS - existing_author_count
-        if is_single_author and existing_author_count >= 1:
-            st.warning("⚠️ This book is marked as 'Single Author'. No additional authors can be added.")
-            if st.button("Close"): st.rerun()
-            return
+        # Determine max authors based on author_type
+        max_authors_allowed = {
+            "Single": 1,
+            "Double": 2,
+            "Triple": 3,
+            "Multiple": 4
+        }.get(current_author_type, 4)
 
-        if existing_author_count >= MAX_AUTHORS:
-            st.warning("⚠️ Maximum number of authors (4) reached.")
+        available_slots = max_authors_allowed - existing_author_count
+        if available_slots <= 0:
+            st.warning(f"⚠️ Maximum number of authors ({max_authors_allowed}) reached for {current_author_type} author type.")
             if st.button("Close"): st.rerun()
             return
 
@@ -2708,14 +2696,13 @@ def edit_author_dialog(book_id, conn):
         if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
             st.session_state.new_authors = initialize_new_authors(available_slots)
 
-        def validate_author(author, existing_positions, existing_author_ids, all_new_authors, index, is_single_author):
+        def validate_author(author, existing_positions, existing_author_ids, all_new_authors, index, author_type):
             """Validate an author's details."""
             if not author["name"]: return False, "Author name is required."
             if not author["email"] or not validate_email(author["email"]): return False, "Invalid email format."
             if not author["phone"] or not validate_phone(author["phone"]): return False, "Invalid phone number format."
             if not author["author_position"]: return False, "Author position is required."
             if not author["publishing_consultant"]: return False, "Publishing consultant is required."
-            # publishing_consultant is optional
 
             if author["author_position"] in existing_positions or \
             author["author_position"] in [a["author_position"] for i, a in enumerate(all_new_authors) if i != index and a["author_position"]]:
@@ -2725,8 +2712,11 @@ def edit_author_dialog(book_id, conn):
             [a["author_id"] for i, a in enumerate(all_new_authors) if i != index and a["author_id"]]:
                 return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already linked."
 
-            if is_single_author and existing_author_count + sum(1 for a in all_new_authors if a["name"]) > 1:
-                return False, "Only one author is allowed for 'Single Author' mode."
+            # Validate number of authors based on author_type
+            total_authors = existing_author_count + sum(1 for a in all_new_authors if a["name"])
+            max_allowed = {"Single": 1, "Double": 2, "Triple": 3, "Multiple": 4}.get(author_type, 4)
+            if total_authors > max_allowed:
+                return False, f"Too many authors. {author_type} allows up to {max_allowed} authors."
 
             return True, ""
 
@@ -2742,9 +2732,9 @@ def edit_author_dialog(book_id, conn):
 
         for i in range(available_slots):
             with st.expander(f"New Author {i+1}", expanded=False):
-                disabled = is_single_author and existing_author_count >= 1
-                if disabled and i == 0:
-                    st.warning("⚠️ Disabled: Book is 'Single Author' with an existing author.")
+                disabled = existing_author_count + i >= max_authors_allowed
+                if disabled:
+                    st.warning(f"⚠️ Disabled: Maximum {max_authors_allowed} authors reached for {current_author_type} mode.")
 
                 selected_author = st.selectbox(
                     f"Select Author {i+1}",
@@ -2831,7 +2821,7 @@ def edit_author_dialog(book_id, conn):
                 for i, author in enumerate(st.session_state.new_authors):
                     if author["name"]:  # Only validate if author has a name
                         is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, 
-                                                                st.session_state.new_authors, i, is_single_author)
+                                                                st.session_state.new_authors, i, current_author_type)
                         if not is_valid:
                             errors.append(f"Author {i+1}: {error_message}")
                 if errors:
@@ -4494,10 +4484,11 @@ with srcol2:
 
 
 with srcol3:
-    with st.popover("Filter by Date, Status & Publisher", use_container_width=True):
-        # Extract unique publishers and years from the dataset
+    with st.popover("Filter by Date, Status, Publisher & Author Type", use_container_width=True):
+        # Extract unique publishers, years, and author types from the dataset
         unique_publishers = sorted(books['publisher'].dropna().unique())
         unique_years = sorted(books['date'].dt.year.unique())
+        unique_author_types = sorted(books['author_type'].dropna().unique())
 
         # Use session state to manage filter values
         if 'year_filter' not in st.session_state:
@@ -4512,144 +4503,170 @@ with srcol3:
             st.session_state.status_filter = None
         if 'publisher_filter' not in st.session_state:
             st.session_state.publisher_filter = None
-        if 'isbn_filter' not in st.session_state:  # New ISBN filter state
+        if 'isbn_filter' not in st.session_state:
             st.session_state.isbn_filter = None
+        if 'author_type_filter' not in st.session_state:
+            st.session_state.author_type_filter = None
+        if 'multiple_open_positions_filter' not in st.session_state:
+            st.session_state.multiple_open_positions_filter = None
         if 'clear_filters_trigger' not in st.session_state:
             st.session_state.clear_filters_trigger = 0
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.write("Filter by Publisher:")
-
-        with col2:
-            # Clear filters button
-            if st.button(":material/restart_alt: Reset", key="clear_filters", help="Clear all filters", use_container_width=True, type="tertiary"):
-                st.session_state.year_filter = None
-                st.session_state.month_filter = None
-                st.session_state.start_date_filter = None
-                st.session_state.end_date_filter = None
-                st.session_state.status_filter = None
-                st.session_state.publisher_filter = None
-                st.session_state.isbn_filter = None  # Reset ISBN filter
-                st.session_state.clear_filters_trigger += 1
-                st.rerun()
-
-        # Publisher filter with pills
-        publisher_options = unique_publishers
-        selected_publisher = st.pills(
-            "Publishers",
-            options=publisher_options,
-            key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
-            label_visibility='collapsed'
-        )
-        if selected_publisher:
-            st.session_state.publisher_filter = selected_publisher
-        elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
-            st.session_state.publisher_filter = None
-
-        # Year filter
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            st.write("Filter by Year:")
-
-        with col2:
-            pass
-
-        year_options = [str(year) for year in unique_years]
-        selected_year = st.pills(
-            "Years",
-            options=year_options,
-            key=f"year_pills_{st.session_state.clear_filters_trigger}",
-            label_visibility='collapsed'
-        )
-        if selected_year:
-            st.session_state.year_filter = int(selected_year)
-        elif selected_year is None and "year_pills_callback" not in st.session_state:
+        # Reset button at the top
+        if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", use_container_width=True, type="secondary"):
             st.session_state.year_filter = None
-
-        # Month filter with pills
-        if st.session_state.year_filter:
-            year_books = books[books['date'].dt.year == st.session_state.year_filter]
-            unique_months = sorted(year_books['date'].dt.month.unique())
-            
-            month_names = {
-                1: "January", 2: "February", 3: "March", 4: "April", 
-                5: "May", 6: "June", 7: "July", 8: "August", 
-                9: "September", 10: "October", 11: "November", 12: "December"
-            }
-            
-            st.write("Filter by Month:")
-            month_options = [month_names[month] for month in unique_months]
-            selected_month = st.pills(
-                "Months",
-                options=month_options,
-                key=f"month_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='collapsed'
-            )
-            if selected_month:
-                st.session_state.month_filter = next(
-                    (num for num, name in month_names.items() if name == selected_month),
-                    None
-                )
-            elif selected_month is None and "month_pills_callback" not in st.session_state:
-                st.session_state.month_filter = None
-        else:
             st.session_state.month_filter = None
+            st.session_state.start_date_filter = None
+            st.session_state.end_date_filter = None
+            st.session_state.status_filter = None
+            st.session_state.publisher_filter = None
+            st.session_state.isbn_filter = None
+            st.session_state.author_type_filter = None
+            st.session_state.multiple_open_positions_filter = None
+            st.session_state.clear_filters_trigger += 1
+            st.rerun()
 
-        # Date range filter
-        min_date = books['date'].min().date()
-        max_date = books['date'].max().date()
+        # Tabs for filter categories
+        tabs = st.tabs(["Publisher", "Status", "Author", "Date"])
 
-        start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
-        end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
-        st.session_state.start_date_filter = st.date_input(
-            "Start Date", 
-            value=st.session_state.start_date_filter, 
-            min_value=min_date, 
-            max_value=max_date, 
-            key=start_date_key
-        )
-        st.session_state.end_date_filter = st.date_input(
-            "End Date", 
-            value=st.session_state.end_date_filter, 
-            min_value=min_date, 
-            max_value=max_date, 
-            key=end_date_key
-        )
+        # Date Filters Tab
+        with tabs[3]:
+           
+            # Year filter
+            year_options = [str(year) for year in unique_years]
+            selected_year = st.pills(
+                "Year",
+                options=year_options,
+                key=f"year_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            if selected_year:
+                st.session_state.year_filter = int(selected_year)
+            elif selected_year is None and "year_pills_callback" not in st.session_state:
+                st.session_state.year_filter = None
 
-        if st.session_state.start_date_filter and st.session_state.end_date_filter:
-            if st.session_state.start_date_filter > st.session_state.end_date_filter:
-                st.error("Start Date must be before or equal to End Date.")
-                st.session_state.start_date_filter = None
-                st.session_state.end_date_filter = None
+            # Month filter
+            if st.session_state.year_filter:
+                year_books = books[books['date'].dt.year == st.session_state.year_filter]
+                unique_months = sorted(year_books['date'].dt.month.unique())
+                month_names = {
+                    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 
+                    5: "May", 6: "Jun", 7: "Jul", 8: "Aug", 
+                    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+                }
+                month_options = [month_names[month] for month in unique_months]
+                selected_month = st.pills(
+                    "Month",
+                    options=month_options,
+                    key=f"month_pills_{st.session_state.clear_filters_trigger}",
+                    label_visibility='visible'
+                )
+                if selected_month:
+                    st.session_state.month_filter = next(
+                        (num for num, name in month_names.items() if name == selected_month),
+                        None
+                    )
+                elif selected_month is None and "month_pills_callback" not in st.session_state:
+                    st.session_state.month_filter = None
+            else:
+                st.session_state.month_filter = None
 
-        # ISBN filter with pills
-        st.write("Filter by ISBN Status:")
-        isbn_options = ["ISBN Not Applied", "ISBN Not Received"]
-        selected_isbn = st.pills(
-            "ISBN Status",
-            options=isbn_options,
-            key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
-            label_visibility='collapsed'
-        )
-        st.session_state.isbn_filter = selected_isbn
 
-        # Status filter with pills
-        st.write("Filter by Status:")
-        status_options = ["Delivered", "On Going"]
-        if user_role == "admin":
-            status_options.append("Pending Payment")
-        selected_status = st.pills(
-            "Status",
-            options=status_options,
-            key=f"status_pills_{st.session_state.clear_filters_trigger}",
-            label_visibility='collapsed'
-        )
-        st.session_state.status_filter = selected_status
+            st.caption("Filter by Range:")
+            # Date range filter
+            min_date = books['date'].min().date()
+            max_date = books['date'].max().date()
+            start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
+            end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
+            st.session_state.start_date_filter = st.date_input(
+                "Start", 
+                value=st.session_state.start_date_filter, 
+                min_value=min_date, 
+                max_value=max_date, 
+                key=start_date_key,
+                label_visibility="visible"
+            )
+            st.session_state.end_date_filter = st.date_input(
+                "End", 
+                value=st.session_state.end_date_filter, 
+                min_value=min_date, 
+                max_value=max_date, 
+                key=end_date_key,
+                label_visibility="visible"
+            )
+            if st.session_state.start_date_filter and st.session_state.end_date_filter:
+                if st.session_state.start_date_filter > st.session_state.end_date_filter:
+                    st.error("Start Date must be before or equal to End Date.")
+                    st.session_state.start_date_filter = None
+                    st.session_state.end_date_filter = None
 
+        # Publisher Filters Tab
+        with tabs[0]:
+            publisher_options = unique_publishers
+            selected_publisher = st.pills(
+                "Publisher",
+                options=publisher_options,
+                key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            if selected_publisher:
+                st.session_state.publisher_filter = selected_publisher
+            elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
+                st.session_state.publisher_filter = None
+
+        # Status Filters Tab
+        with tabs[1]:
+        
+            # Status filter
+            status_options = ["Delivered", "On Going"]
+            if user_role == "admin":
+                status_options.append("Pending Payment")
+            selected_status = st.pills(
+                "Status",
+                options=status_options,
+                key=f"status_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.status_filter = selected_status
+
+        
+            # ISBN filter
+            isbn_options = ["Not Applied", "Not Received"]
+            selected_isbn = st.pills(
+                "ISBN",
+                options=isbn_options,
+                key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.isbn_filter = "ISBN " + selected_isbn if selected_isbn else None
+
+        # Author Filters Tab
+        with tabs[2]:
+            
+            # Author type filter
+            author_type_options = ["Single", "Double", "Triple", "Multiple"]
+            selected_author_type = st.pills(
+                "Author Type",
+                options=author_type_options,
+                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.author_type_filter = selected_author_type
+
+        
+            # Multiple with open positions filter
+            multiple_open_positions_options = ["Open Positions"]
+            selected_multiple_open_positions = st.pills(
+                "Multiple Authors",
+                options=multiple_open_positions_options,
+                key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
 
         # Apply filters
         applied_filters = []
+        filtered_books = books.copy()
         if st.session_state.publisher_filter:
             applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
         if st.session_state.month_filter:
@@ -4657,13 +4674,17 @@ with srcol3:
         if st.session_state.year_filter:
             applied_filters.append(f"Year={st.session_state.year_filter}")
         if st.session_state.start_date_filter:
-            applied_filters.append(f"Start Date={st.session_state.start_date_filter}")
+            applied_filters.append(f"Start={st.session_state.start_date_filter}")
         if st.session_state.end_date_filter:
-            applied_filters.append(f"End Date={st.session_state.end_date_filter}")
+            applied_filters.append(f"End={st.session_state.end_date_filter}")
         if st.session_state.status_filter:
             applied_filters.append(f"Status={st.session_state.status_filter}")
         if st.session_state.isbn_filter:
-            applied_filters.append(f"ISBN Status={st.session_state.isbn_filter}")
+            applied_filters.append(f"ISBN={st.session_state.isbn_filter}")
+        if st.session_state.author_type_filter:
+            applied_filters.append(f"Author Type={st.session_state.author_type_filter}")
+        if st.session_state.multiple_open_positions_filter:
+            applied_filters.append(f"Author Status={st.session_state.multiple_open_positions_filter}")
 
         if applied_filters:
             # Apply publisher filter
@@ -4704,7 +4725,18 @@ with srcol3:
                     selected_status_value = status_mapping[st.session_state.status_filter]
                     filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
 
-            st.success(f"Filter {', '.join(applied_filters)}")
+            # Apply author type filter
+            if st.session_state.author_type_filter:
+                filtered_books = filtered_books[filtered_books['author_type'] == st.session_state.author_type_filter]
+
+            # Apply multiple with open positions filter
+            if st.session_state.multiple_open_positions_filter:
+                filtered_books = filtered_books[
+                    (filtered_books['author_type'] == 'Multiple') &
+                    (filtered_books['book_id'].map(author_count_dict) < 4)
+                ]
+
+            st.success(f"Applied: {', '.join(applied_filters)}")
 
 
 with srcol4:
@@ -4818,11 +4850,12 @@ column_size = [0.5, 4, 1, 1, 1, 2]
 cont = st.container(border=False)
 with cont:
     if paginated_books.empty:
-        st.warning("No books available.")
+        st.error("No books available.")
     else:
-        if search_query:
-            st.warning(f"Showing {total_books} results for '{search_query}'")
-
+        # Show book count for filters or search query
+        if applied_filters or search_query:
+            st.warning(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_books))} of {len(filtered_books)} books")
+        
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
@@ -4845,13 +4878,14 @@ with cont:
                     publish_badge = ""
                     publisher_badge = ""
                     
-                    # Handle the author count/single badge
-                    if row['is_single_author'] == 1:
-                        badge_content = "Single"
+                    # Handle the author type badge
+                    author_type = row.get('author_type', 'Multiple')  # Safe access with default
+                    if author_type in ["Single", "Double", "Triple"]:
+                        badge_content = author_type
                         badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
-                    else:
-                        badge_content = str(author_count)
-                        badge_style = "color: #2aba25; font-size: 14px; background-color: #f7f7f7; padding: 1px 4px; border-radius: 10px;"
+                    else:  # Multiple
+                        badge_content = f"Multiple, {author_count}"
+                        badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
                     
                     # Handle the "Publish Only" badge
                     if row['is_publish_only'] == 1:
@@ -4933,9 +4967,9 @@ with cont:
 
         st.markdown(
             f"<div style='text-align: center; margin-bottom: 10px;'>"
-            f"Showing <span style='font-weight: bold; color: #286e1a;'>{start_idx + 1}</span>-"
-            f"<span style='font-weight: bold; color: #286e1a;'>{end_idx}</span> of "
-            f"<span style='font-weight: bold; color: #286e1a;'>{total_books}</span> books"
+            f"Showing <span style='font-weight: bold; color: #362f2f;'>{start_idx + 1}</span>-"
+            f"<span style='font-weight: bold; color: #362f2f;'>{end_idx}</span> of "
+            f"<span style='font-weight: bold; color: #362f2f;'>{total_books}</span> books"
             f"</div>",
             unsafe_allow_html=True
         )
