@@ -146,7 +146,9 @@ def connect_db():
 conn = connect_db()
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, is_publish_only, publisher, author_type FROM books"
+query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
+"is_publish_only, publisher, author_type, writing_start, writing_end, " \
+"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end FROM books"
 books = conn.query(query,show_spinner = False)
 
 # Apply date range filtering
@@ -174,7 +176,7 @@ elif user_role != "admin":
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, num_copies, syllabus_path, print_status,is_publish_only, publisher
+    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , num_copies, syllabus_path, print_status,is_publish_only, publisher
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -194,27 +196,155 @@ def get_isbn_display(isbn, apply_isbn):
     return f"**<span style='color:#000000; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
 
-# Function to get status with outlined pill styling
-def get_status_pill(deliver_value):
+# Function to fetch book_author details for multiple book_ids
+@st.cache_data
+def fetch_all_book_authors(book_ids, _conn):
+    if not book_ids:  # Handle empty book_ids
+        return pd.DataFrame()
+    query = """
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
+           ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
+           ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
+           ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
+           ba.digital_book_sent, 
+           ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
+           ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
+           ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
+           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
+           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+    FROM book_authors ba
+    JOIN authors a ON ba.author_id = a.author_id
+    WHERE ba.book_id IN :book_ids
+    """
+    return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
 
+def get_status_pill(book_id, row, authors_df):
+    # Filter authors for the specific book_id
+    book_authors_df = authors_df[authors_df['book_id'] == book_id]
+    
+    # Base pill style with vertical stacking and modern design
     pill_style = (
-        "padding: 2px 6px; "  
-        "border-radius: 4px; " 
-        "background-color: #ffffff; "  
-        "font-size: 14px; "  
-        "font-weight: bold; "  
-        "display: inline-block;"  
+        "padding: 8px 12px; "
+        "border-radius: 10px; "
+        "background: #ffffff; "
+        "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
+        "display: flex; "
+        "flex-direction: column; "
+        "align-items: flex-start; "
+        "border: 1px solid #e2e8f0; "
+        "box-shadow: 0 2px 4px rgba(0,0,0,0.06); "
+        "line-height: 1.5; "
+        "gap: 4px; "
+        "min-width: 120px;"
     )
 
-    # Determine status and colors
-    if deliver_value == 1:
-        status = "Delivered"
-        text_color = "#47b354" 
-    else:
-        status = "On Going"
-        text_color = "#e0ab19"  
+    # Define operations sequence with completion states and colors
+    operations_sequence = [
+        ("writing", "In Writing", "Writing Complete", "#1d4ed8", "#3b82f6"),  # Blue shades
+        ("proofreading", "In Proofreading", "Proofreading Complete", "#6b21a8", "#a855f7"),  # Purple shades
+        ("formatting", "In Formatting", "Formatting Complete", "#c2410c", "#f97316"),  # Orange shades
+        ("cover", "In Cover Design", "Operations Complete", "#047857", "#10b981")  # Emerald shades
+    ]
 
-    return f"<span style='{pill_style} color: {text_color};'>{status}</span>"
+    # Define author checklist sequence with pending/complete colors
+    checklist_sequence = [
+        ("welcome_mail_sent", "Welcome Mail", "#dc2626", "#15803d"),  # Red to Green
+        ("cover_agreement_sent", "Cover/Agreement", "#dc2626", "#15803d"),
+        ("author_details_sent", "Author Details", "#dc2626", "#15803d"),
+        ("photo_recive", "Photo", "#dc2626", "#15803d"),
+        ("id_proof_recive", "ID Proof", "#dc2626", "#15803d"),
+        ("agreement_received", "Agreement", "#dc2626", "#15803d"),
+        ("digital_book_sent", "Digital Proof", "#dc2626", "#15803d"),
+        ("printing_confirmation", "Print Confirmation", "#dc2626", "#15803d")
+    ]
+
+    # Check operations status
+    operations_status = "Not Started"
+    operations_color = "#6b7280"  # Neutral gray
+    operations_checkmark = ""
+    if row['writing_start'] is not None and pd.notnull(row['writing_start']):
+        if row['writing_end'] is None or pd.isnull(row['writing_end']):
+            operations_status = "In Writing"
+            operations_color = "#1d4ed8"
+        elif row['proofreading_start'] is None or pd.isnull(row['proofreading_start']):
+            operations_status = "Writing Complete"
+            operations_color = "#15803d"
+            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
+        elif row['proofreading_end'] is None or pd.isnull(row['proofreading_end']):
+            operations_status = "In Proofreading"
+            operations_color = "#6b21a8"
+        elif row['formatting_start'] is None or pd.isnull(row['formatting_start']):
+            operations_status = "Proofreading Complete"
+            operations_color = "#15803d"
+            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
+        elif row['formatting_end'] is None or pd.isnull(row['formatting_end']):
+            operations_status = "In Formatting"
+            operations_color = "#c2410c"
+        elif row['cover_start'] is None or pd.isnull(row['cover_start']):
+            operations_status = "Formatting Complete"
+            operations_color = "#15803d"
+            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
+        elif row['cover_end'] is None or pd.isnull(row['cover_end']):
+            operations_status = "In Cover Design"
+            operations_color = "#047857"
+        else:
+            operations_status = "Operations Done"
+            operations_color = "#15803d"
+            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
+
+    # Check author checklist
+    checklist_status = "No Authors"
+    checklist_color = "#6b7280"
+    try:
+        if not book_authors_df.empty:
+            earliest_pending_index = len(checklist_sequence)
+            earliest_pending_step = None
+
+            for _, author in book_authors_df.iterrows():
+                for idx, (field, label, pending_color, _) in enumerate(checklist_sequence):
+                    if not author[field]:
+                        if idx < earliest_pending_index:
+                            earliest_pending_index = idx
+                            earliest_pending_step = label
+                        break
+
+            if earliest_pending_index < len(checklist_sequence):
+                checklist_status = f"{earliest_pending_step}"
+                checklist_color = checklist_sequence[earliest_pending_index][2]  # Pending color
+            else:
+                checklist_status = "Checklist Complete"
+                checklist_color = "#15803d"  # Green for complete
+    except Exception as e:
+        checklist_status = "Error Processing Authors"
+        checklist_color = "#6b7280"
+        print(f"Error processing authors for book_id {book_id}: {e}")
+
+    # Determine combined status
+    if (checklist_status == "Checklist Complete" and
+            row['formatting_end'] is not None and pd.notnull(row['formatting_end']) and
+            row['cover_end'] is not None and pd.notnull(row['cover_end'])):
+        status = "Ready For Print"
+        text_color = "#15803d"  # Green
+        return (
+            f"<div style='{pill_style}'>"
+            f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
+            f"</div>"
+        )
+
+    # Combine checklist and operations status vertically, add red 'x' for pending checklist steps
+    primary_style = f"color: {checklist_color}; font-size: 13.5px; font-weight: 600; display: block;"
+    secondary_style = f"color: {operations_color}; font-size: 11px; font-weight: 450; display: block;"
+    x_mark = "" if checklist_status in ["Checklist Complete", "No Authors"] else "<span style='color: #dc2626; margin-left: 4px; font-size: 11px;'>✗</span>"
+    status = (
+        f"<div style='{pill_style}'>"
+        f"<span style='{primary_style}'>{checklist_status}{x_mark}</span>"
+        f"<span style='{secondary_style}'>{operations_status}{operations_checkmark}</span>"
+        f"</div>"
+    )
+    return status
+
+
 
 ###################################################################################################################################
 ##################################--------------- Admin Panel ----------------------------##################################
@@ -1024,18 +1154,19 @@ def add_book_dialog(conn):
 from datetime import datetime
 
 @st.dialog("Manage ISBN and Book Title", width="large")
-def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_isbn_receive_date=None):
-    # Fetch current book details (title, date, is_publish_only, publisher) from the database
+def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
+    # Fetch current book details (title, date, is_publish_only, publisher, isbn_receive_date) from the database
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
         st.error("❌ Book not found in database.")
         return
     
-    # Extract current title, date, is_publish_only, and publisher from the DataFrame
+    # Extract current title, date, is_publish_only, publisher, and isbn_receive_date from the DataFrame
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
     current_publisher = book_details.iloc[0].get('publisher', '')
+    current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
 
     publisher_colors = {
         "AGPH": {"color": "#ffffff", "background": "#e4be17"},
@@ -1132,7 +1263,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn, current_
                         help="Enter the ISBN number"
                     )
                 with col4:
-                    default_date = current_isbn_receive_date if current_isbn_receive_date else datetime.today()
+                    default_date = current_isbn_receive_date if pd.notna(current_isbn_receive_date) else datetime.today()
                     isbn_receive_date = st.date_input(
                         "ISBN Receive / Allotment Date",
                         value=default_date,
@@ -4534,7 +4665,7 @@ with srcol3:
             # Date Filters Expander
             year_options = [str(year) for year in unique_years]
             selected_year = st.pills(
-                "Year",
+                "Year:",
                 options=year_options,
                 key=f"year_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4570,6 +4701,8 @@ with srcol3:
             else:
                 st.session_state.month_filter = None
 
+            
+            st.caption('Filter by Range:')
             # Date range filter
             min_date = books['date'].min().date()
             max_date = books['date'].max().date()
@@ -4601,7 +4734,7 @@ with srcol3:
         with tabs[0]:
             publisher_options = unique_publishers
             selected_publisher = st.pills(
-                "Publisher",
+                "Publisher:",
                 options=publisher_options,
                 key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4618,7 +4751,7 @@ with srcol3:
             if user_role == "admin":
                 status_options.append("Pending Payment")
             selected_status = st.pills(
-                "Status",
+                "Status:",
                 options=status_options,
                 key=f"status_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4628,7 +4761,7 @@ with srcol3:
             # ISBN filter
             isbn_options = ["Not Applied", "Not Received"]
             selected_isbn = st.pills(
-                "ISBN Status",
+                "ISBN Status:",
                 options=isbn_options,
                 key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4640,7 +4773,7 @@ with srcol3:
             # Author type filter
             author_type_options = ["Single", "Double", "Triple", "Multiple"]
             selected_author_type = st.pills(
-                "Author Type",
+                "Author Type:",
                 options=author_type_options,
                 key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4650,7 +4783,7 @@ with srcol3:
             # Multiple with open positions filter
             multiple_open_positions_options = ["Open Positions"]
             selected_multiple_open_positions = st.pills(
-                "Multiple Authors",
+                "Multiple Authors:",
                 options=multiple_open_positions_options,
                 key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -4850,6 +4983,9 @@ with cont:
         if applied_filters or search_query:
             st.warning(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_books))} of {len(filtered_books)} books")
         
+        book_ids = paginated_books['book_id'].tolist()
+        authors_df = fetch_all_book_authors(book_ids, conn)
+
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
@@ -4909,7 +5045,7 @@ with cont:
                 with col4:
                     st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
                 with col5:
-                    st.markdown(get_status_pill(row["deliver"]), unsafe_allow_html=True)
+                    st.markdown(get_status_pill(row["book_id"], row, authors_df), unsafe_allow_html=True)
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
                     with btn_col1:
