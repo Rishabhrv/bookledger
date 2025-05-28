@@ -3,11 +3,9 @@ numpy==2.2.6
 pandas==2.2.3
 plotly==6.0.0
 PyJWT==2.10.1
-python_dateutil==2.9.0.post0
 Requests==2.32.3
 seaborn==0.13.2
 SQLAlchemy==2.0.38
-streamlit==1.44.1
+streamlit==1.45.1
 mysqlclient
 XlsxWriter
-openpyxl

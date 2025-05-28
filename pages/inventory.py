@@ -112,7 +112,6 @@ def connect_db():
         st.error(f"Error connecting to MySQL: {e}")
         st.stop()
 
-# Fetch data
 @st.cache_data
 def fetch_data():
     conn = connect_db()

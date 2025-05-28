@@ -188,12 +188,12 @@ if not pd.api.types.is_datetime64_any_dtype(books['date']):
 
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
-        return f"**<span style='color:#47b354; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
+        return f"**<span style='color:#15803d; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
     elif apply_isbn == 0:
-        return f"**<span style='color:#ed633e; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
+        return f"**<span style='color:#dc2626; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
     elif apply_isbn == 1:
-        return f"**<span style='color:#606975; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
-    return f"**<span style='color:#000000; background-color:#ffffff; font-size:14px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
+        return f"**<span style='color:#606975; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
+    return f"**<span style='color:#000000; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
 
 # Function to fetch book_author details for multiple book_ids
@@ -225,7 +225,7 @@ def get_status_pill(book_id, row, authors_df):
     
     # Base pill style with vertical stacking and modern design
     pill_style = (
-        "padding: 8px 12px; "
+        "padding: 1px 12px; "
         "border-radius: 10px; "
         "background: #ffffff; "
         "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
@@ -4972,7 +4972,7 @@ paginated_books = filtered_books.iloc[start_idx:end_idx]
 
 
 # Display the table
-column_size = [0.5, 4, 1, 1, 1, 2]
+column_size = [0.5, 3.8, 1, 0.98, 1.2, 2]
 
 cont = st.container(border=False)
 with cont:
