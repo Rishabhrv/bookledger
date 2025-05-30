@@ -3154,17 +3154,19 @@ def edit_operation_dialog(book_id, conn):
     # Define tabs
     tab1, tab2, tab3, tab4 = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
 
-    # Writing Tab
+   # Writing Tab
     with tab1:
         if is_publish_only:
             st.warning("Writing section is disabled because this book is in 'Publish Only' mode.")
+        
+        # Form for input collection
         with st.form(key=f"writing_form_{book_id}", border=False):
             # Worker selection
             selected_writer = st.selectbox(
                 "Writer",
                 writing_options,
                 index=(writing_options.index(st.session_state[f"writing_by_{book_id}"]) 
-                       if st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
+                    if st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
                 key=f"writing_select_{book_id}",
                 disabled=is_publish_only
             )
@@ -3219,25 +3221,10 @@ def edit_operation_dialog(book_id, conn):
                 disabled=is_publish_only
             )
 
-            # Book Syllabus Section
+            # Book Syllabus Section (inside form for uploader only)
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
             with st.container(border=True):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                # Display current syllabus if it exists
-                if current_syllabus_path:
-                    st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
-                    # Provide download link (if file exists)
-                    if os.path.exists(current_syllabus_path):
-                        with open(current_syllabus_path, "rb") as f:
-                            st.download_button(
-                                label=":material/download: Download",
-                                data=f,
-                                file_name=os.path.basename(current_syllabus_path),
-                                key=f"download_syllabus_{book_id}"
-                            )
-                    else:
-                        st.warning("Current syllabus file not found on server.")
-                
                 # Syllabus uploader
                 syllabus_file = None
                 if not is_publish_only:
@@ -3254,6 +3241,7 @@ def edit_operation_dialog(book_id, conn):
                     st.info("Syllabus upload is disabled for Publish Only books.")
                 st.markdown('</div>', unsafe_allow_html=True)
 
+            # Form submit button
             if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
                 with st.spinner("Saving Writing details..."):
                     os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -3266,6 +3254,8 @@ def edit_operation_dialog(book_id, conn):
                         
                         # Generate a unique filename
                         file_extension = os.path.splitext(syllabus_file.name)[1]
+                    
+
                         unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
                         new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
                         
@@ -3311,6 +3301,24 @@ def edit_operation_dialog(book_id, conn):
                         st.success("✔️ Updated Writing details")
                         if selected_writer == "Add New..." and new_writer:
                             st.cache_data.clear()
+
+        # Syllabus download section (outside the form, below)
+        if current_syllabus_path:
+            with st.container(border=True):
+                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
+                # Provide download link (if file exists)
+                if os.path.exists(current_syllabus_path):
+                    with open(current_syllabus_path, "rb") as f:
+                        st.download_button(
+                            label=":material/download: Download",
+                            data=f,
+                            file_name=os.path.basename(current_syllabus_path),
+                            key=f"download_syllabus_{book_id}"
+                        )
+                else:
+                    st.warning("Current syllabus file not found on server.")
+                st.markdown('</div>', unsafe_allow_html=True)
 
     # Proofreading Tab
     with tab2:

@@ -119,6 +119,8 @@ def fetch_data():
     SELECT
         b.book_id,
         b.title,
+        b.isbn,
+        b.isbn_receive_date AS publication_date,
         i.rack_number,
         COALESCE(
             (SELECT SUM(ba.number_of_books) 
@@ -126,26 +128,21 @@ def fetch_data():
              WHERE ba.book_id = b.book_id), 
             0
         ) AS books_sent_to_authors,
-        i.website_sales,
-        i.amazon_sales,
-        i.flipkart_sales,
-        i.direct_sales,
+        COALESCE(i.website_sales, 0) AS website_sales,
+        COALESCE(i.amazon_sales, 0) AS amazon_sales,
+        COALESCE(i.flipkart_sales, 0) AS flipkart_sales,
+        COALESCE(i.direct_sales, 0) AS direct_sales,
         COALESCE(
             (SELECT SUM(bd.copies_in_batch) 
              FROM BatchDetails bd 
              JOIN PrintEditions pe ON bd.print_id = pe.print_id 
              WHERE pe.book_id = b.book_id), 
             0
-        ) AS total_printed_books,
-        (SELECT MAX(pb.print_receive_date) 
-         FROM PrintBatches pb 
-         JOIN BatchDetails bd ON pb.batch_id = bd.batch_id 
-         JOIN PrintEditions pe ON bd.print_id = pe.print_id 
-         WHERE pe.book_id = b.book_id) AS deliver_date
+        ) AS total_printed_books
     FROM books b
-    JOIN inventory i ON b.book_id = i.book_id
-    WHERE b.print_status = 1
+    LEFT JOIN inventory i ON b.book_id = i.book_id
     """
+   
     df = conn.query(query, show_spinner=False)
     return df
 
@@ -229,6 +226,10 @@ if "reset_trigger" not in st.session_state:
 # Fetch data
 df = fetch_data()
 
+numeric_columns = ['books_sent_to_authors', 'website_sales', 'amazon_sales', 
+                      'flipkart_sales', 'direct_sales', 'total_printed_books']
+df[numeric_columns] = df[numeric_columns].fillna(0)
+
 # Calculate In Stock
 df['in_stock'] = (
     df['total_printed_books'] - 
@@ -244,7 +245,7 @@ df = df.rename(columns={
     'rack_number': 'Cell No.',
     'book_id': 'Book ID',
     'title': 'Book Title',
-    'deliver_date': 'Deliver Date',
+    'publication_date': 'Publication Date',
     'total_printed_books': 'Total Prints',
     'books_sent_to_authors': 'Author Copies',
     'website_sales': 'AGPH Store',
@@ -259,39 +260,60 @@ df = df.rename(columns={
 def update_book_details(book_id, current_data):
     st.markdown(f"### (ID: {book_id}) {current_data['Book Title']} ")
 
-    # Fetch current links from books table
+    # Fetch print_status and current links from books table
     conn = connect_db()
-    link_query = """
-    SELECT agph_link, amazon_link, flipkart_link, google_link
+    book_query = """
+    SELECT print_status, agph_link, amazon_link, flipkart_link, google_link
     FROM books
     WHERE book_id = :book_id
     """
     try:
         with conn.session as session:
-            link_data = session.execute(text(link_query), {"book_id": book_id}).fetchone()
+            book_data = session.execute(text(book_query), {"book_id": book_id}).fetchone()
+            if book_data is None:
+                st.error("Book not found.")
+                return
+            print_status = book_data[0]
             current_links = {
-                'agph_link': link_data[0] if link_data and link_data[0] else '',
-                'amazon_link': link_data[1] if link_data and link_data[1] else '',
-                'flipkart_link': link_data[2] if link_data and link_data[2] else '',
-                'google_link': link_data[3] if link_data and link_data[3] else ''
+                'agph_link': book_data[1] if book_data[1] else '',
+                'amazon_link': book_data[2] if book_data[2] else '',
+                'flipkart_link': book_data[3] if book_data[3] else '',
+                'google_link': book_data[4] if book_data[4] else ''
             }
     except Exception as e:
-        st.error(f"Failed to fetch book links: {str(e)}")
+        st.error(f"Failed to fetch book details: {str(e)}")
         return
 
-    tab1, tab2, tab3 = st.tabs(['Sales', 'Links', 'PrintEditions'])
+    # Define tabs, conditionally enabling Sales and Links based on print_status
+    if print_status == 0:
+        st.warning("This book has not been printed yet. Sales and Links tabs are disabled until the book is printed.")
+        tabs = st.tabs(['PrintEditions'])
+        tab1, tab2 = None, None  # Sales and Links tabs are not accessible
+        tab3 = tabs[0]
+    else:
+        tabs = st.tabs(['Sales', 'Links', 'PrintEditions'])
+        tab1, tab2, tab3 = tabs
 
-    with tab1:
-        # Sales inputs
-        st.markdown("#### Sales Numbers and Cell No.")
-        col1, col2 = st.columns(2)
-        with col1:
-            website_sales = st.number_input("AGPH Store Sales", min_value=0, value=int(current_data['AGPH Store']), step=1)
-            amazon_sales = st.number_input("Amazon Sales", min_value=0, value=int(current_data['Amazon']), step=1)
-        with col2:
-            flipkart_sales = st.number_input("Filpkart Sales", min_value=0, value=int(current_data['Filpkart']), step=1)
-            direct_sales = st.number_input("Direct Sales", min_value=0, value=int(current_data['Direct']), step=1)
-        rack_number = st.text_input("Cell No.", value=str(current_data['Cell No.']) if pd.notnull(current_data['Cell No.']) else '')
+    if print_status != 0:
+        with tab1:
+            # Sales inputs
+            st.markdown("#### Sales Numbers and Cell No.")
+            col1, col2 = st.columns(2)
+            with col1:
+                website_sales = st.number_input("AGPH Store Sales", min_value=0, value=int(current_data['AGPH Store']), step=1)
+                amazon_sales = st.number_input("Amazon Sales", min_value=0, value=int(current_data['Amazon']), step=1)
+            with col2:
+                flipkart_sales = st.number_input("Filpkart Sales", min_value=0, value=int(current_data['Filpkart']), step=1)
+                direct_sales = st.number_input("Direct Sales", min_value=0, value=int(current_data['Direct']), step=1)
+            rack_number = st.text_input("Cell No.", value=str(current_data['Cell No.']) if pd.notnull(current_data['Cell No.']) else '')
+
+        with tab2:
+            # Link inputs
+            st.markdown("#### Book Links")
+            agph_link = st.text_input("AGPH Store Link", value=current_links['agph_link'])
+            amazon_link = st.text_input("Amazon Link", value=current_links['amazon_link'])
+            flipkart_link = st.text_input("Filpkart Link", value=current_links['flipkart_link'])
+            google_link = st.text_input("Google Link", value=current_links['google_link'])
 
     with tab3:
         # Fetch print editions data with batch details
@@ -392,14 +414,6 @@ def update_book_details(book_id, current_data):
             if print_color == "Full Color":
                 new_color_pages = st.number_input("Number of Color Pages", min_value=0, step=1, value=0, key=f"new_color_pages_{book_id}")
 
-    with tab2:
-        # Link inputs
-        st.markdown("#### Book Links")
-        agph_link = st.text_input("AGPH Store Link", value=current_links['agph_link'])
-        amazon_link = st.text_input("Amazon Link", value=current_links['amazon_link'])
-        flipkart_link = st.text_input("Filpkart Link", value=current_links['flipkart_link'])
-        google_link = st.text_input("Google Link", value=current_links['google_link'])
-
     if st.button("Save"):
         with st.spinner('Saving...'):
             time.sleep(1)
@@ -417,35 +431,55 @@ def update_book_details(book_id, current_data):
                         return
 
                 with conn.session as session:
-                    # Update inventory table (sales and rack_number)
-                    session.execute(text("""
-                        UPDATE inventory
-                        SET website_sales = :website_sales, amazon_sales = :amazon_sales, 
-                            flipkart_sales = :flipkart_sales, direct_sales = :direct_sales,
-                            rack_number = :rack_number
-                        WHERE book_id = :book_id
-                    """), {
-                        "website_sales": website_sales,
-                        "amazon_sales": amazon_sales,
-                        "flipkart_sales": flipkart_sales,
-                        "direct_sales": direct_sales,
-                        "rack_number": rack_number,
-                        "book_id": book_id
-                    })
+                    if print_status != 0:  # Only update sales and links if print_status is not 0
+                        # Check if inventory record exists
+                        result = session.execute(text("SELECT COUNT(*) FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+                        if result[0] == 0:
+                            # Insert new inventory record
+                            session.execute(text("""
+                                INSERT INTO inventory (book_id, website_sales, amazon_sales, flipkart_sales, direct_sales, rack_number)
+                                VALUES (:book_id, :website_sales, :amazon_sales, :flipkart_sales, :direct_sales, :rack_number)
+                            """), {
+                                "book_id": book_id,
+                                "website_sales": website_sales,
+                                "amazon_sales": amazon_sales,
+                                "flipkart_sales": flipkart_sales,
+                                "direct_sales": direct_sales,
+                                "rack_number": rack_number if rack_number != '' else None,
+                                "book_id": book_id
+                            })
+                        else:
+                            # Update existing inventory record
+                            result = session.execute(text("""
+                                UPDATE inventory
+                                SET website_sales = :website_sales, amazon_sales = :amazon_sales, 
+                                    flipkart_sales = :flipkart_sales, direct_sales = :direct_sales,
+                                    rack_number = :rack_number
+                                WHERE book_id = :book_id
+                            """), {
+                                "website_sales": website_sales,
+                                "amazon_sales": amazon_sales,
+                                "flipkart_sales": flipkart_sales,
+                                "direct_sales": direct_sales,
+                                "rack_number": rack_number if rack_number != '' else None,
+                                "book_id": book_id
+                            })
+                            if result.rowcount == 0:
+                                st.warning(f"No rows updated for book_id {book_id} in inventory table.")
 
-                    # Update books table (links)
-                    session.execute(text("""
-                        UPDATE books
-                        SET agph_link = :agph_link, amazon_link = :amazon_link, 
-                            flipkart_link = :flipkart_link, google_link = :google_link
-                        WHERE book_id = :book_id
-                    """), {
-                        "agph_link": agph_link,
-                        "amazon_link": amazon_link,
-                        "flipkart_link": flipkart_link,
-                        "google_link": google_link,
-                        "book_id": book_id
-                    })
+                        # Update books table (links)
+                        session.execute(text("""
+                            UPDATE books
+                            SET agph_link = :agph_link, amazon_link = :amazon_link, 
+                                flipkart_link = :flipkart_link, google_link = :google_link
+                            WHERE book_id = :book_id
+                        """), {
+                            "agph_link": agph_link,
+                            "amazon_link": amazon_link,
+                            "flipkart_link": flipkart_link,
+                            "google_link": google_link,
+                            "book_id": book_id
+                        })
 
                     # Create new PrintEdition if copies > 0
                     if new_num_copies > 0:
@@ -477,10 +511,10 @@ def update_book_details(book_id, current_data):
                     session.commit()
 
                 # Clear cache and refresh data
-                fetch_data.clear()
+                st.cache_data.clear()
                 st.success("Details and Print Edition (if added) Saved Successfully!")
                 time.sleep(2)
-                st.rerun()  # Refresh the app
+                st.rerun()
 
             except Exception as e:
                 st.error(f"Failed to save changes: {str(e)}")
@@ -532,9 +566,6 @@ def show_charts():
     st.write("Comming Soon 😊")
 
 
-import streamlit as st
-import pandas as pd
-
 # Initialize session state for filters and pagination
 if 'search_term' not in st.session_state:
     st.session_state['search_term'] = ''
@@ -543,7 +574,7 @@ if 'cell_nos' not in st.session_state:
 if 'out_of_stock' not in st.session_state:
     st.session_state['out_of_stock'] = False
 if 'stock_condition' not in st.session_state:
-    st.session_state['stock_condition'] = 'Greater than'
+    st.session_state['stock_condition'] = None
 if 'stock_value' not in st.session_state:
     st.session_state['stock_value'] = 0
 if 'sort_column' not in st.session_state:
@@ -552,40 +583,9 @@ if 'sort_order' not in st.session_state:
     st.session_state['sort_order'] = 'Descending'
 if 'current_page' not in st.session_state:
     st.session_state['current_page'] = 1
-if 'reset_trigger' not in st.session_state:
-    st.session_state['reset_trigger'] = False
-
-# Callback functions for widget changes
-def update_search_term():
-    st.session_state['search_term'] = st.session_state['search_term_widget']
-    st.session_state['current_page'] = 1
-
-def update_cell_nos():
-    st.session_state['cell_nos'] = st.session_state['cell_nos_widget']
-    st.session_state['current_page'] = 1
-
-def update_out_of_stock():
-    st.session_state['out_of_stock'] = st.session_state['out_of_stock_widget']
-    st.session_state['current_page'] = 1
-
-def update_stock_condition():
-    st.session_state['stock_condition'] = st.session_state['stock_condition_widget']
-    st.session_state['current_page'] = 1
-
-def update_stock_value():
-    st.session_state['stock_value'] = st.session_state['stock_value_widget']
-    st.session_state['current_page'] = 1
-
-def update_sort_column():
-    st.session_state['sort_column'] = st.session_state['sort_column_widget']
-    st.session_state['current_page'] = 1
-
-def update_sort_order():
-    st.session_state['sort_order'] = st.session_state['sort_order_widget']
-    st.session_state['current_page'] = 1
 
 # Search and Cell No. filter layout
-filcol1, filcol2, filcol3, filcol4, filcol5 = st.columns([1.3, 3.5, 3, 0.6, 1.5], vertical_alignment="center")
+filcol1, filcol2, filcol3, filcol4, filcol5 = st.columns([1.4, 3.5, 3, 0.6, 1.5], vertical_alignment="center")
 
 with filcol2:
     st.text_input(
@@ -594,16 +594,29 @@ with filcol2:
         value=st.session_state['search_term'],
         key="search_term_widget",
         label_visibility="collapsed",
-        on_change=update_search_term
+        on_change=lambda: (
+            st.session_state.update({
+                'search_term': st.session_state['search_term_widget'],
+                'current_page': 1
+            })
+        )
     )
+
 with filcol5:
+    cell_options = [x for x in df['Cell No.'].unique() if pd.notnull(x)]
     st.multiselect(
         "🗄️ Filter by Cell",
-        options=df['Cell No.'].unique(),
+        options=cell_options,
+        default=st.session_state['cell_nos'],
         key="cell_nos_widget",
         label_visibility="collapsed",
         placeholder="Filter by Cell",
-        on_change=update_cell_nos
+        on_change=lambda: (
+            st.session_state.update({
+                'cell_nos': st.session_state['cell_nos_widget'],
+                'current_page': 1
+            })
+        )
     )
 
 with filcol4:
@@ -616,14 +629,25 @@ with filcol3:
             "Show Out of Stock Books",
             value=st.session_state['out_of_stock'],
             key="out_of_stock_widget",
-            on_change=update_out_of_stock
+            on_change=lambda: (
+                st.session_state.update({
+                    'out_of_stock': st.session_state['out_of_stock_widget'],
+                    'current_page': 1
+                })
+            )
         )
         st.selectbox(
             "Stock Filter",
-            ["Greater than", "Equal to", "Less than"],
-            index=["Greater than", "Equal to", "Less than"].index(st.session_state['stock_condition']),
+            [None, "Greater than", "Equal to", "Less than"],
+            index=[None, "Greater than", "Equal to", "Less than"].index(st.session_state['stock_condition']),
+
             key="stock_condition_widget",
-            on_change=update_stock_condition
+            on_change=lambda: (
+                st.session_state.update({
+                    'stock_condition': st.session_state['stock_condition_widget'],
+                    'current_page': 1
+                })
+            )
         )
         max_stock = int(df['In Stock'].max()) if not df['In Stock'].empty else 0
         st.number_input(
@@ -632,38 +656,54 @@ with filcol3:
             max_value=max_stock,
             value=st.session_state['stock_value'],
             key="stock_value_widget",
-            on_change=update_stock_value
+            on_change=lambda: (
+                st.session_state.update({
+                    'stock_value': st.session_state['stock_value_widget'],
+                    'current_page': 1
+                })
+            )
         )
         st.selectbox(
             "Sort by",
             options=df.columns,
-            index=list(df.columns).index(st.session_state['sort_column']) if st.session_state['sort_column'] in df.columns else 2,
+            index=list(df.columns).index(st.session_state['sort_column']) if st.session_state['sort_column'] in df.columns else 0,
             key="sort_column_widget",
-            on_change=update_sort_column
+            on_change=lambda: (
+                st.session_state.update({
+                    'sort_column': st.session_state['sort_column_widget'],
+                    'current_page': 1
+                })
+            )
         )
         st.radio(
             "Sort Order",
             ["Ascending", "Descending"],
-            index=["Descending", "Ascending"].index(st.session_state['sort_order']),
+            index=["Ascending", "Descending"].index(st.session_state['sort_order']),
             horizontal=True,
             key="sort_order_widget",
-            on_change=update_sort_order
+            on_change=lambda: (
+                st.session_state.update({
+                    'sort_order': st.session_state['sort_order_widget'],
+                    'current_page': 1
+                })
+            )
         )
         col1, col2 = st.columns([2.5, 1.2])
         with col1:
             if st.button(":material/restart_alt: Reset", key="reset_filters", type="tertiary"):
-                st.session_state['search_term'] = ''
-                st.session_state['cell_nos'] = []
-                st.session_state['out_of_stock'] = False
-                st.session_state['stock_condition'] = 'Greater than'
-                st.session_state['stock_value'] = 0
-                st.session_state['sort_column'] = 'Book Title'
-                st.session_state['sort_order'] = 'Ascending'
-                st.session_state['current_page'] = 1
-                st.session_state['reset_trigger'] = True
+                # Reset only non-widget session state variables
+                st.session_state.update({
+                    'search_term': '',
+                    'cell_nos': [],
+                    'out_of_stock': False,
+                    'stock_condition': None,
+                    'stock_value': 0,
+                    'sort_column': 'Book Title',
+                    'sort_order': 'Ascending',
+                    'current_page': 1
+                })
                 st.rerun()
         with col2:
-            # Export filtered table as CSV
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label=":material/vertical_align_bottom: Export CSV",
@@ -673,10 +713,6 @@ with filcol3:
                 key="export_table",
                 type="tertiary"
             )
-
-# Clear reset trigger after applying defaults
-if st.session_state["reset_trigger"]:
-    st.session_state["reset_trigger"] = False
 
 # Apply filters
 filtered_df = df.copy()
@@ -689,15 +725,15 @@ if st.session_state['cell_nos']:
     filtered_df = filtered_df[filtered_df['Cell No.'].isin(st.session_state['cell_nos'])]
 if st.session_state['out_of_stock']:
     filtered_df = filtered_df[filtered_df['In Stock'] == 0]
-elif st.session_state['stock_condition'] == "Equal to":
-    filtered_df = filtered_df[filtered_df['In Stock'] == st.session_state['stock_value']]
-elif st.session_state['stock_condition'] == "Greater than":
-    filtered_df = filtered_df[filtered_df['In Stock'] > st.session_state['stock_value']]
-elif st.session_state['stock_condition'] == "Less than":
-    filtered_df = filtered_df[filtered_df['In Stock'] < st.session_state['stock_value']]
+elif st.session_state['stock_condition'] is not None:
+    if st.session_state['stock_condition'] == "Equal to":
+        filtered_df = filtered_df[filtered_df['In Stock'] == st.session_state['stock_value']]
+    elif st.session_state['stock_condition'] == "Greater than":
+        filtered_df = filtered_df[filtered_df['In Stock'] > st.session_state['stock_value']]
+    elif st.session_state['stock_condition'] == "Less than":
+        filtered_df = filtered_df[filtered_df['In Stock'] < st.session_state['stock_value']]
 
 with filcol1:
-    # Display book count
     st.markdown(f'<div class="status-badge-red">All Books <span class="badge-count">{len(filtered_df)}</span></div>', unsafe_allow_html=True)
 
 # Sort functionality
@@ -706,60 +742,48 @@ filtered_df = filtered_df.sort_values(by=st.session_state['sort_column'], ascend
 
 # Custom table with pagination
 if not filtered_df.empty:
-    # Define column widths (updated to include Action column)
-    column_widths = [0.8, 3, 0.8, 1.1, 1, 1.2, 1, 0.55, 0.55, 0.77, 0.5]
-
-    # Pagination setup
+    column_widths = [0.8, 3, 0.6, 1.3, 1, 0.8, 1, 0.5, 0.6, 0.6, 0.7, 0.7]
     books_per_page = 50
     total_books = len(filtered_df)
-    total_pages = (total_books + books_per_page - 1) // books_per_page  # Ceiling division
-
-    # Clamp current_page to valid range
-    if total_pages > 0:
-        st.session_state['current_page'] = max(1, min(st.session_state['current_page'], total_pages))
-    else:
-        st.session_state['current_page'] = 1
-
-    # Calculate the start and end indices for the current page
+    total_pages = (total_books + books_per_page - 1) // books_per_page
+    st.session_state['current_page'] = max(1, min(st.session_state['current_page'], total_pages))
     start_idx = (st.session_state['current_page'] - 1) * books_per_page
     end_idx = min(start_idx + books_per_page, total_books)
     page_df = filtered_df.iloc[start_idx:end_idx]
-
-    # Display the table
     with st.container(border=True):
         cols = st.columns(column_widths)
         cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
         cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
         cols[2].markdown('<div class="table-header">Cell</div>', unsafe_allow_html=True)
-        cols[3].markdown('<div class="table-header">Deliver Date</div>', unsafe_allow_html=True)
-        cols[4].markdown('<div class="table-header">Prints</div>', unsafe_allow_html=True)
-        cols[5].markdown('<div class="table-header">To Authors</div>', unsafe_allow_html=True)
-        cols[6].markdown('<div class="table-header">AGPH</div>', unsafe_allow_html=True)
-        cols[7].markdown('<div class="table-header">Amazon</div>', unsafe_allow_html=True)
-        cols[8].markdown('<div class="table-header">Filpkart</div>', unsafe_allow_html=True)
-        cols[9].markdown('<div class="table-header">Stock</div>', unsafe_allow_html=True)
-        cols[10].markdown('<div class="table-header">Action</div>', unsafe_allow_html=True)
-
+        cols[3].markdown('<div class="table-header">ISBN</div>', unsafe_allow_html=True)
+        cols[4].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+        cols[5].markdown('<div class="table-header">Prints</div>', unsafe_allow_html=True)
+        cols[6].markdown('<div class="table-header">To Authors</div>', unsafe_allow_html=True)
+        cols[7].markdown('<div class="table-header">AGPH</div>', unsafe_allow_html=True)
+        cols[8].markdown('<div class="table-header">Amazon</div>', unsafe_allow_html=True)
+        cols[9].markdown('<div class="table-header">Filpkart</div>', unsafe_allow_html=True)
+        cols[10].markdown('<div class="table-header">Stock</div>', unsafe_allow_html=True)
+        cols[11].markdown('<div class="table-header">Action</div>', unsafe_allow_html=True)
         for _, row in page_df.iterrows():
             cols = st.columns(column_widths, vertical_alignment="center")
-            deliver_date = row['Deliver Date'].strftime('%Y-%m-%d') if pd.notnull(row['Deliver Date']) else ''
-            # Apply low stock highlight
+            publication_date = row['Publication Date'].strftime('%Y-%m-%d') if pd.notnull(row['Publication Date']) else 'Not Received'
+            cell_no = row['Cell No.'] if pd.notnull(row['Cell No.']) else ''
+            isbn = row['isbn'] if pd.notnull(row['isbn']) else 'Not Received'
             row_class = 'table-row low-stock' if row['In Stock'] < 2 else 'table-row'
             cols[0].markdown(f'<div class="{row_class}">{row["Book ID"]}</div>', unsafe_allow_html=True)
             cols[1].markdown(f'<div class="{row_class}">{row["Book Title"]}</div>', unsafe_allow_html=True)
-            cols[2].markdown(f'<div class="{row_class}">{row["Cell No."]}</div>', unsafe_allow_html=True)
-            cols[3].markdown(f'<div class="{row_class}">{deliver_date}</div>', unsafe_allow_html=True)
-            cols[4].markdown(f'<div class="{row_class}">{int(row["Total Prints"])}</div>', unsafe_allow_html=True)
-            cols[5].markdown(f'<div class="{row_class}">{int(row["Author Copies"])}</div>', unsafe_allow_html=True)
-            cols[6].markdown(f'<div class="{row_class}">{int(row["AGPH Store"])}</div>', unsafe_allow_html=True)
-            cols[7].markdown(f'<div class="{row_class}">{int(row["Amazon"])}</div>', unsafe_allow_html=True)
-            cols[8].markdown(f'<div class="{row_class}">{int(row["Filpkart"])}</div>', unsafe_allow_html=True)
-            cols[9].markdown(f'<div class="{row_class}">{int(row["In Stock"])}</div>', unsafe_allow_html=True)
-            if cols[10].button(":material/manufacturing:", key=f"action_{row['Book ID']}"):
+            cols[2].markdown(f'<div class="{row_class}">{cell_no}</div>', unsafe_allow_html=True)
+            cols[3].markdown(f'<div class="{row_class}">{isbn}</div>', unsafe_allow_html=True)
+            cols[4].markdown(f'<div class="{row_class}">{publication_date}</div>', unsafe_allow_html=True)
+            cols[5].markdown(f'<div class="{row_class}">{int(row["Total Prints"]) if pd.notnull(row["Total Prints"]) else 0}</div>', unsafe_allow_html=True)
+            cols[6].markdown(f'<div class="{row_class}">{int(row["Author Copies"]) if pd.notnull(row["Author Copies"]) else 0}</div>', unsafe_allow_html=True)
+            cols[7].markdown(f'<div class="{row_class}">{int(row["AGPH Store"]) if pd.notnull(row["AGPH Store"]) else 0}</div>', unsafe_allow_html=True)
+            cols[8].markdown(f'<div class="{row_class}">{int(row["Amazon"]) if pd.notnull(row["Amazon"]) else 0}</div>', unsafe_allow_html=True)
+            cols[9].markdown(f'<div class="{row_class}">{int(row["Filpkart"]) if pd.notnull(row["Filpkart"]) else 0}</div>', unsafe_allow_html=True)
+            cols[10].markdown(f'<div class="{row_class}">{int(row["In Stock"]) if pd.notnull(row["In Stock"]) else 0}</div>', unsafe_allow_html=True)
+            if cols[11].button(":material/manufacturing:", key=f"action_{row['Book ID']}"):
                 st.session_state['update_dialog'] = True
                 update_book_details(row['Book ID'], row)
-
-    # Display "Showing X-Y of Z books"
     st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Showing {start_idx + 1}-{end_idx} of {total_books} books</div>", unsafe_allow_html=True)
 
     # Page navigation (at bottom)
