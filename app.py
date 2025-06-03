@@ -77,6 +77,7 @@ ACCESS_TO_BUTTON = {
     "Team Dashboard": "team_dashboard",
     "Print Management": "print_management",
     "Inventory" : "inventory",
+    "Open Author Positions": "open_author_positions",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -4409,11 +4410,11 @@ st.markdown("""
         }
 
         .data-row {
-            margin-bottom: 30px;
-            border-bottom: 1px solid #e9ecef;
-            font-size: 14px;
+            margin-bottom: 25px;
+            border-top: 1px solid #e9ecef;
+            font-size: 11px;
             color: #212529;
-            transition: background-color 0.2s;
+            margin-top: 0px;
         }
         .month-header {
             font-size: 16px;
@@ -4912,6 +4913,13 @@ with srcol5:
             else:
                 st.button("📦 Inventory", key="agph_inventory", type="tertiary", help="Inventory (Not Authorized)", disabled=True)
 
+             # Open Author Positions
+            if is_button_allowed("open_author_positions"):
+                if st.button("📚 Author Positions", key="open_author_positions", type="tertiary"):
+                    st.switch_page("pages/author_positions.py")
+            else:
+                st.button("📚 Author Positions", key="open_author_positions", type="tertiary", help="Open Positions (Not Authorized)", disabled=True)
+
 
             # Edit Authors button
             if is_button_allowed("edit_author_detail"):
@@ -5006,7 +5014,7 @@ with cont:
             
             for _, row in monthly_books.iterrows():
                 st.markdown('<div class="data-row">', unsafe_allow_html=True)
-                col1, col2, col3, col4, col5, col6 = st.columns(column_size)
+                col1, col2, col3, col4, col5, col6 = st.columns(column_size, vertical_alignment="center")
                 with col1:
                     st.write(row['book_id'])
                 with col2:
@@ -5055,7 +5063,7 @@ with cont:
                 with col5:
                     st.markdown(get_status_pill(row["book_id"], row, authors_df), unsafe_allow_html=True)
                 with col6:
-                    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1])
+                    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
                     with btn_col1:
                         # ISBN button (manage_isbn_dialog)
                         if is_button_allowed("manage_isbn_dialog"):

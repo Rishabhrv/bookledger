@@ -57,6 +57,7 @@ ACCESS_TO_BUTTON = {
     "Team Dashboard": "team_dashboard",
     "Print Management": "print_management",
     "Inventory" : "inventory",
+    "Open Author Positions": "open_author_positions",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
