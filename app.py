@@ -11,6 +11,11 @@ import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
 
+
+####################################################################################################################
+##################################--------------- Logs ----------------------------#################################
+####################################################################################################################
+
 # Custom filter to exclude watchdog logs
 class NoWatchdogFilter(logging.Filter):
     def filter(self, record):
@@ -31,6 +36,10 @@ handler.setFormatter(formatter)
 handler.addFilter(NoWatchdogFilter())
 logger.addHandler(handler)
 
+########################################################################################################################
+##################################--------------- Page Config ----------------------------#############################
+#######################################################################################################################
+
 
 # Set page configuration
 st.set_page_config(
@@ -42,6 +51,7 @@ st.set_page_config(
     layout="wide",  # Set layout to wide mode
     initial_sidebar_state="collapsed",
     page_title="AGPH Books",
+    page_icon="📚"
 )
 
 logo = "logo/logo_black.png"
@@ -53,15 +63,39 @@ size = "large",
 icon_image = small_logo
 )
 
-# # Inject CSS to remove the menu (optional)
-# hide_menu_style = """
-#     <style>
-#     #MainMenu {visibility: hidden;}
-#     footer {visibility: hidden;}
-#     </style>
-# """
 
-# st.markdown(hide_menu_style, unsafe_allow_html=True)
+########################################################################################################################
+##################################--------------- Token Validation ----------------------------######################
+#######################################################################################################################
+
+
+# Run validation
+validate_token()
+
+# st.session_state.role = 'admin'
+# st.session_state.username = 'Yogesh Sharma'
+# st.session_state.app = 'main'
+
+user_role = st.session_state.get("role", "Unknown")
+user_app = st.session_state.get("app", "Unknown")
+user_access = st.session_state.get("access", [])
+user_id = st.session_state.get("user_id", "Unknown")
+user_name = st.session_state.get("username", "Unknown")
+token = st.session_state.token
+
+# Base URL for your app
+BASE_URL = "https://newcrm.agvolumes.com"  # Update with your deployed app's URL
+
+#BASE_URL = "http://localhost:8501"  # Update with your deployed app's URL
+
+#UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
+UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
+
+
+
+########################################################################################################################
+##################################--------------- Configure Functions ----------------------------######################
+#######################################################################################################################
 
 
 # Define mapping of access values to button functions
@@ -82,55 +116,6 @@ ACCESS_TO_BUTTON = {
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
 }
-
-# Run validation
-validate_token()
-
-# st.session_state.role = 'admin'
-# st.session_state.username = 'Yogesh Sharma'
-# st.session_state.app = 'main'
-
-user_role = st.session_state.get("role", "Unknown")
-user_app = st.session_state.get("app", "Unknown")
-user_access = st.session_state.get("access", [])
-user_id = st.session_state.get("user_id", "Unknown")
-user_name = st.session_state.get("username", "Unknown")
-token = st.session_state.token
-
-#UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
-UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
-
-st.cache_data.clear()
-
-
-# Function to check if a button is allowed for the user's role and access
-def is_button_allowed(button_name, debug=False):
-    user_role = st.session_state.get("role", "Unknown")
-    user_access = st.session_state.get("access", [])  # Expecting a list like ['isbn', 'payment', 'authors']
-    
-    # Special case for admin-only buttons
-    if button_name == "manage_users":
-        return user_role == "admin"
-    
-    # Debug output (optional)
-    if debug:
-        st.write(f"Debug: role={user_role}, access={user_access}, button={button_name}")
-    
-    # Admins have access to all buttons
-    if user_role == "admin":
-        return True
-    # Invalid or unset role gets no access
-    if user_role != "user":
-        return False
-    
-    # For 'user' role, check if the button corresponds to an access value
-    allowed_buttons = [ACCESS_TO_BUTTON.get(access) for access in user_access if access in ACCESS_TO_BUTTON]
-    if debug:
-        st.write(f"Debug: allowed_buttons={allowed_buttons}")
-    return button_name in allowed_buttons
-
-# Base URL for your app
-BASE_URL = "https://newcrm.agvolumes.com"  # Update with your deployed app's URL
 
 # Button configuration
 BUTTON_CONFIG = {
@@ -195,9 +180,12 @@ BUTTON_CONFIG = {
     },
 }
 
-def get_page_url(page_path, token):
-    """Generate a URL with the token as a query parameter."""
-    return f"{BASE_URL}/{page_path}?token={token}"
+st.cache_data.clear()
+
+
+########################################################################################################################
+##################################--------------- Database Connection ----------------------------######################
+#######################################################################################################################
 
 
 # --- Database Connection ---
@@ -215,6 +203,11 @@ def connect_db():
 
 # Connect to MySQL
 conn = connect_db()
+
+
+########################################################################################################################
+##################################--------------- Main App Started ----------------------------######################
+#######################################################################################################################
 
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
@@ -244,6 +237,11 @@ if user_role == "user" and user_app == "main":
 elif user_role != "admin":
     books = books.iloc[0:0]  # No data for invalid roles or user with app!='main'
 
+
+########################################################################################################################
+##################################--------------- Helping Functions ----------------------------######################
+#######################################################################################################################
+
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
 def fetch_book_details(book_id, conn):
     query = f"""
@@ -257,6 +255,10 @@ def fetch_book_details(book_id, conn):
 if not pd.api.types.is_datetime64_any_dtype(books['date']):
     books['date'] = pd.to_datetime(books['date'])
 
+def get_page_url(page_path, token):
+    """Generate a URL with the token as a query parameter."""
+    return f"{BASE_URL}/{page_path}?token={token}"
+
 def get_isbn_display(isbn, apply_isbn):
     if pd.notna(isbn):
         return f"**<span style='color:#15803d; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
@@ -266,6 +268,32 @@ def get_isbn_display(isbn, apply_isbn):
         return f"**<span style='color:#606975; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
     return f"**<span style='color:#000000; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
 
+
+# Function to check if a button is allowed for the user's role and access
+def is_button_allowed(button_name, debug=False):
+    user_role = st.session_state.get("role", "Unknown")
+    user_access = st.session_state.get("access", [])  # Expecting a list like ['isbn', 'payment', 'authors']
+    
+    # Special case for admin-only buttons
+    if button_name == "manage_users":
+        return user_role == "admin"
+    
+    # Debug output (optional)
+    if debug:
+        st.write(f"Debug: role={user_role}, access={user_access}, button={button_name}")
+    
+    # Admins have access to all buttons
+    if user_role == "admin":
+        return True
+    # Invalid or unset role gets no access
+    if user_role != "user":
+        return False
+    
+    # For 'user' role, check if the button corresponds to an access value
+    allowed_buttons = [ACCESS_TO_BUTTON.get(access) for access in user_access if access in ACCESS_TO_BUTTON]
+    if debug:
+        st.write(f"Debug: allowed_buttons={allowed_buttons}")
+    return button_name in allowed_buttons
 
 # Function to fetch book_author details for multiple book_ids
 @st.cache_data
@@ -290,9 +318,30 @@ def fetch_all_book_authors(book_ids, _conn):
     """
     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
 
-def get_status_pill(book_id, row, authors_df):
-    # Filter authors for the specific book_id
+def fetch_all_printeditions(book_ids, conn):
+    if not book_ids:  # Handle empty book_ids
+        return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
+    
+    # SQL query to fetch print editions
+    query = """
+    SELECT book_id, print_id, status
+    FROM printeditions
+    WHERE book_id IN :book_ids
+    """
+    
+    try:
+        # Execute query using Streamlit's MySQL connection
+        printeditions_df = conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+        return printeditions_df
+    except Exception as e:
+        print(f"Error fetching print editions: {e}")
+        return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
+
+
+def get_status_pill(book_id, row, authors_df, printeditions_df):
+    # Filter authors and print editions for the specific book_id
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
+    book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
     
     # Base pill style with vertical stacking and modern design
     pill_style = (
@@ -391,7 +440,36 @@ def get_status_pill(book_id, row, authors_df):
         checklist_color = "#6b7280"
         print(f"Error processing authors for book_id {book_id}: {e}")
 
-    # Determine combined status
+    # Check post-printing statuses
+    if row.get('deliver', 0) == 1:
+        status = "Delivered"
+        text_color = "#15803d"  # Green
+        return (
+            f"<div style='{pill_style}'>"
+            f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
+            f"</div>"
+        )
+    
+    if not book_printeditions_df.empty:
+        latest_print = book_printeditions_df.sort_values(by='print_id', ascending=False).iloc[0]
+        if latest_print['status'] == "Received":
+            status = "Ready For Dispatch"
+            text_color = "#15803d"  # Green
+            return (
+                f"<div style='{pill_style}'>"
+                f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
+                f"</div>"
+            )
+        elif latest_print['status'] == "In Printing":
+            status = "In Printing"
+            text_color = "#d97706"  # Amber for in-progress
+            return (
+                f"<div style='{pill_style}'>"
+                f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}</span>"
+                f"</div>"
+            )
+
+    # Determine combined status for pre-printing stages
     if (checklist_status == "Checklist Complete" and
             row['formatting_end'] is not None and pd.notnull(row['formatting_end']) and
             row['cover_end'] is not None and pd.notnull(row['cover_end'])):
@@ -4979,6 +5057,7 @@ with srcol5:
                     )
 
 
+
 # :material/done: (Simple check mark)
 # :material/task_alt: (Check mark in a circle, modern)
 # :material/verified: (Verified badge with check)
@@ -5046,6 +5125,7 @@ with cont:
         
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
+        printeditions_df = fetch_all_printeditions(book_ids, conn)
 
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
@@ -5106,7 +5186,7 @@ with cont:
                 with col4:
                     st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
                 with col5:
-                    st.markdown(get_status_pill(row["book_id"], row, authors_df), unsafe_allow_html=True)
+                    st.markdown(get_status_pill(row["book_id"], row, authors_df,printeditions_df), unsafe_allow_html=True)
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
                     with btn_col1:

@@ -26,6 +26,7 @@ st.set_page_config(
     layout="wide",  # Set layout to wide mode
     initial_sidebar_state="collapsed",
     page_title="AGPH Dashboard",
+    page_icon="📊"
 )
 
 
