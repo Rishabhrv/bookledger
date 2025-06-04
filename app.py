@@ -95,7 +95,7 @@ user_app = st.session_state.get("app", "Unknown")
 user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
-
+token = st.session_state.token
 
 #UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
 UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
@@ -128,6 +128,76 @@ def is_button_allowed(button_name, debug=False):
     if debug:
         st.write(f"Debug: allowed_buttons={allowed_buttons}")
     return button_name in allowed_buttons
+
+# Base URL for your app
+BASE_URL = "https://newcrm.agvolumes.com"  # Update with your deployed app's URL
+
+# Button configuration
+BUTTON_CONFIG = {
+
+    "advance_search": {
+        "label": "Advance Search",
+        "icon": "🔍",
+        "page_path": "adsearch",
+        "permission": "advance_search",
+        "type": "new_tab",
+    },
+
+    "dashboard": {
+        "label": "Dashboard",
+        "icon": "📊",
+        "page_path": "dashboard",
+        "permission": "datadashoard",
+        "type": "new_tab",
+    },
+    "team_dashboard": {
+        "label": "Operations",
+        "icon": "📈",
+        "page_path": "team_dashboard",
+        "permission": "team_dashboard",
+        "type": "new_tab",
+    },
+    "print_management": {
+        "label": "Manage Prints",
+        "icon": "🖨️",
+        "page_path": "prints",
+        "permission": "print_management",
+        "type": "new_tab",
+    },
+    "inventory": {
+        "label": "Inventory",
+        "icon": "📦",
+        "page_path": "inventory",
+        "permission": "inventory",
+        "type": "new_tab",
+    },
+    "author_positions": {
+        "label": "Author Positions",
+        "icon": "📚",
+        "page_path": "author_positions",
+        "permission": "open_author_positions",
+        "type": "new_tab",
+    },
+    "edit_authors": {
+        "label": "Edit Authors",
+        "icon": "✏️",
+        "permission": "edit_author_detail",
+        "type": "call_function",
+        "function": lambda conn: edit_author_detail(conn),
+    },
+    "user_access": {
+        "label": "User Access",
+        "icon": "👥",
+        "permission": None,
+        "type": "call_function",
+        "function": lambda conn: manage_users(conn),
+        "admin_only": True,
+    },
+}
+
+def get_page_url(page_path, token):
+    """Generate a URL with the token as a query parameter."""
+    return f"{BASE_URL}/{page_path}?token={token}"
 
 
 # --- Database Connection ---
@@ -4607,20 +4677,12 @@ with c3:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol2, srcol3, srcol4, srcol5 = st.columns([6, .6, 4, 1, 1], gap="small") 
+srcol1, srcol3, srcol4, srcol5 = st.columns([6, 4, 1, 1], gap="small") 
 
 with srcol1:
     search_query = st.text_input("🔎 Search Books", "", placeholder="Search by ID, title, ISBN, date, or @authorname, !authoremail, #authorphone..", key="search_bar",
                                  label_visibility="collapsed")
     filtered_books = filter_books(books, search_query)
-
-with srcol2:
-    # Add Book button
-    if is_button_allowed("advance_search"):
-        if st.button("🔍", type="secondary", help="Advance Search", use_container_width=True):
-            st.switch_page("pages/adsearch.py")
-    else:
-        st.button("🔍", type="secondary", help="Not Authorized", use_container_width=True, disabled=True)
 
 
 with srcol3:
@@ -4884,54 +4946,37 @@ with srcol4:
 
 with srcol5:
         with st.popover("More", use_container_width=True, help="More Options"):
+            for key, config in BUTTON_CONFIG.items():
+                label_with_icon = f"{config['icon']} {config['label']}"
+                permission = config.get('permission')
+                admin_only = config.get('admin_only', False)
+                
+                if admin_only and st.session_state.get("role") != "admin":
+                    continue
 
-            # DataDashboard button
-            if is_button_allowed("datadashoard"):
-                if st.button("📊 Dashboard", key="dashboard", type="tertiary"):
-                    st.switch_page("pages/dashboard.py")
-            else:
-                st.button("📊 DataDashboard", key="dashboard", type="tertiary", help="DataDashboard (Not Authorized)", disabled=True)
-
-            # Team dashboard
-            if is_button_allowed("team_dashboard"):
-                if st.button("📈 Operations", key="dashboard_team", type="tertiary"):
-                    st.switch_page("pages/team_dashboard.py")
-            else:
-                st.button("📈 Team dashboard", key="dashboard_team", type="tertiary", help="Team dashboard (Not Authorized)", disabled=True)
-            
-            # Print Managment
-            if is_button_allowed("print_management"):
-                if st.button("🖨️ Manage Prints", key="print_management", type="tertiary"):
-                    st.switch_page("pages/prints.py")
-            else:
-                st.button("🖨️ Manage Prints", key="print_management", type="tertiary", help="Manage Prints (Not Authorized)", disabled=True)
-
-            # Inventory
-            if is_button_allowed("inventory"):
-                if st.button("📦 Inventory", key="agph_inventory", type="tertiary"):
-                    st.switch_page("pages/inventory.py")
-            else:
-                st.button("📦 Inventory", key="agph_inventory", type="tertiary", help="Inventory (Not Authorized)", disabled=True)
-
-             # Open Author Positions
-            if is_button_allowed("open_author_positions"):
-                if st.button("📚 Author Positions", key="open_author_positions", type="tertiary"):
-                    st.switch_page("pages/author_positions.py")
-            else:
-                st.button("📚 Author Positions", key="open_author_positions", type="tertiary", help="Open Positions (Not Authorized)", disabled=True)
-
-
-            # Edit Authors button
-            if is_button_allowed("edit_author_detail"):
-                if st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary"):
-                    edit_author_detail(conn)
-            else:
-                st.button("✏️ Edit Authors", key="edit_author_btn", type="tertiary", help="Edit Authors (Not Authorized)", disabled=True)
-            
-            # User Access button (only for admin)
-            if st.session_state.get("role") == "admin":
-                if st.button("👥 User Access", key="user_access", type="tertiary"):
-                    manage_users(conn)
+                if permission is None or is_button_allowed(permission):
+                    if config['type'] == "new_tab":
+                        full_url = get_page_url(config['page_path'], token)
+                        st.link_button(
+                            label=label_with_icon,
+                            url=full_url,
+                            type="tertiary",
+                            use_container_width=False
+                        )
+                    elif config['type'] == "switch_page":
+                        if st.button(label_with_icon, key=key, type="tertiary"):
+                            st.switch_page(config['page_path'])
+                    elif config['type'] == "call_function":
+                        if st.button(label_with_icon, key=key, type="tertiary"):
+                            config['function'](conn)
+                else:
+                    st.button(
+                        label=label_with_icon,
+                        key=key,
+                        type="tertiary",
+                        help=f"{config['label']} (Not Authorized)",
+                        disabled=True
+                    )
 
 
 # :material/done: (Simple check mark)

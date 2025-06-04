@@ -6,7 +6,7 @@ logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
 small_logo = "logo/favicon_white.ico"
 
-st.set_page_config(page_title='AGPH Prints', page_icon="🖨️", layout="wide")
+st.set_page_config(page_title='Author Open Positions', page_icon="📚", layout="wide")
 
 st.logo(logo,
 size = "large",
@@ -53,7 +53,8 @@ def connect_db():
         st.stop()
 
 
-# Custom CSS
+
+# Custom CSS (removed .publisher-badge, using .pill-badge for publishers)
 st.markdown("""
 <style>
 .status-badge-red {
@@ -106,6 +107,11 @@ st.markdown("""
     text-align: center;
     min-width: 80px;
 }
+.publisher-Penguin { background-color: #fff3e0; color: #ef6c00; }
+.publisher-HarperCollins { background-color: #e6f3ff; color: #0052cc; }
+.publisher-Macmillan { background-color: #f0e6ff; color: #6200ea; }
+.publisher-RandomHouse { background-color: #e6ffe6; color: #2e7d32; }
+.publisher-default { background-color: #f5f5f5; color: #616161; }
 .date-pill {
     display: inline-block;
     padding: 2px 5px;
@@ -133,6 +139,7 @@ def get_open_author_positions(conn):
             b.title,
             b.date,
             b.author_type,
+            b.publisher,
             COUNT(ba.author_id) as author_count,
             MAX(CASE WHEN ba.author_position = '1st' THEN 'Booked' ELSE NULL END) as position_1,
             MAX(CASE WHEN ba.author_position = '2nd' THEN 'Booked' ELSE NULL END) as position_2,
@@ -141,7 +148,7 @@ def get_open_author_positions(conn):
         FROM books b
         LEFT JOIN book_authors ba ON b.book_id = ba.book_id
         WHERE b.author_type IN ('Double', 'Triple', 'Multiple')
-        GROUP BY b.book_id, b.title, b.date, b.author_type
+        GROUP BY b.book_id, b.title, b.date, b.author_type, b.publisher
         HAVING 
             (b.author_type = 'Double' AND COUNT(ba.author_id) < 2) OR
             (b.author_type = 'Triple' AND COUNT(ba.author_id) < 3) OR
@@ -152,6 +159,7 @@ def get_open_author_positions(conn):
         title,
         date,
         author_type,
+        publisher,
         COALESCE(position_1, 'Vacant') as position_1,
         CASE 
             WHEN author_type IN ('Double', 'Triple', 'Multiple') THEN COALESCE(position_2, 'Vacant')
@@ -208,22 +216,21 @@ def open_author_positions_page():
                 "Filter by Author Type:",
                 options=['Double', 'Triple', 'Multiple'],
                 default=[],
-               
+                key="author_type_filter"
             )
             
             vacant_positions = st.pills(
                 "Filter by Number of Vacant Positions:",
                 options=[1, 2, 3],
                 default=[],
-                
+                key="vacant_positions_filter"
             )
-
             
             # Sorting Controls
             st.markdown("###### Sort Options:")
             sort_column = st.selectbox(
                 "Sort by",
-                options=['book_id', 'title', 'date', 'author_type', 'position_1', 'position_2', 'position_3', 'position_4'],
+                options=['book_id', 'title', 'date', 'author_type', 'publisher', 'position_1', 'position_2', 'position_3', 'position_4'],
                 index=0
             )
             sort_order = st.radio("Sort Order", ['Ascending', 'Descending'], horizontal=True, index=1)
@@ -236,12 +243,12 @@ def open_author_positions_page():
             filtered_df['book_id'].astype(str).str.contains(search_term, case=False, na=False)
         ]
     if author_type_filter:
-        filtered_df = filtered_df[filtered_df['author_type'].isin([author_type_filter])]
+        filtered_df = filtered_df[filtered_df['author_type'].isin(author_type_filter)]
     if vacant_positions:
         filtered_df['vacant_count'] = filtered_df[['position_1', 'position_2', 'position_3', 'position_4']].apply(
             lambda x: sum(1 for pos in x if pos == 'Vacant'), axis=1
         )
-        filtered_df = filtered_df[filtered_df['vacant_count'].isin([vacant_positions])]
+        filtered_df = filtered_df[filtered_df['vacant_count'].isin(vacant_positions)]
         filtered_df = filtered_df.drop(columns=['vacant_count'])
     
     # Apply sorting
@@ -266,8 +273,8 @@ def open_author_positions_page():
         filtered_df['days_since'] = (current_date - filtered_df['date']).dt.days
         filtered_df['date_str'] = filtered_df['date'].dt.strftime('%Y-%m-%d')
         
-        # Define column widths
-        column_widths = [0.6, 3.1, 1, 0.8, 0.8, 0.8, 0.8, 0.8]
+        # Define column widths (adjusted for publisher column)
+        column_widths = [0.6, 2.5, 0.9, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
         
         with st.container(border=True):
             # Table Headers
@@ -275,19 +282,34 @@ def open_author_positions_page():
             cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
             cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
             cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
-            cols[3].markdown('<div class="table-header">Author Type</div>', unsafe_allow_html=True)
-            cols[4].markdown('<div class="table-header">Position 1</div>', unsafe_allow_html=True)
-            cols[5].markdown('<div class="table-header">Position 2</div>', unsafe_allow_html=True)
-            cols[6].markdown('<div class="table-header">Position 3</div>', unsafe_allow_html=True)
-            cols[7].markdown('<div class="table-header">Position 4</div>', unsafe_allow_html=True)
+            cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
+            cols[4].markdown('<div class="table-header">Author Type</div>', unsafe_allow_html=True)
+            cols[5].markdown('<div class="table-header">Position 1</div>', unsafe_allow_html=True)
+            cols[6].markdown('<div class="table-header">Position 2</div>', unsafe_allow_html=True)
+            cols[7].markdown('<div class="table-header">Position 3</div>', unsafe_allow_html=True)
+            cols[8].markdown('<div class="table-header">Position 4</div>', unsafe_allow_html=True)
             
             # Table Rows
             for _, book in filtered_df.iterrows():
                 cols = st.columns(column_widths)
                 cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                 cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
+                
+                
                 cols[2].markdown(
                     f'<div class="table-row">{book["date_str"]} <span class="date-pill">{book["days_since"]}</span></div>',
+                    unsafe_allow_html=True
+                )
+
+                # Publisher pill using pill-badge class
+                publisher_class = {
+                    'AGPH': 'publisher-Penguin',
+                    'Cipher': 'publisher-HarperCollins',
+                    'AG Volumes': 'publisher-Macmillan',
+                    'AG Classics': 'publisher-RandomHouse'
+                }.get(book['publisher'], 'publisher-default')
+                cols[3].markdown(
+                    f'<div class="pill-badge {publisher_class}">{book["publisher"]}</div>',
                     unsafe_allow_html=True
                 )
                 
@@ -297,13 +319,13 @@ def open_author_positions_page():
                     'Triple': 'author-type-triple',
                     'Multiple': 'author-type-multiple'
                 }.get(book['author_type'], '')
-                cols[3].markdown(
+                cols[4].markdown(
                     f'<div class="pill-badge {author_type_class}">{book["author_type"]}</div>',
                     unsafe_allow_html=True
                 )
                 
                 # Position pills
-                for i, pos in enumerate(['position_1', 'position_2', 'position_3', 'position_4'], 4):
+                for i, pos in enumerate(['position_1', 'position_2', 'position_3', 'position_4'], 5):
                     status = book[pos]
                     status_class = {
                         'Booked': 'position-occupied',
