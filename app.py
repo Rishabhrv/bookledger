@@ -16,6 +16,8 @@ from auth import validate_token
 ##################################--------------- Logs ----------------------------#################################
 ####################################################################################################################
 
+start_time = time.time()
+
 # Custom filter to exclude watchdog logs
 class NoWatchdogFilter(logging.Filter):
     def filter(self, record):
@@ -63,14 +65,27 @@ size = "large",
 icon_image = small_logo
 )
 
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 10px !important;  /* Small padding for breathing room */
+        }
+            """, unsafe_allow_html=True)
+
 
 ########################################################################################################################
 ##################################--------------- Token Validation ----------------------------######################
 #######################################################################################################################
 
-
-# Run validation
+chek_time = time.time()
 validate_token()
+total_chek_time = time.time() - chek_time
 
 # st.session_state.role = 'admin'
 # st.session_state.username = 'Yogesh Sharma'
@@ -209,6 +224,7 @@ conn = connect_db()
 ##################################--------------- Main App Started ----------------------------######################
 #######################################################################################################################
 
+
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, publisher, author_type, writing_start, writing_end, " \
@@ -318,7 +334,8 @@ def fetch_all_book_authors(book_ids, _conn):
     """
     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
 
-def fetch_all_printeditions(book_ids, conn):
+@st.cache_data
+def fetch_all_printeditions(book_ids, _conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
     
@@ -492,7 +509,6 @@ def get_status_pill(book_id, row, authors_df, printeditions_df):
         f"</div>"
     )
     return status
-
 
 
 ###################################################################################################################################
@@ -773,6 +789,8 @@ def manage_users(conn):
                                 st.success("User Deleted Successfully!", icon="✔️")
                                 st.session_state.confirm_delete_user_id = None
                                 st.rerun()
+
+
 
 ###################################################################################################################################
 ##################################--------------- Edit Auhtor Details ----------------------------##################################
@@ -1296,6 +1314,7 @@ def add_book_dialog(conn):
             st.rerun()
 
 
+
 ###################################################################################################################################
 ##################################--------------- Edit ISBN Dialog ----------------------------##################################
 ###################################################################################################################################
@@ -1498,6 +1517,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     except Exception as db_error:
                         s.rollback()
                         st.error(f"Database error: {db_error}")
+
+
 
 
 ###################################################################################################################################
@@ -1868,6 +1889,8 @@ def manage_price_dialog(book_id, current_price, conn):
                                 update_book_authors(row['id'], updates, conn)
                                 st.success(f"Payment updated for {row['name']}", icon="✔️")
                                 st.cache_data.clear()
+
+
 
 
 ###################################################################################################################################
@@ -3151,6 +3174,8 @@ def edit_author_dialog(book_id, conn):
                 del st.session_state.new_authors
                 st.rerun()
 
+
+
     
 
 ###################################################################################################################################
@@ -3699,6 +3724,7 @@ def update_operation_details(book_id, updates):
         session.execute(text(query), params)
         session.commit()
 
+
 ###################################################################################################################################
 ##################################--------------- Edit Inventory Dialog ----------------------------##################################
 ###################################################################################################################################
@@ -3801,6 +3827,7 @@ def get_print_status(book_id, conn):
             status["authors"].append({"author_id": row['author_id'], "missing": author_missing})
     
     return status
+
 
 @st.dialog("Edit Printing & Inventory", width='large')
 def edit_inventory_delivery_dialog(book_id, conn):
@@ -4547,15 +4574,6 @@ author_count_dict = dict(zip(author_counts['book_id'], author_counts['author_cou
 # Custom CSS for modern table styling and pagination controls
 st.markdown("""
     <style>
-            
-        /* Remove Streamlit's default top padding */
-        .main > div {
-            padding-top: 0px !important;
-        }
-        /* Ensure the first element has minimal spacing */
-        .block-container {
-            padding-top: 25px !important;  /* Small padding for breathing room */
-        }
 
         .data-row {
             margin-bottom: 25px;
@@ -4618,9 +4636,6 @@ st.markdown("""
         }
     </style>
 """, unsafe_allow_html=True)
-
-import pandas as pd
-import re
 
 # Function to filter books based on search query
 def filter_books(df, query):
@@ -5126,12 +5141,13 @@ with cont:
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
-
+        
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
 
         # Table Body
+        render_start = time.time()
         for month, monthly_books in reversed_grouped_books:
             monthly_books = monthly_books.sort_values(by='date', ascending=False)
             num_books = len(monthly_books)
@@ -5235,6 +5251,7 @@ with cont:
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
+        
 
         st.markdown(
             f"<div style='text-align: center; margin-bottom: 10px;'>"
@@ -5280,3 +5297,12 @@ with cont:
                 if selected_page != st.session_state.current_page:
                     st.session_state.current_page = selected_page
                     st.rerun()
+        render_time = time.time() - render_start
+
+
+# End timing
+total_time = time.time() - start_time
+st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
+st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
+st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
+

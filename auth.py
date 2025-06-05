@@ -3,6 +3,7 @@ import jwt
 import requests
 import logging
 from logging.handlers import RotatingFileHandler
+import time
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -28,8 +29,7 @@ handler.addFilter(NoWatchdogFilter())
 logger.addHandler(handler)
 
 # Flask endpoints
-FLASK_VALIDATE_URL = "https://crmserver.agvolumes.com/validate_token"
-FLASK_USER_DETAILS_URL = "https://crmserver.agvolumes.com/user_details"
+FLASK_AUTH_URL = "https://crmserver.agvolumes.com/auth/validate_and_details"
 FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
 FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 
@@ -40,8 +40,7 @@ VALID_APPS = {"main", "operations"}
 
 
 # # Configuration
-# FLASK_VALIDATE_URL = "http://localhost:5001/validate_token"
-# FLASK_USER_DETAILS_URL = "http://localhost:5001/user_details"
+# FLASK_AUTH_URL = "http://localhost:5001/auth/validate_and_details"
 # FLASK_LOGIN_URL = "http://localhost:5001/login"
 # FLASK_LOGOUT_URL = "http://localhost:5001/logout"
 
@@ -64,10 +63,24 @@ ACCESS_TO_BUTTON = {
 }
 
 
+def clear_auth_session():
+    # Clear all session state related to authentication
+    for key in ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'username', 'exp', 'user_details']:
+        if key in st.session_state:
+            del st.session_state[key]
+
 def validate_token():
-    # Check if token exists in session state
+    # Check if token and user details are cached and not near expiry
+    current_time = time.time()
+    if ('token' in st.session_state and 
+        'user_details' in st.session_state and 
+        'exp' in st.session_state and 
+        st.session_state.exp > current_time + 300):  # 5-minute buffer
+        logger.info("Using cached token validation")
+        return
+
+    # Token fetching
     if 'token' not in st.session_state:
-        # Try to get token from query params (for initial login redirect)
         token = st.query_params.get("token")
         if not token:
             logger.error("No token provided")
@@ -79,46 +92,36 @@ def validate_token():
     token = st.session_state.token
 
     try:
-        # Local validation
+        # Local JWT validation
         decoded = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
         if 'user_id' not in decoded or 'exp' not in decoded:
             raise jwt.InvalidTokenError("Missing user_id or exp")
 
-        # Server-side token validation
-        response = requests.post(FLASK_VALIDATE_URL, json={"token": token}, timeout=10)
+        # Server-side validation and user details
+        response = requests.post(FLASK_AUTH_URL, json={"token": token}, timeout=3)
         if response.status_code != 200 or not response.json().get('valid'):
             error = response.json().get('error', 'Invalid token')
-            logger.error(f"Token validation failed: {error}")
+            logger.error(f"Auth failed: {error}")
             raise jwt.InvalidTokenError(error)
 
-        # Fetch user details
-        details_response = requests.post(FLASK_USER_DETAILS_URL, json={"token": token}, timeout=10)
-        if details_response.status_code != 200 or not details_response.json().get('valid'):
-            error = details_response.json().get('error', 'Unable to fetch user details')
-            logger.error(f"User details fetch failed: {error}")
-            raise jwt.InvalidTokenError(f"User details error: {error}")
+        user_details = response.json().get('user_details', {})
+        role = user_details.get('role', '').lower()
+        app = user_details.get('app', '').lower()
+        access = user_details.get('access', [])
+        email = user_details.get('email', '')
+        start_date = user_details.get('start_date', '')
+        username = user_details.get('username', '')
 
-        user_details = details_response.json()
-        role = user_details['role'].lower()
-        app = user_details['app'].lower()
-        access = user_details['access']
-        email = user_details['email']
-        start_date = user_details['start_date']
-        username = user_details['username']
-
+        # Role and access validation
         if role not in VALID_ROLES:
             logger.error(f"Invalid role: {role}")
             raise jwt.InvalidTokenError(f"Invalid role '{role}'")
-        
-        # Skip app and access validation for admins
         if role != 'admin':
             if app not in VALID_APPS:
                 logger.error(f"Invalid app: {app}")
                 raise jwt.InvalidTokenError(f"Invalid app '{app}'")
-            
-            # Validate access based on app
             if app == 'main':
-                valid_access = set(ACCESS_TO_BUTTON.keys())  # Define or import ACCESS_TO_BUTTON
+                valid_access = set(ACCESS_TO_BUTTON.keys())
                 if not all(acc in valid_access for acc in access):
                     logger.error(f"Invalid access for main app: {access}")
                     raise jwt.InvalidTokenError(f"Invalid access for main app: {access}")
@@ -128,6 +131,8 @@ def validate_token():
                     logger.error(f"Invalid access for operations app: {access}")
                     raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
 
+        # Cache user details
+        st.session_state.user_details = user_details
         st.session_state.user_id = decoded['user_id']
         st.session_state.email = email
         st.session_state.role = role
@@ -174,11 +179,3 @@ def validate_token():
         st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
         clear_auth_session()
         st.stop()
-
-def clear_auth_session():
-    keys_to_clear = ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'username', 'exp']
-    for key in keys_to_clear:
-        if key in st.session_state:
-            del st.session_state[key]
-    st.query_params.clear()
-    logger.info("Session and query params cleared")
