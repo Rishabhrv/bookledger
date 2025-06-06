@@ -58,22 +58,37 @@ user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
 
+
 # role_user = 'admin'
 # user_app = 'main'
 # user_name = 'Akash'
-# user_access = 'Team Dashboard'
+# user_access = ['DatadashBoard','Advance' 'Search','Team Dashboard']
+
+#st.write(f"### Welcome {user_name}!")
+# st.write(f"**Role:** {role_user}")
+# st.write(f"**App:** {user_app}")
+# st.write(f"**Access:** {user_access}")
+
+
+section_labels = {
+    "Writing Section": "writer",
+    "Proofreading Section": "proofreader",
+    "Formatting Section": "formatter",
+    "Cover Design Section": "cover_designer"
+}
+
 
 # Admin or allowed users get role selector pills
 if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team Dashboard" in user_access):
-    selected = st.pills(
+    selected = st.segmented_control(
         "Select Section", 
-        ["writer", "proofreader", "formatter", "cover_designer"],
-        default="writer",
+        list(section_labels.keys()),
+        default="Writing Section",
         key="section_selector",
         label_visibility='collapsed'
     )
-    st.session_state.access = [selected]  # Store as list to match user format
-    user_role = selected
+    #st.session_state.access = [selected]  # Store as list to match user format
+    user_role = section_labels[selected]
 
 elif role_user == "user" and user_app == "operations":
     # Set user_role from their first access item

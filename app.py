@@ -312,8 +312,7 @@ def is_button_allowed(button_name, debug=False):
     return button_name in allowed_buttons
 
 # Function to fetch book_author details for multiple book_ids
-@st.cache_data
-def fetch_all_book_authors(book_ids, _conn):
+def fetch_all_book_authors(book_ids, conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame()
     query = """
@@ -334,8 +333,7 @@ def fetch_all_book_authors(book_ids, _conn):
     """
     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
 
-@st.cache_data
-def fetch_all_printeditions(book_ids, _conn):
+def fetch_all_printeditions(book_ids, conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
     
@@ -5072,29 +5070,6 @@ with srcol5:
                     )
 
 
-
-# :material/done: (Simple check mark)
-# :material/task_alt: (Check mark in a circle, modern)
-# :material/verified: (Verified badge with check)
-# :material/check_box: (Checked box)
-# :material/thumb_up: (Thumbs up)
-# :material/star: (Star, for excellence)
-# :material/flag: (Flag, for reaching a goal)
-
-# :material/hourglass_empty: (Empty hourglass)
-# :material/pending: (Dots indicating waiting)
-# :material/aut renew: (Circular arrows, for "in progress")
-# :material/schedule: (Clock, for "time-based")
-# :material/build: (Wrench, for "under construction")
-# :material/sync: (Sync arrows)
-# :material/more_time: (Clock with plus sign)
-
-# price_icon = "✔️"
-# isbn_icon = "⏳"
-# author_icon = "❌"
-# ops_icon = "✔️"
-# delivery_icon = "⏳"
-
 #actual icons
 price_icon = ":material/currency_rupee:"
 isbn_icon = ":material/edit_document:"
@@ -5102,12 +5077,6 @@ author_icon = ":material/manage_accounts:"
 ops_icon = ":material/manufacturing:"
 delivery_icon = ":material/local_shipping:"
 
-
-# price_icon = ":material/check_circle:"
-# isbn_icon = ":material/hourglass_top:"
-# author_icon = ":material/cancel:"
-# ops_icon = ":material/check_circle:"
-# delivery_icon = ":material/hourglass_top:"
 
 # Pagination Logic
 if 'current_page' not in st.session_state:
@@ -5301,8 +5270,8 @@ with cont:
 
 
 # End timing
-total_time = time.time() - start_time
-st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
-st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
-st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
+# total_time = time.time() - start_time
+# st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
+# st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
+# st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
 
