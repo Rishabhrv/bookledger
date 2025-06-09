@@ -4821,7 +4821,7 @@ with srcol3:
             st.rerun()
 
         # Tabs for filter categories
-        tabs = st.tabs(["Publisher", "Status", "Author", "Date"])
+        tabs = st.tabs(["Status", "Publisher", "Author", "Date"])
 
         with tabs[3]:
             # Date Filters Expander
@@ -4893,7 +4893,7 @@ with srcol3:
                     st.session_state.end_date_filter = None
 
         # Publisher Filters Expander
-        with tabs[0]:
+        with tabs[1]:
             publisher_options = unique_publishers
             selected_publisher = st.pills(
                 "Publisher:",
@@ -4907,7 +4907,7 @@ with srcol3:
                 st.session_state.publisher_filter = None
 
         # Status Filters Expander
-        with tabs[1]:
+        with tabs[0]:
             # Status filter
             status_options = ["Delivered", "On Going"]
             if user_role == "admin":
@@ -5270,8 +5270,8 @@ with cont:
 
 
 # End timing
-# total_time = time.time() - start_time
-# st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
-# st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
-# st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
+total_time = time.time() - start_time
+st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
+st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
+st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
 
