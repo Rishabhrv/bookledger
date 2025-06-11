@@ -386,7 +386,7 @@ def fetch_all_printeditions(book_ids, conn):
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
     query = """
     SELECT book_id, print_id, status
-    FROM printeditions
+    FROM PrintEditions
     WHERE book_id IN :book_ids
     """
     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
@@ -395,9 +395,9 @@ def fetch_all_printeditions(book_ids, conn):
 def fetch_print_details(book_id, conn):
     query = """
     SELECT pe.book_id, pe.print_id, bd.batch_id, pe.copies_planned, pb.print_sent_date, pb.print_receive_date, pb.status
-    FROM printeditions pe
-    LEFT JOIN batchdetails bd ON pe.print_id = bd.print_id
-    LEFT JOIN printbatches pb ON bd.batch_id = pb.batch_id
+    FROM PrintEditions pe
+    LEFT JOIN BatchDetails bd ON pe.print_id = bd.print_id
+    LEFT JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
     WHERE pe.book_id = :book_id
     """
     return conn.query(query, params={'book_id': book_id}, show_spinner=False)
