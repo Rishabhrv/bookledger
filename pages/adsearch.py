@@ -211,6 +211,7 @@ try:
                     "Email": book_info.get(f'Email Address {i}', None),
                     "Contact": book_info.get(f'Contact No. {i}', None),
                     "Publishing Consultant": book_info.get(f'Publishing Consultant {i}', None),
+                    "Corresponding Author/Agent": book_info.get(f'Corresponding Author/Agent {i}', None),
                     "Welcome Mail": book_info.get(f'Welcome Mail / Confirmation {i}', None),
                     "Author Detail": book_info.get(f'Author Detail {i}', None),
                     "Photo": book_info.get(f'Photo {i}', None),
@@ -249,7 +250,7 @@ try:
     with col1:
         search_column = st.selectbox(
             "🗃️ Select Column to Search:", 
-            ['Book ID', 'Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone'],
+            ['Book ID', 'Book Title', 'Author Name', 'Corresponding Author', 'ISBN', 'Author Email', 'Author Phone'],
             key="search_column"
         )
 
@@ -266,7 +267,7 @@ try:
             # Handle single-column fields (ISBN, Book Title)
             return sorted(operations_data[column_prefix].astype(str).str.strip().dropna().unique())
         else:
-            # Handle author-related fields (e.g., Author Name, Email, Phone)
+            # Handle author-related fields (e.g., Author Name, Email, Phone, Corresponding Author)
             for i in range(1, num_authors + 1):
                 column = f"{column_prefix} {i}"
                 if column in operations_data.columns:
@@ -275,11 +276,12 @@ try:
 
     # Input for search query (text input or select box based on column)
     with col2:
-        if search_column in ['Book Title', 'Author Name', 'ISBN', 'Author Email', 'Author Phone']:
+        if search_column in ['Book Title', 'Author Name', 'Corresponding Author', 'ISBN', 'Author Email', 'Author Phone']:
             # Map search column to the correct column prefix in DataFrame
             column_mapping = {
                 'Book Title': 'Book Title',
                 'Author Name': 'Author Name',
+                'Corresponding Author': 'Corresponding Author/Agent',
                 'ISBN': 'ISBN',
                 'Author Email': 'Email Address',
                 'Author Phone': 'Contact No.'
@@ -314,6 +316,13 @@ try:
                        (operations_data['Author Name 2'] == search_query) | \
                        (operations_data['Author Name 3'] == search_query) | \
                        (operations_data['Author Name 4'] == search_query)
+                filtered_data = operations_data[mask]
+            elif search_column == "Corresponding Author":
+                # Logic for Corresponding Author
+                mask = (operations_data['Corresponding Author/Agent 1'] == search_query) | \
+                       (operations_data['Corresponding Author/Agent 2'] == search_query) | \
+                       (operations_data['Corresponding Author/Agent 3'] == search_query) | \
+                       (operations_data['Corresponding Author/Agent 4'] == search_query)
                 filtered_data = operations_data[mask]
             elif search_column == "Book Title":
                 # Logic for Book Title
@@ -513,6 +522,9 @@ try:
                                     <p style="margin-bottom: 7px;"><b>Contact:</b> {author['Contact']}</p>
                                     <p style="margin-bottom: 7px;"><b>Publishing Consultant:</b> 
                                     <span style="color:rgb(236, 116, 35); font-weight: bold;">{author['Publishing Consultant']}</span>
+                                    </p>
+                                    <p style="margin-bottom: 7px;"><b>Corresponding Author:</b> 
+                                    <span style="color:rgb(236, 116, 35); font-weight: bold;">{author['Corresponding Author/Agent']}</span>
                                     </p>
                                     <p style="margin-bottom: 7px;"><b>Welcome Mail:</b> {highlight_boolean(author['Welcome Mail'])}</p>
                                     <p style="margin-bottom: 7px;"><b>Photo:</b> {highlight_boolean(author['Photo'])}</p>

@@ -4,6 +4,8 @@ import requests
 import logging
 from logging.handlers import RotatingFileHandler
 import time
+from constants import ACCESS_TO_BUTTON
+
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -28,39 +30,21 @@ handler.setFormatter(formatter)
 handler.addFilter(NoWatchdogFilter())
 logger.addHandler(handler)
 
-# Flask endpoints
-FLASK_AUTH_URL = "https://crmserver.agvolumes.com/auth/validate_and_details"
-FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
-FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 
 #Secrets and constants
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
 VALID_APPS = {"main", "operations"}
 
+# Flask endpoints
+FLASK_AUTH_URL = "https://crmserver.agvolumes.com/auth/validate_and_details"
+FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
+FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 
 # # Configuration
 # FLASK_AUTH_URL = "http://localhost:5001/auth/validate_and_details"
 # FLASK_LOGIN_URL = "http://localhost:5001/login"
 # FLASK_LOGOUT_URL = "http://localhost:5001/logout"
-
-ACCESS_TO_BUTTON = {
-    # Loop buttons (table)
-    "ISBN": "manage_isbn_dialog",
-    "Payment": "manage_price_dialog",
-    "Authors": "edit_author_dialog",
-    "Operations": "edit_operation_dialog",
-    "Printing & Delivery": "edit_inventory_delivery_dialog",
-    "DatadashBoard": "datadashoard",
-    "Advance Search": "advance_search",
-    "Team Dashboard": "team_dashboard",
-    "Print Management": "print_management",
-    "Inventory" : "inventory",
-    "Open Author Positions": "open_author_positions",
-    # Non-loop buttons
-    "Add Book": "add_book_dialog",
-    "Authors Edit": "edit_author_detail"
-}
 
 
 def clear_auth_session():

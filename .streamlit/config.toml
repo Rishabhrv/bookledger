@@ -7,3 +7,5 @@ toolbarMode = "minimal"
 
 [server]
 runOnSave = true
+enableCORS = false
+enableXsrfProtection = false

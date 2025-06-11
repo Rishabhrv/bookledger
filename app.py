@@ -10,6 +10,7 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
+from constants import ACCESS_TO_BUTTON
 
 
 ####################################################################################################################
@@ -65,19 +66,6 @@ size = "large",
 icon_image = small_logo
 )
 
-st.markdown("""
-    <style>
-            
-        /* Remove Streamlit's default top padding */
-        .main > div {
-            padding-top: 0px !important;
-        }
-        /* Ensure the first element has minimal spacing */
-        .block-container {
-            padding-top: 10px !important;  /* Small padding for breathing room */
-        }
-            """, unsafe_allow_html=True)
-
 
 ########################################################################################################################
 ##################################--------------- Token Validation ----------------------------######################
@@ -99,9 +87,8 @@ user_name = st.session_state.get("username", "Unknown")
 token = st.session_state.token
 
 # Base URL for your app
-BASE_URL = "https://newcrm.agvolumes.com"  # Update with your deployed app's URL
-
-#BASE_URL = "http://localhost:8501"  # Update with your deployed app's URL
+BASE_URL = "https://newcrm.agvolumes.com" 
+#BASE_URL = "http://localhost:8501"  
 
 #UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
 UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
@@ -112,25 +99,20 @@ UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
 ##################################--------------- Configure Functions ----------------------------######################
 #######################################################################################################################
 
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 10px !important;  /* Small padding for breathing room */
+        }
+            """, unsafe_allow_html=True)
 
-# Define mapping of access values to button functions
-ACCESS_TO_BUTTON = {
-    # Loop buttons (table)
-    "ISBN": "manage_isbn_dialog",
-    "Payment": "manage_price_dialog",
-    "Authors": "edit_author_dialog",
-    "Operations": "edit_operation_dialog",
-    "Printing & Delivery": "edit_inventory_delivery_dialog",
-    "DatadashBoard": "datadashoard",
-    "Advance Search": "advance_search",
-    "Team Dashboard": "team_dashboard",
-    "Print Management": "print_management",
-    "Inventory" : "inventory",
-    "Open Author Positions": "open_author_positions",
-    # Non-loop buttons
-    "Add Book": "add_book_dialog",
-    "Authors Edit": "edit_author_detail"
-}
+
 
 # Button configuration
 BUTTON_CONFIG = {
@@ -155,6 +137,13 @@ BUTTON_CONFIG = {
         "icon": "📈",
         "page_path": "team_dashboard",
         "permission": "team_dashboard",
+        "type": "new_tab",
+    },
+    "pending_books": {
+        "label": "Pending Work",
+        "icon": "⚠️",
+        "page_path": "pending_books",
+        "permission": "pending_books",
         "type": "new_tab",
     },
     "print_management": {
@@ -196,6 +185,7 @@ BUTTON_CONFIG = {
 }
 
 st.cache_data.clear()
+
 
 
 ########################################################################################################################
@@ -259,6 +249,7 @@ elif user_role != "admin":
 #######################################################################################################################
 
 # Function to fetch book details (title, is_single_author, num_copies, print_status)
+
 def fetch_book_details(book_id, conn):
     query = f"""
     SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , num_copies, syllabus_path, print_status,is_publish_only, publisher
@@ -311,6 +302,7 @@ def is_button_allowed(button_name, debug=False):
         st.write(f"Debug: allowed_buttons={allowed_buttons}")
     return button_name in allowed_buttons
 
+
 # Function to fetch book_author details for multiple book_ids
 def fetch_all_book_authors(book_ids, conn):
     if not book_ids:  # Handle empty book_ids
@@ -332,6 +324,7 @@ def fetch_all_book_authors(book_ids, conn):
     WHERE ba.book_id IN :book_ids
     """
     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+
 
 def fetch_all_printeditions(book_ids, conn):
     if not book_ids:  # Handle empty book_ids
@@ -3174,13 +3167,13 @@ def edit_author_dialog(book_id, conn):
 
 
 
-    
+
 
 ###################################################################################################################################
 ##################################--------------- Edit Operations Dialog ----------------------------##################################
 ###################################################################################################################################
 
-@st.cache_data
+
 def fetch_unique_names(column):
     query = f"SELECT DISTINCT {column} AS name FROM books WHERE {column} IS NOT NULL AND {column} != ''"
     return sorted(conn.query(query,show_spinner = False)['name'].tolist())
@@ -5097,7 +5090,7 @@ paginated_books = filtered_books.iloc[start_idx:end_idx]
 
 # Display the table
 column_size = [0.5, 3.8, 1, 0.98, 1.2, 2]
-
+render_start = time.time()
 cont = st.container(border=False)
 with cont:
     if paginated_books.empty:
@@ -5116,7 +5109,7 @@ with cont:
         reversed_grouped_books = reversed(list(grouped_books))
 
         # Table Body
-        render_start = time.time()
+        
         for month, monthly_books in reversed_grouped_books:
             monthly_books = monthly_books.sort_values(by='date', ascending=False)
             num_books = len(monthly_books)
