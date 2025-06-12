@@ -73,10 +73,10 @@ st.markdown("""
 .author-pill {
     background-color: #E3F2FD;
     color: #1E88E5;
-    padding: 2px 8px;
-    border-radius: 12px;
+    padding: 2px 5px;
+    border-radius: 13px;
     font-size: 11px;
-    margin-left: 8px;
+    margin-left: 7px;
     display: inline-block;
 }
 .table-header {
@@ -93,7 +93,6 @@ st.markdown("""
     margin-bottom: 20px;
     margin-top: 20px;    
 }
-
 
 .days-badge-green {
     background-color: #E8F5E9;
@@ -141,184 +140,182 @@ st.markdown("""
     white-space: nowrap;
 }
 .stuck-reason-welcome-mail-pending {
-    background-color: #E1F5FE;
-    color: #0288D1;
+    background-color: #D9E6FF;
+    color: #2B579A;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
     text-align: center;
-    min-width: 190px; /* Adjust as needed */
-    text-align: center;
+    min-width: 190px;
     white-space: nowrap;
 }
 .stuck-reason-cover-agreement-pending {
-    background-color: #F3E5F5;
-    color: #7B1FA2;
+    background-color: #F0E1FF;
+    color: #5C2D91;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-author-details {
-    background-color: #E0F2E9;
-    color: #2E7D32;
+    background-color: #DDF4E8;
+    color: #1A6642;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-photo {
-    background-color: #FFF3E0;
-    color: #EF6C00;
+    background-color: #FFE8D6;
+    color: #B35600;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-id-proof {
-    background-color: #FCE4EC;
-    color: #C2185B;
+    background-color: #E0F7FA;
+    color: #00838F;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-agreement {
-    background-color: #E8EAF6;
-    color: #3F51B5;
+    background-color: #E3E7FF;
+    color: #2E3A9B;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-digital-proof {
-    background-color: #E0F7FA;
-    color: #006064;
+    background-color: #D6F0F5;
+    color: #005B66;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-print-confirmation {
-    background-color: #F1F8E9;
-    color: #33691E;
+    background-color: #E8F3D8;
+    color: #355E1F;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-writing-pending {
-    background-color: #FFFDE7;
-    color: #FBC02D;
+    background-color: #FFF3D6;
+    color: #B38700;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-proofreading-pending {
-    background-color: #EDE7F6;
-    color: #5E35B1;
+    background-color: #E8DAFF;
+    color: #4B2A8C;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-formatting-pending {
-    background-color: #E3F2FD;
-    color: #1E88E5;
+    background-color: #DBEAFF;
+    color: #1F5EAA;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-cover-design-pending {
-    background-color: #FFEBEE;
-    color: #D81B60;
+    background-color: #FFD6E0;
+    color: #9B1B4C;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-in-printing {
-    background-color: #E8F5E9;
-    color: #388E3C;
+    background-color: #E0F2E3;
+    color: #2A6B3A;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-not-dispatched-yet {
-    background-color: #FFF9C4;
-    color: #F9A825;
+    background-color: #FFF0D1;
+    color: #B37700;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-waiting-for-print {
-    background-color: #ECEFF1;
-    color: #455A64;
+    background-color: #E6ECEF;
+    color: #374957;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
 .stuck-reason-not-started {
-    background-color: #EFEBE9;
-    color: #4E342E;
+    background-color: #ECE9E6;
+    color: #40352F;
     padding: 6px 8px;
     border-radius: 12px;
     font-size: 12px;
     display: inline-block;
-    min-width: 190px; /* Adjust as needed */
+    min-width: 190px;
     text-align: center;
     white-space: nowrap;
 }
-            
-            
+                      
 .pill-badge {
     padding: 6px 8px;
     border-radius: 12px;
@@ -414,15 +411,12 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
         ("photo_recive", "Waiting for Photo"),
         ("id_proof_recive", "Waiting for ID Proof"),
         ("agreement_received", "Waiting for Agreement"),
-        ("digital_book_sent", "Waiting for Digital Proof"),
-        ("printing_confirmation", "Waiting for Print Confirmation")
-    ]
-
-    operations_sequence = [
         ("writing", "Writing Pending", "writing_start", "writing_end"),
         ("proofreading", "Proofreading Pending", "proofreading_start", "proofreading_end"),
         ("formatting", "Formatting Pending", "formatting_start", "formatting_end"),
-        ("cover", "Cover Design Pending", "cover_start", "cover_end")
+        ("cover", "Cover Design Pending", "cover_start", "cover_end"),
+        ("digital_book_sent", "Waiting for Digital Proof"),
+        ("printing_confirmation", "Waiting for Print Confirmation")
     ]
 
     if not book_printeditions_df.empty:
@@ -433,19 +427,22 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
             return "Not Dispatched Yet"
 
     if not book_authors_df.empty:
-        for field, label in checklist_sequence:
-            if not book_authors_df[field].all():
-                return label
+        for field, label, *date_fields in checklist_sequence:
+            if len(date_fields) == 2:  # Operations with start/end dates
+                start_field, end_field = date_fields
+                if book_row[start_field] is not None and pd.notnull(book_row[start_field]):
+                    if book_row[end_field] is None or pd.isnull(book_row[end_field]):
+                        return label
+                else:
+                    return label
+            else:  # Checklist items
+                if not book_authors_df[field].all():
+                    return label
 
-    for _, label, start_field, end_field in operations_sequence:
-        if book_row[start_field] is not None and pd.notnull(book_row[start_field]):
-            if book_row[end_field] is None or pd.isnull(book_row[end_field]):
-                return label
-        else:
-            return label
-
-    if (not book_authors_df.empty and all(book_authors_df[field].all() for field, _ in checklist_sequence) and
-        book_row['cover_end'] is not None and pd.notnull(book_row['cover_end'])):
+    if (not book_authors_df.empty and 
+        all(book_authors_df[field].all() for field, _, *date_fields in checklist_sequence if len(date_fields) == 0) and
+        all(book_row[end_field] is not None and pd.notnull(book_row[end_field]) 
+            for _, _, *date_fields in checklist_sequence if len(date_fields) == 2)):
         return "Waiting for Print"
 
     return "Not Started"
@@ -680,7 +677,7 @@ conn = connect_db()
 # Fetch books from the database where deliver = 0
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
-       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher
+       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type
 FROM books
 WHERE deliver = 0
 """
@@ -690,6 +687,10 @@ books_data = conn.query(query, show_spinner=False)
 book_ids = books_data['book_id'].tolist()
 authors_data = fetch_all_book_authors(book_ids, conn)
 printeditions_data = fetch_all_printeditions(book_ids, conn)
+
+import streamlit as st
+import pandas as pd
+from datetime import date, timedelta
 
 # Get all possible stuck reasons
 all_stuck_reasons = [
@@ -703,30 +704,48 @@ all_stuck_reasons = [
 # Get all possible publishers
 all_publishers = books_data['publisher'].unique().tolist()
 
-# Handle reset via query params to avoid widget modification issues
-query_params = st.query_params
-if "reset" in query_params and query_params["reset"] == "true":
-    st.session_state.search_query = ""
-    st.session_state.days_filter = 30
-    st.session_state.selected_reasons = []
-    st.session_state.selected_publishers = []
-    st.session_state.sort_by = "Book ID"
-    st.session_state.sort_order = "Ascending"
-    st.query_params.clear()
+default_days_filter = 40  # Default days filter value
 
-# Initialize session state
+# Initialize session state with defaults
 if 'search_query' not in st.session_state:
     st.session_state.search_query = ""
 if 'days_filter' not in st.session_state:
-    st.session_state.days_filter = 40
+    st.session_state.days_filter = default_days_filter
 if 'selected_reasons' not in st.session_state:
     st.session_state.selected_reasons = []
 if 'selected_publishers' not in st.session_state:
     st.session_state.selected_publishers = []
+if 'selected_checklist_reasons' not in st.session_state:
+    st.session_state.selected_checklist_reasons = []
+if 'selected_operations_reasons' not in st.session_state:
+    st.session_state.selected_operations_reasons = []
+if 'selected_afterwork_reasons' not in st.session_state:
+    st.session_state.selected_afterwork_reasons = []
 if 'sort_by' not in st.session_state:
     st.session_state.sort_by = "Book ID"
 if 'sort_order' not in st.session_state:
     st.session_state.sort_order = "Ascending"
+
+# Handle reset via query params
+query_params = st.query_params
+if "reset" in query_params and query_params["reset"] == "true":
+    # Clear query params first
+    st.query_params.clear()
+    # Use a form or callback to reset widget states instead of direct modification
+    st.session_state.reset_trigger = True
+
+# Check for reset trigger and reset values
+if 'reset_trigger' in st.session_state and st.session_state.reset_trigger:
+    st.session_state.search_query = ""
+    st.session_state.days_filter = default_days_filter
+    st.session_state.selected_reasons = []
+    st.session_state.selected_publishers = []
+    st.session_state.selected_checklist_reasons = []
+    st.session_state.selected_operations_reasons = []
+    st.session_state.selected_afterwork_reasons = []
+    st.session_state.sort_by = "Book ID"
+    st.session_state.sort_order = "Ascending"
+    st.session_state.reset_trigger = False  # Reset the trigger
 
 # Apply Filters and Sorting
 filtered_data = books_data.copy()
@@ -796,20 +815,53 @@ with st.container():
                       label_visibility="collapsed")
     with col3:
         with st.popover("Filters & Sort", use_container_width=True):
-            st.number_input("Show books older than (days)", min_value=0, value=st.session_state.days_filter, step=1, key="days_filter")
-            st.multiselect("Filter by Stuck Reason", all_stuck_reasons, key="selected_reasons")
-            st.multiselect("Filter by Publisher", all_publishers, key="selected_publishers")
-            st.pills("Sort by", 
+            txtcol1, txtcol2, txtcol3 = st.columns([1.5, 2, 1], gap="small", vertical_alignment="bottom")
+            with txtcol1:
+                st.number_input("Show books older than (days)", min_value=0, value=st.session_state.days_filter, step=1, key="days_filter")
+            st.write("###### 📚 Filter by Publisher")
+            st.pills("Filter by Publisher",
+                     all_publishers,
+                     key="selected_publishers",
+                     selection_mode="multi",
+                     label_visibility="collapsed")
+            st.write("###### ✍️ Filter by Author Checklist")
+            st.pills("",
+                     ["Welcome Mail Pending", "Cover/Agreement Pending", "Waiting for Author Details", 
+                      "Waiting for Photo", "Waiting for ID Proof", "Waiting for Agreement",
+                      "Waiting for Digital Proof", "Waiting for Print Confirmation"],
+                     key="selected_checklist_reasons",
+                     selection_mode="multi",
+                     label_visibility="collapsed",
+                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_checklist_reasons) if 'selected_checklist_reasons' in st.session_state else None)
+            st.write("###### 🛠️ Filter by Operations")
+            st.pills("",
+                     ["Writing Pending", "Proofreading Pending", "Formatting Pending", 
+                      "Cover Design Pending"],
+                     key="selected_operations_reasons",
+                     selection_mode="multi",
+                     label_visibility="collapsed",
+                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_operations_reasons) if 'selected_operations_reasons' in st.session_state else None)
+            st.write("###### 🕓 Filter by After Work")
+            st.pills("",
+                     ["Waiting for Print", "In Printing", "Not Dispatched Yet"],
+                     key="selected_afterwork_reasons",
+                     selection_mode="multi",
+                     label_visibility="collapsed",
+                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_afterwork_reasons) if 'selected_afterwork_reasons' in st.session_state else None)
+            st.write("###### 🧮 Sort by")
+            st.pills("", 
                      ["Book ID", "Date", "Since Enrolled", "Stuck Reason"],
-                     key="sort_by")
-            st.radio("Sort Order", ["Ascending", "Descending"], 
+                     key="sort_by", label_visibility="collapsed")
+            st.write("###### 🔁 Sort Order")
+            st.radio("", ["Ascending", "Descending"], 
                      index=0 if st.session_state.sort_order == "Ascending" else 1, 
-                     horizontal=True, key="sort_order")
-            if st.button("Reset Filters"):
-                st.query_params["reset"] = "true"
-                st.rerun()
+                     horizontal=True, key="sort_order", label_visibility="collapsed")
+            with txtcol3:
+                if st.button(":material/restart_alt: Reset Filters", use_container_width=True, type="secondary"):
+                    st.query_params["reset"] = "true"
+                    st.rerun()
 
-with st.expander("⚠️ Pending Books Summary", expanded=False):
+with st.expander("⚠️ Pending Books Summary (Click to Open)", expanded=False):
     if not filtered_data.empty:
         show_stuck_reason_summary(filtered_data, authors_data, printeditions_data)
     else:
@@ -818,7 +870,7 @@ with st.expander("⚠️ Pending Books Summary", expanded=False):
 # Display Results
 with st.container():
     if not filtered_data.empty:
-        column_widths = [0.8, 3.8, 1.5, 1.2, 1.2, 2, 0.6]
+        column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
         with st.container(border=True):
             cols = st.columns(column_widths, vertical_alignment="bottom")
             cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
@@ -853,7 +905,7 @@ with st.container():
                 
                 cols = st.columns(column_widths, vertical_alignment="bottom")
                 cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
-                cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{author_count}</span></div>', unsafe_allow_html=True)
+                cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
                 cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
                 publisher_class = {
                     'AGPH': 'publisher-Penguin',

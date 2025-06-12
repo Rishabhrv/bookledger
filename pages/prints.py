@@ -72,7 +72,7 @@ st.markdown("""
     font-weight: bold;
     display: inline-flex;
     align-items: center;
-    font-size: 14px;
+    font-size: 16px;
     margin-bottom: 12px;
 }
             
@@ -398,7 +398,7 @@ def create_batch_dialog():
     conn = connect_db()
     st.subheader("New Batch Details")
     
-    batch_name = st.text_input("Batch Name", value=f"Batch {datetime.now().strftime('%Y-%m-%d')}")
+    batch_name = st.text_input("Batch Name", value=f"{datetime.now().strftime('%B %Y')}")
     printer_name = st.text_input("Printer Name", value="Default Printer")
     print_sent_date = st.date_input("Print Sent Date", value=datetime.now())
     
@@ -527,7 +527,7 @@ def view_batch_books_dialog(batch_id, batch_name):
 def print_management_page():
     conn = connect_db()
 
-    col1, col2, col3 = st.columns([4, 8, 1], vertical_alignment="bottom")
+    col1, col2, col3 = st.columns([8, 0.7, 1], vertical_alignment="bottom")
     with col1:
         st.write("## 📖 Print Management")
     with col2:
@@ -615,19 +615,20 @@ def print_management_page():
             if st.button(":material/edit: Edit Batch", type="secondary"):
                 edit_batch_dialog(running_batches)
         if not running_batches.empty:
-            with st.expander('Veiw Running Batches'):
+            with st.expander('View Running Batches', expanded=True):
                 for _, batch in running_batches.iterrows():
                     with st.container(border=False):
                         # Batch details in a clean layout
+                        batch_books = get_batch_books(conn, batch['batch_id'])
                         st.markdown(f'<div class="status-badge-non">{batch["batch_name"]} (ID: {batch["batch_id"]})</div>', unsafe_allow_html=True)
-                        details_cols = st.columns([2, 2, 2, 2, 0.8])
+                        details_cols = st.columns([2, 2, 2, 2, 2, 0.8])
                         details_cols[0].write(f" **Created:** {batch['created_at'].strftime('%Y-%m-%d')}")
                         details_cols[1].write(f"**Sent:** {batch['print_sent_date'].strftime('%Y-%m-%d')}")
-                        details_cols[2].write(f"**Total Copies:** {batch['total_copies']}")
-                        details_cols[3].write(f"**Printer:** {batch['printer_name']}")
+                        details_cols[2].write(f"**Total Books:** {len(batch_books)}")
+                        details_cols[3].write(f"**Total Copies:** {batch['total_copies']}")
+                        details_cols[4].write(f"**Printer:** {batch['printer_name']}")
                         
                         # Add Excel download button
-                        batch_books = get_batch_books(conn, batch['batch_id'])
                         if not batch_books.empty:
                             # Prepare Excel file
                             excel_data = pd.DataFrame({
@@ -648,17 +649,17 @@ def print_management_page():
                                 excel_data.to_excel(writer, index=False, sheet_name='Batch Books')
                             excel_bytes = output.getvalue()
                             
-                            details_cols[4].download_button(
+                            details_cols[5].download_button(
                                 label=" :material/download: Export",
                                 data=excel_bytes,
                                 file_name=f"batch_{batch['batch_id']}_books.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"download_excel_{batch['batch_id']}"
+                                key=f"download_excel_{batch['batch_id']}",
+                                type="tertiary"
                             )
                         
                         # Books table
                         if not batch_books.empty:
-                            st.markdown('<div style="margin-top: 10px;">Books in this batch:</div>', unsafe_allow_html=True)
                             running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2, 1]
                             with st.container(border=True):
                                 cols = st.columns(running_batches_column)
@@ -689,6 +690,7 @@ def print_management_page():
             st.info("No running batches found.")
     
     st.markdown('<div class="container-spacing"></div>', unsafe_allow_html=True)
+    
 
     # Section 4: Completed Batches with Custom Table
     completed_batches = conn.query("""

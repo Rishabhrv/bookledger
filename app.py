@@ -113,7 +113,6 @@ st.markdown("""
             """, unsafe_allow_html=True)
 
 
-
 # Button configuration
 BUTTON_CONFIG = {
 
@@ -161,7 +160,7 @@ BUTTON_CONFIG = {
         "type": "new_tab",
     },
     "author_positions": {
-        "label": "Author Positions",
+        "label": "Open Positions",
         "icon": "📚",
         "page_path": "author_positions",
         "permission": "open_author_positions",

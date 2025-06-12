@@ -927,12 +927,18 @@ def render_full_page():
     fortifiveday_status_months = list(fortifiveday_status['Month'].unique())
     fortifiveday_status_months.append("Total") 
 
-    # Display the last 45 days data section with count, emoji, and title
-    st.markdown(
-        f"<h5>📅 {fortifiveday_status['Book ID'].nunique()} Books on hold older than 40 days"
-        f"<span class='status-badge-red'>Status: On Hold</span></h5>", 
-        unsafe_allow_html=True
-    )
+    col1, col2 = st.columns([2.5, 1], vertical_alignment="bottom", gap ="small")
+
+    with col1:
+        # Display the last 45 days data section with count, emoji, and title
+        st.markdown(
+            f"<h5>📅 {fortifiveday_status['Book ID'].nunique()} Books on hold older than 40 days"
+            f"<span class='status-badge-red'>Status: On Hold</span></h5>", 
+            unsafe_allow_html=True
+        )
+    with col2:
+        if st.button(":material/open_in_new: Go to Pending Work Page for Detailed Info", key="pending_button", type="secondary", use_container_width=True):
+            st.switch_page('pages/pending_books.py')
 
     fortifiveday_status_selected_month = st.pills("2024", fortifiveday_status_months, selection_mode="single", 
                                 default =fortifiveday_status_months[-1],label_visibility ='collapsed')
