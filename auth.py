@@ -34,7 +34,7 @@ logger.addHandler(handler)
 #Secrets and constants
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
-VALID_APPS = {"main", "operations"}
+VALID_APPS = {"main", "operations", 'ijisem'}
 
 # Flask endpoints
 FLASK_AUTH_URL = "https://crmserver.agvolumes.com/auth/validate_and_details"
@@ -96,6 +96,12 @@ def validate_token():
         start_date = user_details.get('start_date', '')
         username = user_details.get('username', '')
 
+        # Convert access to list if it's a string or None
+        if isinstance(access, str):
+            access = [access] if access else []
+        elif access is None:
+            access = []
+
         # Role and access validation
         if role not in VALID_ROLES:
             logger.error(f"Invalid role: {role}")
@@ -114,6 +120,11 @@ def validate_token():
                 if not (len(access) == 1 and access[0] in valid_access):
                     logger.error(f"Invalid access for operations app: {access}")
                     raise jwt.InvalidTokenError(f"Invalid access for operations app: {access}")
+            elif app == 'ijisem':
+                valid_access = {"Full Access"}
+                if not (len(access) == 1 and access[0] in valid_access):
+                    logger.error(f"Invalid access for ijisem app: {access}")
+                    raise jwt.InvalidTokenError(f"Invalid access for ijisem app: {access}")
 
         # Cache user details
         st.session_state.user_details = user_details

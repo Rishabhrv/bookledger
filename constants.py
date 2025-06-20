@@ -14,6 +14,7 @@ ACCESS_TO_BUTTON = {
     "Inventory": "inventory",
     "Open Author Positions": "open_author_positions",
     "Pending Work": "pending_books",
+    "IJISEM": "ijisem",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

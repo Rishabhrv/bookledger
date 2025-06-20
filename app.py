@@ -85,6 +85,7 @@ user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 token = st.session_state.token
+#token='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJleHAiOjE3NDk4MTUzNTl9.8N792ejuV8l6-rt-M5sdXIuNl5X40BotIdzjzILf6oY'
 
 # Base URL for your app
 BASE_URL = "https://newcrm.agvolumes.com" 
@@ -110,6 +111,9 @@ st.markdown("""
         .block-container {
             padding-top: 10px !important;  /* Small padding for breathing room */
         }
+        </style>
+            
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0" rel="stylesheet" />
             """, unsafe_allow_html=True)
 
 
@@ -121,6 +125,14 @@ BUTTON_CONFIG = {
         "icon": "🔍",
         "page_path": "adsearch",
         "permission": "advance_search",
+        "type": "new_tab",
+    },
+
+    "IJISEM": {
+        "label": "IJISEM",
+        "icon": "🧾",
+        "page_path": "ijisem",
+        "permission": "ijisem",
         "type": "new_tab",
     },
 
@@ -183,8 +195,7 @@ BUTTON_CONFIG = {
     },
 }
 
-st.cache_data.clear()
-
+#st.cache_data.clear()
 
 
 ########################################################################################################################
@@ -500,6 +511,32 @@ def get_status_pill(book_id, row, authors_df, printeditions_df):
     )
     return status
 
+def fetch_author_names(book_id, conn):
+    """Fetch author names for a paper, formatted with Material Icons."""
+    # Validate conn
+    if not hasattr(conn, 'session'):
+        return "Database error: Invalid connection"
+    
+    try:
+        with conn.session as session:
+            query = text("""
+                SELECT a.name
+                FROM authors a
+                JOIN book_authors pa ON a.author_id = pa.author_id
+                WHERE pa.book_id = :book_id
+                ORDER BY pa.author_position IS NULL, pa.author_position ASC
+            """)
+            results = session.execute(query, {'book_id': book_id}).fetchall()
+            author_names = [result.name for result in results]
+            if author_names:
+                return ", ".join(
+                    f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
+                    for name in author_names
+                )
+            return "No authors"
+    except Exception as e:
+        return f"Database error: {str(e)}"
+
 
 ###################################################################################################################################
 ##################################--------------- Admin Panel ----------------------------##################################
@@ -604,7 +641,7 @@ def manage_users(conn):
                 st.date_input("Data From", value=None, disabled=True, key="new_start_date")
             else:
                 with col3:
-                    new_app = st.selectbox("App", options=["main", "operations"], key="new_app_select")
+                    new_app = st.selectbox("App", options=["main", "operations", "ijisem"], key="new_app_select")
                 with col4:
                     access_options = (
                         list(ACCESS_TO_BUTTON.keys())
@@ -617,14 +654,24 @@ def manage_users(conn):
                             options=access_options,
                             default=[],
                             key="new_access_select",
-                            help="Select one or more access permissions"
+                            help="Select one or more access permissions",
+                            disabled=new_app != "main"
+                        )
+                    elif new_app == "ijisem":
+                        new_access = st.selectbox(
+                            "Access",
+                            options=["Full Access"],
+                            key="new_access_select_ijisem",
+                            help="IJISEM users have full access by default",
+                            disabled=new_app != "ijisem"
                         )
                     else:
                         new_access = st.selectbox(
                             "Access",
                             options=access_options,
-                            key="new_access_select",
-                            help="Select one access permission"
+                            key="new_access_select_operations",
+                            help="Select one access permission",
+                            disabled=new_app != "operations"  
                         )
                 new_start_date = st.date_input(
                     "Data From",
@@ -642,7 +689,7 @@ def manage_users(conn):
                 else:
                     access_value = None if new_role == "admin" else (
                         ",".join(new_access) if new_app == "main" and new_access else
-                        new_access if new_app == "operations" and new_access else None
+                        new_access if new_app in ("operations", "ijisem") and new_access else None
                     )
 
                     with st.spinner("Adding user..."):
@@ -715,14 +762,24 @@ def manage_users(conn):
                     st.date_input("Data From", value=None, disabled=True, key=f"start_date_{selected_user.id}")
                 else:
                     with col3:
-                        new_app = st.selectbox("App", options=["main", "operations"], index=["main", "operations"].index(selected_user.app) if selected_user.app else 0, key=f"app_select_{selected_user.id}")
+                        new_app = st.selectbox("App", options=["main", "operations", "ijisem"], index=["main", "operations", "ijisem"].index(selected_user.app) if selected_user.app in ["main", "operations", "ijisem"] else 0, key=f"app_select_{selected_user.id}")
                     with col4:
                         access_options = list(ACCESS_TO_BUTTON.keys()) if new_app == "main" else ["writer", "proofreader", "formatter", "cover_designer"]
                         if new_app == "main":
                             default_access = [access.strip() for access in selected_user.access.split(",") if access.strip() in access_options] if selected_user.access and isinstance(selected_user.access, str) else []
-                            new_access = st.multiselect("Access", options=access_options, default=default_access, key=f"access_select_{selected_user.id}")
+                            new_access = st.multiselect("Access", options=access_options, default=default_access, key=f"access_select_{selected_user.id}", disabled=new_app != "main")
+                        elif new_app == "ijisem":
+                            new_access = st.selectbox(
+                                "Access",
+                                options=["Full Access"],
+                                index=0 if selected_user.access == "Full Access" else 0,
+                                key=f"access_select_ijisem_{selected_user.id}",
+                                help="IJISEM users have full access by default",
+                                disabled=new_app != "ijisem"
+                            )
                         else:
-                            new_access = st.selectbox("Access", options=access_options, index=access_options.index(selected_user.access) if selected_user.access in access_options else 0, key=f"access_select_{selected_user.id}")
+                            default_access = selected_user.access if selected_user.access in access_options else access_options[0]
+                            new_access = st.selectbox("Access", options=access_options, index=access_options.index(default_access), key=f"access_select_operations_{selected_user.id}", disabled=new_app != "operations")
                     new_start_date = st.date_input("Data From", value=selected_user.start_date, key=f"start_date_{selected_user.id}", disabled=new_app != "main")
 
                 btn_col1, btn_col2 = st.columns([3, 1])
@@ -731,7 +788,10 @@ def manage_users(conn):
                         if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                             st.error("❌ Invalid email format.")
                         else:
-                            access_value = None if new_role == "admin" else (",".join(new_access) if new_app == "main" and new_access else new_access if new_app == "operations" and new_access else None)
+                            access_value = None if new_role == "admin" else (
+                                ",".join(new_access) if new_app == "main" and new_access else
+                                new_access if new_app in ["operations", "ijisem"] and new_access else None
+                            )
                             with st.spinner("Saving changes..."):
                                 time.sleep(1)
                                 with conn.session as s:
@@ -4613,6 +4673,12 @@ st.markdown("""
             cursor: pointer;
             transition: background-color 0.2s;
         }
+            
+        .author-names {
+            font-size: 11px;
+            color: #555; 
+            margin-bottom: 0px; /* Space between author names */
+        }
         .pagination-button:disabled {
             background-color: #d3d3d3;
             cursor: not-allowed;
@@ -5103,6 +5169,7 @@ with cont:
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
         
+        
         # Group and sort paginated books by month (for display purposes only)
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
@@ -5116,6 +5183,7 @@ with cont:
             
             for _, row in monthly_books.iterrows():
                 st.markdown('<div class="data-row">', unsafe_allow_html=True)
+                authors_display = fetch_author_names(row['book_id'], conn)
                 col1, col2, col3, col4, col5, col6 = st.columns(column_size, vertical_alignment="center")
                 with col1:
                     st.write(row['book_id'])
@@ -5158,6 +5226,7 @@ with cont:
                         f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
                         unsafe_allow_html=True
                     )
+                    st.markdown(f'<div class="author-names">{authors_display}</div>', unsafe_allow_html=True)
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:
@@ -5209,6 +5278,8 @@ with cont:
                                 edit_inventory_delivery_dialog(row['book_id'], conn)
                         else:
                             st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Not Authorised", disabled=True)
+                    # with st.popover("More Options", use_container_width=True):
+                    #     st.write("hello")
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)

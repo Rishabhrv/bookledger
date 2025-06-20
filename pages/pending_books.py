@@ -615,7 +615,7 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             table_html += "</table>"
             st.markdown(table_html, unsafe_allow_html=True)
         else:
-            st.info("No pending author tasks for this book.")
+            st.success("✅ All author tasks are completed.")
     else:
         st.info("No authors found for this book.")
 
@@ -825,7 +825,7 @@ with st.container():
                      selection_mode="multi",
                      label_visibility="collapsed")
             st.write("###### ✍️ Filter by Author Checklist")
-            st.pills("",
+            st.pills("ok",
                      ["Welcome Mail Pending", "Cover/Agreement Pending", "Waiting for Author Details", 
                       "Waiting for Photo", "Waiting for ID Proof", "Waiting for Agreement",
                       "Waiting for Digital Proof", "Waiting for Print Confirmation"],
@@ -834,7 +834,7 @@ with st.container():
                      label_visibility="collapsed",
                      on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_checklist_reasons) if 'selected_checklist_reasons' in st.session_state else None)
             st.write("###### 🛠️ Filter by Operations")
-            st.pills("",
+            st.pills("ok",
                      ["Writing Pending", "Proofreading Pending", "Formatting Pending", 
                       "Cover Design Pending"],
                      key="selected_operations_reasons",
@@ -842,18 +842,18 @@ with st.container():
                      label_visibility="collapsed",
                      on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_operations_reasons) if 'selected_operations_reasons' in st.session_state else None)
             st.write("###### 🕓 Filter by After Work")
-            st.pills("",
+            st.pills("ok",
                      ["Waiting for Print", "In Printing", "Not Dispatched Yet"],
                      key="selected_afterwork_reasons",
                      selection_mode="multi",
                      label_visibility="collapsed",
                      on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_afterwork_reasons) if 'selected_afterwork_reasons' in st.session_state else None)
             st.write("###### 🧮 Sort by")
-            st.pills("", 
+            st.pills("ok", 
                      ["Book ID", "Date", "Since Enrolled", "Stuck Reason"],
                      key="sort_by", label_visibility="collapsed")
             st.write("###### 🔁 Sort Order")
-            st.radio("", ["Ascending", "Descending"], 
+            st.radio("ok", ["Ascending", "Descending"], 
                      index=0 if st.session_state.sort_order == "Ascending" else 1, 
                      horizontal=True, key="sort_order", label_visibility="collapsed")
             with txtcol3:
