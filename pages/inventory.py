@@ -565,6 +565,24 @@ def show_charts():
     #     st.write("No sales data available to display.")
     st.write("Comming Soon 😊")
 
+# Initialize session state for filters and pagination
+if 'search_term' not in st.session_state:
+    st.session_state['search_term'] = ''
+if 'cell_nos' not in st.session_state:
+    st.session_state['cell_nos'] = []
+if 'out_of_stock' not in st.session_state:
+    st.session_state['out_of_stock'] = False
+if 'stock_condition' not in st.session_state:
+    st.session_state['stock_condition'] = None
+if 'stock_value' not in st.session_state:
+    st.session_state['stock_value'] = 0
+if 'sort_column' not in st.session_state:
+    st.session_state['sort_column'] = 'Book ID'
+if 'sort_order' not in st.session_state:
+    st.session_state['sort_order'] = 'Descending'
+if 'current_page' not in st.session_state:
+    st.session_state['current_page'] = 1
+
 # Search and Cell No. filter layout
 filcol1, filcol2, filcol3, filcol4 = st.columns([1.6, 4.5, 3.1, 0.6], vertical_alignment="bottom", gap="small")
 
@@ -696,25 +714,6 @@ with filcol3:
                 key="export_table",
                 type="tertiary"
             )
-
-
-# Initialize session state for filters and pagination
-if 'search_term' not in st.session_state:
-    st.session_state['search_term'] = ''
-if 'cell_nos' not in st.session_state:
-    st.session_state['cell_nos'] = []
-if 'out_of_stock' not in st.session_state:
-    st.session_state['out_of_stock'] = False
-if 'stock_condition' not in st.session_state:
-    st.session_state['stock_condition'] = None
-if 'stock_value' not in st.session_state:
-    st.session_state['stock_value'] = 0
-if 'sort_column' not in st.session_state:
-    st.session_state['sort_column'] = 'Book ID'
-if 'sort_order' not in st.session_state:
-    st.session_state['sort_order'] = 'Descending'
-if 'current_page' not in st.session_state:
-    st.session_state['current_page'] = 1
 
 # Apply filters
 filtered_df = df.copy()
