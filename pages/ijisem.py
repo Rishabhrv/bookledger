@@ -4,17 +4,20 @@ from sqlalchemy import text
 from datetime import datetime
 import time
 from auth import validate_token
+import numpy as np  
+import altair as alt
 
 
 logo = "logo/ijisem.png"
 fevicon = "logo/ijisem.png"
 small_logo = "logo/ijisem.png"
 
-st.set_page_config(page_title='IJISEM', page_icon='', layout="wide")
+st.set_page_config(page_title='IJISEM', page_icon='🧾', layout="wide")
 
 st.logo(logo,
 size = "large",
 icon_image = small_logo
+
 )
 
 # Run validation
@@ -51,46 +54,110 @@ st.markdown("""
 # CSS styles
 st.markdown("""
     <style>
-        .data-row {
-            margin-bottom: 0px; /* Remove margin to avoid gaps */
-            font-size: 14px; /* Smaller font size */
-            color: #212529;
-            padding: 8px 0; /* Vertical padding for readability */
-            transition: background-color 0.2s ease;
-        }
-            
-        .author-names {
-            font-size: 12px;
-            color: #555; 
-            margin-bottom: 3px; /* Space between author names */
-        }
-
-        .month-header {
-            font-size: 16px;
-            font-weight: 600;
-            color: #2c3e50;
-            padding: 5px 12px;
-            border-left: 4px solid #e74c3c;
-            margin: 20px 0 15px;
-            border-radius: 4px;
-        }
-
-        .table-header {
-            font-size: 14px;
-            font-weight: 600;
-            color: #2c3e50;
-            padding: 8px 0;
-            border-bottom: 2px solid #cbd1d6; /* Header bottom border */
-        }
-
-        .row-divider {
-            border-top: 1px solid #e9ecef; /* Single horizontal border between rows */
-            margin: 0;
-            padding: 0;
-        }
-
+    .data-row {
+        margin-bottom: 0px; /* Remove margin to avoid gaps */
+        font-size: 14px; /* Smaller font size */
+        color: #212529;
+        padding: 8px 0; /* Vertical padding for readability */
+        transition: background-color 0.2s ease;
+    }
         
+    .author-names {
+        font-size: 12px;
+        color: #555; 
+        margin-bottom: 3px; /* Space between author names */
+    }
+
+    .month-header {
+        font-size: 15px;
+        font-weight: 600;
+        color: #2c3e50;
+        padding: 5px 12px;
+        border-left: 4px solid #e74c3c;
+        margin: 20px 0 15px;
+        border-radius: 4px;
+    }
+
+    .table-header {
+        font-size: 14px;
+        font-weight: 600;
+        color: #2c3e50;
+        padding: 8px 0;
+        border-bottom: 2px solid #cbd1d6; /* Header bottom border */
+    }
+
+    .row-divider {
+        border-top: 1px solid #e9ecef; /* Single horizontal border between rows */
+        margin: 0;
+        padding: 0;
+    }
             
+    .badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.85em;
+        font-weight: 500;
+        text-align: center;
+        min-width: 80px;
+    }
+    .badge-completed {
+        background-color: #e6ffe6;
+        color: #2e7d32;
+    }
+    .badge-pending {
+        background-color: #FFEBEE;
+        color: #F44336;
+    }
+    .badge-accepted {
+        background-color: #E3F2FD;
+        color: #1565C0;
+    }
+    .badge-rejected {
+        background-color: #FFEBEE;
+        color: #C62828;
+    }
+    .badge-in-review {
+        background-color: #EDE7F6;
+        color: #4527A0;
+    }
+    .badge-paid {
+        background-color: #fff3e0;
+        color: #ef6c00;
+    }
+    .small-pill {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 10px;
+        font-size: 0.7em;
+        margin-left: 6px;
+        line-height: 1.2;
+    }
+    .pill-publishing {
+        background-color: #fff3e0;
+        color: #ef6c00;
+    }
+    .pill-writing-publishing {
+        background-color: #fff3e0;
+        color: #ef6c00;
+    }
+    .pill-published {
+        background-color: #e6ffe6;
+        color: #2e7d32;
+    }
+    .pill-not-published {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    .tick::before {
+        content: "✔ ";
+        color: #155724;
+    }
+    .cross::before {
+        content: "✖ ";
+        color: #721c24;
+    }
+      
     </style>
             
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@1" rel="stylesheet" />
@@ -122,13 +189,18 @@ def fetch_papers(conn):
                 p.payment_amount,
                 p.payment_date,
                 p.review_done,
-                p.publishing_type
+                p.publishing_type,
+                p.paper_uploading_date,
+                p.formatting_date,
+                p.volume,
+                p.issue
             FROM papers p
             ORDER BY p.receiving_date DESC
         """
         df = conn.query(query, show_spinner=False)
         # Convert receiving_date to datetime
         df['receiving_date'] = pd.to_datetime(df['receiving_date'])
+        df['paper_uploading_date'] = pd.to_datetime(df['paper_uploading_date'])
         df['payment_date'] = pd.to_datetime(df['payment_date'])
         return df
     except Exception as e:
@@ -165,10 +237,27 @@ def format_date(date):
     return date.strftime('%Y-%m-%d') if pd.notnull(date) else 'N/A'
 
 def format_payment(amount):
-    return f"₹{amount:.2f}" if pd.notnull(amount) else 'N/A'
+    return f"₹{int(amount)}" if pd.notnull(amount) else 'Pending'
 
 def format_review(review_done):
     return 'Completed' if review_done else 'Pending'
+
+# New function to format status with pill badges
+def format_status(status, status_type):
+    if status_type == "review":
+        badge_class = "badge-completed" if status == "Completed" else "badge-pending"
+    elif status_type == "acceptance":
+        if status == "Accepted":
+            badge_class = "badge-accepted"
+        elif status == "Rejected":
+            badge_class = "badge-rejected"
+        elif status == "Pending":
+            badge_class = "badge-pending"
+        else:  # In Review
+            badge_class = "badge-in-review"
+    else:  # payment
+        badge_class = "badge-paid" if status.startswith("₹") else "badge-pending"
+    return f'<span class="badge {badge_class}">{status}</span>'
 
 
 @st.dialog("Add New Paper", width="large")
@@ -202,7 +291,7 @@ def add_paper_dialog(conn):
         with col4:
             paper_source = st.selectbox(
                 "Paper Source",
-                options=[""] + ["Google", "Justdial", "Indiamart", "Website", "WhatsApp", "College Visit", "Office Visit", "Social Media", "Call", "Ads"],
+                options=["Google", "Justdial", "Indiamart", "Website", "WhatsApp", "College Visit", "Office Visit", "Social Media", "Call", "Ads"],
                 index=0,
                 placeholder="Select source",
                 key="paper_source"
@@ -225,7 +314,7 @@ def add_paper_dialog(conn):
         # Publishing Type with st.pills
         publishing_type = st.radio(
             "Publishing Type",
-            options=["Publishing", "Writing + Publishing"],
+            options=["Publishing Only", "Writing + Publishing"],
             horizontal=True,
         )
 
@@ -384,13 +473,10 @@ def edit_paper_dialog(paper_id, conn):
                 })
                 session.commit()
             st.success("Paper details updated successfully!")
-            #st.rerun()
+            st.rerun()
         except Exception as e:
             st.error(f"Error updating paper: {e}")
 
-
-import streamlit as st
-from sqlalchemy import text
 
 @st.dialog("Edit Author Details", width="large")
 def edit_author_dialog(paper_id, conn):
@@ -758,8 +844,8 @@ def edit_paper_status_dialog(paper_id, conn):
         ai_plagiarism = st.text_input("AI Plagiarism (%)", value=current_ai_plagiarism, key="ai_plagiarism")
         acceptance = st.selectbox(
             "Acceptance Status",
-            options=["Accepted", "Rejected", "Pending", "Revision"],
-            index=["Accepted", "Rejected", "Pending", "Revision"].index(current_acceptance) if current_acceptance in ["Accepted", "Rejected", "Pending", "Revision"] else 2,
+            options=['Accepted', 'Rejected', 'Pending', 'In Review'],
+            index=['Accepted', 'Rejected', 'Pending', 'In Review'].index(current_acceptance) if current_acceptance in ['Accepted', 'Rejected', 'Pending', 'In Review'] else 2,
             key="acceptance"
         )
         if st.button("Update Review Details", key="update_review"):
@@ -785,6 +871,7 @@ def edit_paper_status_dialog(paper_id, conn):
                     })
                     session.commit()
                 st.success("Review details updated successfully!")
+                st.rerun()  # Refresh the page to reflect changes
             except Exception as e:
                 st.error(f"Error updating review details: {e}")
 
@@ -812,6 +899,7 @@ def edit_paper_status_dialog(paper_id, conn):
                     })
                     session.commit()
                 st.success("Formatting details updated successfully!")
+                st.rerun()  # Refresh the page to reflect changes
             except Exception as e:
                 st.error(f"Error updating formatting details: {e}")
 
@@ -845,47 +933,236 @@ def edit_paper_status_dialog(paper_id, conn):
             except Exception as e:
                 st.error(f"Error updating publish details: {e}")
 
-def apply_filters(df, search_query, filters):
-    filtered_df = df
-    applied_filters = False
-
-    # Search filter
-    if search_query:
-        filtered_df = filtered_df[
-            (filtered_df['paper_id'].astype(str).str.contains(search_query, case=False, na=False)) |
-            (filtered_df['paper_title'].str.contains(search_query, case=False, na=False))
+def metrics(df):
+    with st.expander("📊 Metrics ↓", expanded=False):
+        col1, col2, col3, col4, col5, col6 = st.columns(6, gap="small")
+        with col1:
+            st.metric("Total Papers", len(df), delta=None, help="Total number of papers in the database.")
+        with col2:
+            st.metric("Total Published", len(df[df['paper_uploading_date'].notnull()]), delta=f"-{len(df[df['paper_uploading_date'].isnull()])} Not Published")
+        with col3:
+            st.metric("Accepted Papers", len(df[df['acceptance'] == 'Accepted']), delta=f"-{len(df[df['acceptance'] == 'Rejected'])} Rejected")
+        with col4:
+            st.metric("Review Pending", len(df[df['review_done'].isnull()]), delta=f"{len(df[df['review_done'].notnull()])} Done")
+        with col5:
+            st.metric("Formatting Pending", len(df[df['formatting_date'].isnull()]), delta=f"{len(df[df['formatting_date'].notnull()])} Done")
+        with col6:
+            st.metric("Payment Pending", len(df[df['payment_date'].isnull()]), delta=f"{len(df[df['payment_date'].notnull()])} Received")
+        
+        month_order = [
+            "January", "February", "March", "April", "May", "June", 
+            "July", "August", "September", "October", "November", "December"
         ]
-        applied_filters = True
+        # Extract the latest year from receiving_date
+        latest_year = int(df['receiving_date'].dt.year.max())
+        
+        # Monthly counts line chart
+        monthly_counts = df.groupby(df['receiving_date'].dt.month).agg({
+            'paper_id': 'nunique',
+        }).reset_index()
+        
+        # Rename columns for clarity
+        monthly_counts['Month'] = monthly_counts['receiving_date'].apply(lambda x: pd.to_datetime(f"{latest_year}-{int(x)}-01").strftime('%B'))
+        monthly_counts = monthly_counts.rename(columns={'paper_id': 'Total Paper'})
+        
+        line_chart = alt.Chart(monthly_counts).mark_line(point=True).encode(
+            x=alt.X('Month', title='Month', sort=month_order),
+            y=alt.Y('Total Paper', title='Total Count'),
+            color=alt.value("#5499de")  # Color for Total Papers line
+        ).properties(
+            width=600,
+            height=400
+        )
+        # Add text labels on data points
+        total_papers_charts = line_chart.mark_text(
+            align='center',
+            baseline='bottom',
+            dy=-10
+        ).encode(
+            text='Total Paper:Q'
+        )
+        
+        st.write(f"##### Total Papers in {latest_year}")
+        #st.caption("Total Papers each month")
+        st.altair_chart((line_chart + total_papers_charts), use_container_width=True)
 
-    # Year filter
-    if filters['year']:
-        filtered_df = filtered_df[filtered_df['receiving_date'].dt.year == int(filters['year'])]
-        applied_filters = True
 
-    # Month filter
-    if filters['month'] and filters['year']:
-        filtered_df = filtered_df[filtered_df['receiving_date'].dt.strftime('%B') == filters['month']]
-        applied_filters = True
+def all_filters(df):
+    # Initialize session state for filters if it doesn't exist
+    if 'filters' not in st.session_state:
+        st.session_state.filters = {
+            'year': None, 'month': None, 'pending_payment': False,
+            'pending_review': False, 'acceptance': None, 'publishing_type': None,
+            'volume': None, 'issue': None
+        }
 
-    # Pending Payment filter
-    if filters['pending_payment']:
-        filtered_df = filtered_df[filtered_df['payment_amount'].isnull()]
-        applied_filters = True
+    # Callback function to reset filters
+    def reset_all_filters():
+        st.session_state.filters = {
+            'year': None, 'month': None, 'pending_payment': False,
+            'pending_review': False, 'acceptance': None, 'publishing_type': None,
+            'volume': None, 'issue': None
+        }
+        st.session_state.search_input = ""
+        st.session_state.year_pills = None
+        st.session_state.month_pills = None
+        st.session_state.payment_pills = None
+        st.session_state.review_pills = None
+        st.session_state.acceptance_pills = None
+        st.session_state.publishing_pills = None
+        st.session_state.volume_select = None
+        st.session_state.issue_select = None
+        if 'page' in st.session_state:
+            st.session_state.page = 0
 
-    # Pending Review filter
-    if filters['pending_review']:
-        filtered_df = filtered_df[filtered_df['review_done'] == False]
-        applied_filters = True
+    # UI and Filter Logic
+    col1, col2, col3 = st.columns([5, 3, 1], vertical_alignment="center")
+    with col1:
+        search_query = st.text_input(
+            "Search by Paper ID or Title",
+            placeholder="Search by Paper ID or Title",
+            label_visibility="collapsed",
+            key="search_input"
+        )
+    with col2:
+        with st.popover("Filters", use_container_width=True):
+            st.button(":material/cached: Reset Filters", key="reset_filters_button", on_click=reset_all_filters, use_container_width=True)
+            
+            # Organize filters into tabs
+            tab1, tab2, tab3 = st.tabs(["Status", "Date", "Volume/Issue"])
+            
+            with tab2:
+                # Date Filters
+                years = sorted(df['receiving_date'].dt.year.dropna().astype(int).unique(), reverse=True)
+                selected_year = st.pills("Filter by Year", options=[str(y) for y in years], key="year_pills")
+                st.session_state.filters['year'] = selected_year
 
-    # Acceptance filter
-    if filters['acceptance']:
-        filtered_df = filtered_df[filtered_df['acceptance'] == filters['acceptance']]
-        applied_filters = True
+                if selected_year:
+                    months = sorted(df[df['receiving_date'].dt.year == int(selected_year)]['receiving_date'].dt.strftime('%B').unique())
+                    selected_month = st.pills("Filter by Month", options=months, key="month_pills")
+                    st.session_state.filters['month'] = selected_month
+                else:
+                    st.session_state.filters['month'] = None
 
-    # Publishing Type filter
-    if filters['publishing_type']:
-        filtered_df = filtered_df[filtered_df['publishing_type'] == filters['publishing_type']]
-        applied_filters = True
+            with tab1:
+                # Status Filters
+                pending_payment = st.pills("Filter by Payment Status", options=["Pending Payment"], key="payment_pills")
+                st.session_state.filters['pending_payment'] = bool(pending_payment)
+
+                pending_review = st.pills("Filter by Review Status", options=["Pending Review"], key="review_pills")
+                st.session_state.filters['pending_review'] = bool(pending_review)
+                
+                acceptance_options = ['Accepted', 'Rejected', 'Pending', 'In Review']
+                selected_acceptance = st.pills("Filter by Acceptance", options=acceptance_options, key="acceptance_pills")
+                st.session_state.filters['acceptance'] = selected_acceptance
+
+                publishing_types = ['Publishing', 'Writing + Publishing']
+                selected_publishing_type = st.pills("Filter by Publishing Type", options=publishing_types, key="publishing_pills")
+                st.session_state.filters['publishing_type'] = selected_publishing_type
+            
+            with tab3:
+                # Volume and Issue Filters without Form
+                volumes = sorted(df['volume'].dropna().astype(float).astype(int).unique())
+                volume_options = [str(int(v)) for v in volumes]
+                selected_volume = st.selectbox("Select Volume", options=[""] + volume_options, key="volume_select")
+                
+                # Populate issues based on selected volume
+                issues = []
+                if selected_volume:
+                    try:
+                        selected_volume_int = int(selected_volume)
+                        issues = sorted(df[df['volume'].apply(lambda x: int(float(x)) if pd.notnull(x) else False) == selected_volume_int]['issue'].dropna().astype(str).unique())
+                    except (ValueError, TypeError):
+                        issues = []
+                else:
+                    issues = sorted(df['issue'].dropna().astype(str).unique())
+                
+                # Reset issue selection if volume changes
+                if 'prev_volume' not in st.session_state:
+                    st.session_state.prev_volume = None
+                
+                if selected_volume != st.session_state.prev_volume:
+                    st.session_state.issue_select = None
+                    st.session_state.filters['issue'] = None
+                    st.session_state.prev_volume = selected_volume
+                
+                selected_issue = st.selectbox("Select Issue", options=[""] + issues, key="issue_select")
+                
+                # Update filters only if changed
+                if st.session_state.filters['volume'] != selected_volume:
+                    st.session_state.filters['volume'] = selected_volume if selected_volume else None
+                    st.session_state.filters['issue'] = None  # Reset issue when volume changes
+                    #st.rerun()
+                elif st.session_state.filters['issue'] != selected_issue:
+                    st.session_state.filters['issue'] = selected_issue if selected_issue else None
+                    #st.rerun()
+
+    with col3:
+        if st.button(":material/add: Add Paper", key="add_paper_button", use_container_width=True):
+            add_paper_dialog(conn)
+
+    def apply_filters(df, search_query, filters):
+        filtered_df = df.copy()
+        applied_filters = False
+
+        # Search filter
+        if search_query:
+            filtered_df = filtered_df[
+                (filtered_df['paper_id'].astype(str).str.contains(search_query, case=False, na=False)) |
+                (filtered_df['paper_title'].str.contains(search_query, case=False, na=False))
+            ]
+            applied_filters = True
+
+        # Year filter
+        if filters['year']:
+            filtered_df = filtered_df[filtered_df['receiving_date'].dt.year == int(filters['year'])]
+            applied_filters = True
+
+        # Month filter
+        if filters['month'] and filters['year']:
+            filtered_df = filtered_df[filtered_df['receiving_date'].dt.strftime('%B') == filters['month']]
+            applied_filters = True
+
+        # Pending Payment filter
+        if filters['pending_payment']:
+            filtered_df = filtered_df[filtered_df['payment_amount'].isnull()]
+            applied_filters = True
+
+        # Pending Review filter
+        if filters['pending_review']:
+            filtered_df = filtered_df[filtered_df['review_done'] == False]
+            applied_filters = True
+
+        # Acceptance filter
+        if filters['acceptance']:
+            filtered_df = filtered_df[filtered_df['acceptance'] == filters['acceptance']]
+            applied_filters = True
+
+        # Publishing Type filter
+        if filters['publishing_type']:
+            filtered_df = filtered_df[filtered_df['publishing_type'] == filters['publishing_type']]
+            applied_filters = True
+
+        # Volume filter
+        if filters['volume']:
+            try:
+                filtered_df = filtered_df[filtered_df['volume'].apply(lambda x: int(float(x)) if pd.notnull(x) else False) == int(filters['volume'])]
+                applied_filters = True
+            except (ValueError, TypeError) as e:
+                st.write(f"Debug: Volume filter skipped due to error: {str(e)}")
+
+        # Issue filter
+        if filters['issue']:
+            try:
+                filtered_df = filtered_df[filtered_df['issue'].astype(str) == str(filters['issue'])]
+                applied_filters = True
+            except (ValueError, TypeError) as e:
+                st.write(f"Debug: Issue filter skipped due to error: {str(e)}")
+
+        return filtered_df, applied_filters
+
+    # Apply filters
+    filtered_df, applied_filters = apply_filters(df, search_query, st.session_state.filters)
 
     return filtered_df, applied_filters
 
@@ -897,7 +1174,7 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
     paginated_papers = df.iloc[start_idx:end_idx]
 
     # Define column sizes for rows and headers
-    column_size = [0.8, 6, 1.2, 1, 1, 1, 2.5]
+    column_size = [0.8, 5.8, 1.1, 1, 1, 1, 2.5]
 
     with st.container(border=True):
         if paginated_papers.empty:
@@ -925,7 +1202,7 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                 st.markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
 
             # Group by month
-            paginated_papers['8month_year'] = paginated_papers['receiving_date'].apply(
+            paginated_papers['month_year'] = paginated_papers['receiving_date'].apply(
                 lambda x: x.strftime('%B %Y') if pd.notnull(x) else 'Unknown'
             )
             grouped_papers = paginated_papers.groupby(pd.Grouper(key='receiving_date', freq='ME'))
@@ -935,7 +1212,12 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
             for month, monthly_papers in reversed_grouped_papers:
                 monthly_papers = monthly_papers.sort_values(by='receiving_date', ascending=False)
                 num_papers = len(monthly_papers)
-                st.markdown(f'<div class="month-header">{month.strftime("%B %Y")} ({num_papers} papers)</div>', unsafe_allow_html=True)
+                # Fetch publish count for the month
+                publish_count = monthly_papers['paper_uploading_date'].notnull().sum()
+                st.markdown(
+                    f'<div class="month-header">{month.strftime("%B %Y")} ({num_papers} Papers, {publish_count} Published)</div>',
+                    unsafe_allow_html=True
+                )
 
                 # Track first row in each month to avoid border above it
                 first_row = True
@@ -948,21 +1230,31 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                     # Get author names
                     authors_display = fetch_author_names(row['paper_id'], conn)
 
+                    # Determine publishing type badge
+                    pub_type = row['publishing_type']
+                    badge_class = "pill-publishing" if pub_type == 'Publishing' else "pill-writing-publishing"
+                    pub_badge = f'<span class="small-pill {badge_class}">{pub_type}</span>'
+
+                    # Determine publication status
+                    pub_status = "Published" if pd.notnull(row['paper_uploading_date']) else "Not Published"
+                    status_class = "pill-published tick" if pub_status == "Published" else "pill-not-published cross"
+                    status_badge = f'<span class="small-pill {status_class}">{pub_status}</span>'
+
                     # Data row
                     col1, col2, col3, col4, col5, col6, col7 = st.columns(column_size, vertical_alignment="center")
                     with col1:
-                        st.markdown(f'<div class="data-row">{int(row["paper_id"])}</div>', unsafe_allow_html=True)
+                        st.write(int(row["paper_id"]))
                     with col2:
-                        st.markdown(f'<div class="data-row">{row["paper_title"]}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{row["paper_title"]} {pub_badge} {status_badge}</div>', unsafe_allow_html=True)
                         st.markdown(f'<div class="author-names">{authors_display}</div>', unsafe_allow_html=True)
                     with col3:
                         st.markdown(f'<div class="data-row">{format_date(row["receiving_date"])}</div>', unsafe_allow_html=True)
                     with col4:
-                        st.markdown(f'<div class="data-row">{format_review(row["review_done"])}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{format_status(format_review(row["review_done"]), "review")}</div>', unsafe_allow_html=True)
                     with col5:
-                        st.markdown(f'<div class="data-row">{row["acceptance"]}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{format_status(row["acceptance"], "acceptance")}</div>', unsafe_allow_html=True)
                     with col6:
-                        st.markdown(f'<div class="data-row">{format_payment(row["payment_amount"])}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{format_status(format_payment(row["payment_amount"]), "payment")}</div>', unsafe_allow_html=True)
                     with col7:
                         btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1, 1, 1, 1], vertical_alignment="center", gap="small")
                         with btn_col1:
@@ -977,6 +1269,8 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                         with btn_col4:
                             if st.button(":material/edit_note:", key=f"edit_{row['paper_id']}", help="Edit Review Details"):
                                 edit_paper_status_dialog(row['paper_id'], conn)
+
+
 
 def main():
     col1, col2 = st.columns([12, 1], vertical_alignment="bottom")
@@ -997,84 +1291,21 @@ def main():
         st.warning("No papers found in the database.")
         return
 
-    # Initialize session state for filters if it doesn't exist
-    if 'filters' not in st.session_state:
-        st.session_state.filters = {
-            'year': None, 'month': None, 'pending_payment': False,
-            'pending_review': False, 'acceptance': None, 'publishing_type': None
-        }
+    # Apply filters and get filtered dataframe
+    filtered_df, applied_filters = all_filters(df)
 
-    # Callback function to reset filters
-    def reset_all_filters():
-        st.session_state.filters = {
-            'year': None, 'month': None, 'pending_payment': False,
-            'pending_review': False, 'acceptance': None, 'publishing_type': None
-        }
-        st.session_state.search_input = ""
-        st.session_state.year_pills = None
-        st.session_state.month_pills = None
-        st.session_state.payment_pills = None
-        st.session_state.review_pills = None
-        st.session_state.acceptance_pills = None
-        st.session_state.publishing_pills = None
-        if 'page' in st.session_state:
-            st.session_state.page = 0
-
-    # UI and Filter Logic
-    col1, col2, col3 = st.columns([5, 3, 1], vertical_alignment="center")
-    with col1:
-        search_query = st.text_input(
-            "Search by Paper ID or Title",
-            placeholder="Search by Paper ID or Title",
-            label_visibility="collapsed",
-            key="search_input"
-        )
-    with col2:
-        with st.popover("Filters", use_container_width=True):
-            years = sorted(df['receiving_date'].dt.year.dropna().astype(int).unique(), reverse=True)
-            selected_year = st.pills("Filter by Year", options=[str(y) for y in years], key="year_pills")
-            st.session_state.filters['year'] = selected_year
-
-            if selected_year:
-                months = sorted(df[df['receiving_date'].dt.year == int(selected_year)]['receiving_date'].dt.strftime('%B').unique())
-                selected_month = st.pills("Filter by Month", options=months, key="month_pills")
-                st.session_state.filters['month'] = selected_month
-            else:
-                st.session_state.filters['month'] = None
-
-            pending_payment = st.pills("Filter by Payment Status", options=["Pending Payment"], key="payment_pills")
-            st.session_state.filters['pending_payment'] = bool(pending_payment)
-
-            pending_review = st.pills("Filter by Review Status", options=["Pending Review"], key="review_pills")
-            st.session_state.filters['pending_review'] = bool(pending_review)
-            
-            acceptance_options = ['Accepted', 'Rejected', 'Pending', 'In Review']
-            selected_acceptance = st.pills("Filter by Acceptance", options=acceptance_options, key="acceptance_pills")
-            st.session_state.filters['acceptance'] = selected_acceptance
-
-            publishing_types = ['Publishing', 'Writing + Publishing']
-            selected_publishing_type = st.pills("Filter by Publishing Type", options=publishing_types, key="publishing_pills")
-            st.session_state.filters['publishing_type'] = selected_publishing_type
-
-            st.button("Reset Filters", key="reset_filters_button", on_click=reset_all_filters)
-    
-    with col3:
-        if st.button(":material/note_add: Paper", key="add_paper_button", use_container_width=True):
-            add_paper_dialog(conn)
-
-    # Apply filters
-    filtered_df, applied_filters = apply_filters(df, search_query, st.session_state.filters)
+    metrics(filtered_df)
 
     # Pagination
     items_per_page = 50
-    total_pages = (len(filtered_df) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(filtered_df) + items_per_page - 1) // items_per_page)
 
     # Initialize session state
     if 'page' not in st.session_state:
         st.session_state.page = 0
 
     # Reset page if it exceeds total pages
-    if st.session_state.page >= total_pages and total_pages > 0:
+    if st.session_state.page >= total_pages:
         st.session_state.page = total_pages - 1
     elif total_pages == 0:
         st.session_state.page = 0

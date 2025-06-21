@@ -53,18 +53,18 @@ st.markdown("""
     .status-badge-red {
         background-color: #FFEBEE;
         color: #F44336;
-        padding: 2px 17px;
-        border-radius: 12px;
+        padding: 3px 29px;
+        border-radius: 8px;
         font-weight: bold;
         display: inline-flex;
         align-items: center;
         font-size: 20px;
-        margin-bottom: 10px;
+        margin-bottom: 16px;
     }
     .badge-count {
         background-color: rgba(255, 255, 255, 0.9);
         color: inherit;
-        padding: 2px 6px;
+        padding: 2px 9px;
         border-radius: 10px;
         margin-left: 6px;
         font-size: 14px;
@@ -565,27 +565,8 @@ def show_charts():
     #     st.write("No sales data available to display.")
     st.write("Comming Soon 😊")
 
-
-# Initialize session state for filters and pagination
-if 'search_term' not in st.session_state:
-    st.session_state['search_term'] = ''
-if 'cell_nos' not in st.session_state:
-    st.session_state['cell_nos'] = []
-if 'out_of_stock' not in st.session_state:
-    st.session_state['out_of_stock'] = False
-if 'stock_condition' not in st.session_state:
-    st.session_state['stock_condition'] = None
-if 'stock_value' not in st.session_state:
-    st.session_state['stock_value'] = 0
-if 'sort_column' not in st.session_state:
-    st.session_state['sort_column'] = 'Book ID'
-if 'sort_order' not in st.session_state:
-    st.session_state['sort_order'] = 'Descending'
-if 'current_page' not in st.session_state:
-    st.session_state['current_page'] = 1
-
 # Search and Cell No. filter layout
-filcol1, filcol2, filcol3, filcol4, filcol5 = st.columns([1.4, 3.5, 3, 0.6, 1.5], vertical_alignment="center")
+filcol1, filcol2, filcol3, filcol4 = st.columns([1.6, 4.5, 3.1, 0.6], vertical_alignment="bottom", gap="small")
 
 with filcol2:
     st.text_input(
@@ -602,40 +583,43 @@ with filcol2:
         )
     )
 
-with filcol5:
-    cell_options = [x for x in df['Cell No.'].unique() if pd.notnull(x)]
-    st.multiselect(
-        "🗄️ Filter by Cell",
-        options=cell_options,
-        default=st.session_state['cell_nos'],
-        key="cell_nos_widget",
-        label_visibility="collapsed",
-        placeholder="Filter by Cell",
-        on_change=lambda: (
-            st.session_state.update({
-                'cell_nos': st.session_state['cell_nos_widget'],
-                'current_page': 1
-            })
-        )
-    )
-
 with filcol4:
     if st.button("📉", key="show_visualizations", type="secondary", use_container_width=True):
         show_charts()
 
 with filcol3:
     with st.popover("More Filters & Sort", use_container_width=True):
-        st.checkbox(
-            "Show Out of Stock Books",
-            value=st.session_state['out_of_stock'],
-            key="out_of_stock_widget",
+
+        if st.button(":material/restart_alt: Reset Filters", key="reset_filters", type="secondary", use_container_width=True):
+            # Reset only non-widget session state variables
+            st.session_state.update({
+                'search_term': '',
+                'cell_nos': [],
+                'out_of_stock': False,
+                'stock_condition': None,
+                'stock_value': 0,
+                'sort_column': 'Book Title',
+                'sort_order': 'Ascending',
+                'current_page': 1
+            })
+            st.rerun()
+
+        cell_options = [x for x in df['Cell No.'].unique() if pd.notnull(x)]
+        st.multiselect(
+            "Filter by Cell",
+            options=cell_options,
+            default=st.session_state['cell_nos'],
+            key="cell_nos_widget",
+            
+            placeholder="Filter by Cell",
             on_change=lambda: (
                 st.session_state.update({
-                    'out_of_stock': st.session_state['out_of_stock_widget'],
+                    'cell_nos': st.session_state['cell_nos_widget'],
                     'current_page': 1
                 })
             )
         )
+
         st.selectbox(
             "Stock Filter",
             [None, "Greater than", "Equal to", "Less than"],
@@ -675,34 +659,33 @@ with filcol3:
                 })
             )
         )
-        st.radio(
-            "Sort Order",
-            ["Ascending", "Descending"],
-            index=["Ascending", "Descending"].index(st.session_state['sort_order']),
-            horizontal=True,
-            key="sort_order_widget",
+
+        st.checkbox(
+            "Show Out of Stock Books",
+            value=st.session_state['out_of_stock'],
+            key="out_of_stock_widget",
             on_change=lambda: (
                 st.session_state.update({
-                    'sort_order': st.session_state['sort_order_widget'],
+                    'out_of_stock': st.session_state['out_of_stock_widget'],
                     'current_page': 1
                 })
             )
         )
-        col1, col2 = st.columns([2.5, 1.2])
+        col1, col2 = st.columns([3, 1.2], gap="small", vertical_alignment="bottom")
         with col1:
-            if st.button(":material/restart_alt: Reset", key="reset_filters", type="tertiary"):
-                # Reset only non-widget session state variables
-                st.session_state.update({
-                    'search_term': '',
-                    'cell_nos': [],
-                    'out_of_stock': False,
-                    'stock_condition': None,
-                    'stock_value': 0,
-                    'sort_column': 'Book Title',
-                    'sort_order': 'Ascending',
-                    'current_page': 1
-                })
-                st.rerun()
+            st.radio(
+                "Sort Order",
+                ["Ascending", "Descending"],
+                index=["Ascending", "Descending"].index(st.session_state['sort_order']),
+                horizontal=True,
+                key="sort_order_widget",
+                on_change=lambda: (
+                    st.session_state.update({
+                        'sort_order': st.session_state['sort_order_widget'],
+                        'current_page': 1
+                    })
+                )
+            )
         with col2:
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button(
@@ -713,6 +696,25 @@ with filcol3:
                 key="export_table",
                 type="tertiary"
             )
+
+
+# Initialize session state for filters and pagination
+if 'search_term' not in st.session_state:
+    st.session_state['search_term'] = ''
+if 'cell_nos' not in st.session_state:
+    st.session_state['cell_nos'] = []
+if 'out_of_stock' not in st.session_state:
+    st.session_state['out_of_stock'] = False
+if 'stock_condition' not in st.session_state:
+    st.session_state['stock_condition'] = None
+if 'stock_value' not in st.session_state:
+    st.session_state['stock_value'] = 0
+if 'sort_column' not in st.session_state:
+    st.session_state['sort_column'] = 'Book ID'
+if 'sort_order' not in st.session_state:
+    st.session_state['sort_order'] = 'Descending'
+if 'current_page' not in st.session_state:
+    st.session_state['current_page'] = 1
 
 # Apply filters
 filtered_df = df.copy()
@@ -780,28 +782,32 @@ if not filtered_df.empty:
             cols[7].markdown(f'<div class="{row_class}">{int(row["AGPH Store"]) if pd.notnull(row["AGPH Store"]) else 0}</div>', unsafe_allow_html=True)
             cols[8].markdown(f'<div class="{row_class}">{int(row["Amazon"]) if pd.notnull(row["Amazon"]) else 0}</div>', unsafe_allow_html=True)
             cols[9].markdown(f'<div class="{row_class}">{int(row["Filpkart"]) if pd.notnull(row["Filpkart"]) else 0}</div>', unsafe_allow_html=True)
-            cols[10].markdown(f'<div class="{row_class}">{int(row["In Stock"]) if pd.notnull(row["In Stock"]) else 0}</div>', unsafe_allow_html=True)
+            cols[10].markdown(f'**<div class="{row_class}">{int(row["In Stock"]) if pd.notnull(row["In Stock"]) else 0}</div>**', unsafe_allow_html=True)
             if cols[11].button(":material/manufacturing:", key=f"action_{row['Book ID']}"):
                 st.session_state['update_dialog'] = True
                 update_book_details(row['Book ID'], row)
     st.markdown(f"<div style='text-align: center; margin-top: 10px;'>Showing {start_idx + 1}-{end_idx} of {total_books} books</div>", unsafe_allow_html=True)
 
-    # Page navigation (at bottom)
+   # Page navigation (at bottom)
     col1, col2, col3, col4, col5, col6 = st.columns([1, 2, 4, 1, 1, 1], vertical_alignment="center")
     with col1:
         if st.button("First", disabled=(st.session_state['current_page'] == 1)):
             st.session_state['current_page'] = 1
+            st.rerun()  # Force rerun to update UI
     with col2:
         if st.button("Previous", disabled=(st.session_state['current_page'] == 1)):
             st.session_state['current_page'] -= 1
+            st.rerun()  # Force rerun to update UI
     with col3:
         st.markdown(f"<div style='text-align: center;'>Page {st.session_state['current_page']} of {total_pages}</div>", unsafe_allow_html=True)
     with col4:
         if st.button("Next", disabled=(st.session_state['current_page'] == total_pages)):
             st.session_state['current_page'] += 1
+            st.rerun()  # Force rerun to update UI
     with col5:
         if st.button("Last", disabled=(st.session_state['current_page'] == total_pages)):
             st.session_state['current_page'] = total_pages
+            st.rerun()  # Force rerun to update UI
     with col6:
         page_options = list(range(1, total_pages + 1)) if total_pages > 0 else [1]
         current_index = min(st.session_state['current_page'] - 1, len(page_options) - 1)
@@ -813,6 +819,7 @@ if not filtered_df.empty:
         )
         if selected_page != st.session_state['current_page']:
             st.session_state['current_page'] = selected_page
+            st.rerun()  # Force rerun to update UI
 
 else:
     st.info("No books match the current filters.")

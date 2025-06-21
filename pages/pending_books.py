@@ -51,25 +51,25 @@ st.markdown("""
 st.markdown("""
 <style>
 .status-badge-red {
-    background-color: #FFEBEE;
-    color: #F44336;
-    padding: 0px 6px;
-    border-radius: 11px;
-    font-weight: bold;
-    display: inline-flex;
-    align-items: center;
-    font-size: 24px;
-    margin-bottom: 15px;
-}
-.badge-count {
-    background-color: rgba(255, 255, 255, 0.9);
-    color: inherit;
-    padding: 2px 6px;
-    border-radius: 10px;
-    margin-left: 6px;
-    font-size: 14px;
-    font-weight: normal;
-}
+        background-color: #FFEBEE;
+        color: #F44336;
+        padding: 3px 18px;
+        border-radius: 8px;
+        font-weight: bold;
+        display: inline-flex;
+        align-items: center;
+        font-size: 20px;
+        margin-bottom: 16px;
+    }
+    .badge-count {
+        background-color: rgba(255, 255, 255, 0.9);
+        color: inherit;
+        padding: 2px 9px;
+        border-radius: 10px;
+        margin-left: 6px;
+        font-size: 14px;
+        font-weight: normal;
+    }
 .author-pill {
     background-color: #E3F2FD;
     color: #1E88E5;
@@ -807,7 +807,7 @@ with col3:
 
 # UI with Popover for Filters and Sorting
 with st.container():
-    col1, col2, col3 = st.columns([3, 8, 6], vertical_alignment="bottom", gap="small")
+    col1, col2, col3 = st.columns([3, 7, 6], vertical_alignment="bottom", gap="small")
     with col1:
         st.markdown(f'<div class="status-badge-red">Overdue Books<span class="badge-count">{len(filtered_data)}</span></div>', unsafe_allow_html=True)
     with col2:

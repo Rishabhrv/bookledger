@@ -112,6 +112,7 @@ st.markdown("""
 .publisher-Macmillan { background-color: #f0e6ff; color: #6200ea; }
 .publisher-RandomHouse { background-color: #e6ffe6; color: #2e7d32; }
 .publisher-default { background-color: #f5f5f5; color: #616161; }
+            
 .date-pill {
     display: inline-block;
     padding: 2px 5px;

@@ -4675,7 +4675,7 @@ st.markdown("""
         }
             
         .author-names {
-            font-size: 11px;
+            font-size: 12px;
             color: #555; 
             margin-bottom: 0px; /* Space between author names */
         }
@@ -5329,7 +5329,7 @@ with cont:
                 if selected_page != st.session_state.current_page:
                     st.session_state.current_page = selected_page
                     st.rerun()
-        render_time = time.time() - render_start
+    render_time = time.time() - render_start
 
 
 # End timing
@@ -5337,4 +5337,3 @@ total_time = time.time() - start_time
 st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
 st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
 st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
-

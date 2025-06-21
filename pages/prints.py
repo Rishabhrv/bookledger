@@ -123,15 +123,15 @@ st.markdown("""
 /* Table and container styles from previous version */
 .table-header {
     font-weight: bold;
-    font-size: 16px;
+    font-size: 15px;
     color: #333;
     padding: 10px;
     border-bottom: 2px solid #ddd;
 }
 .table-row {
-    padding: 14px 10px;
+    padding: 6px 10px;
     background-color: #ffffff;
-    font-size: 15px; /* Smaller font size as requested previously */
+    font-size: 14px; /* Smaller font size as requested previously */
     margin-bottom: 5px;
     margin-top: 5px;    
 }
