@@ -6,7 +6,7 @@ import time
 from auth import validate_token
 import numpy as np  
 import altair as alt
-
+from time import sleep
 
 logo = "logo/ijisem.png"
 fevicon = "logo/ijisem.png"
@@ -121,6 +121,12 @@ st.markdown("""
         background-color: #EDE7F6;
         color: #4527A0;
     }
+            
+    .badge-excess-plagiarism {
+        background-color: #fff3e0;
+        color: #e65100;
+    }
+
     .badge-paid {
         background-color: #fff3e0;
         color: #ef6c00;
@@ -129,7 +135,7 @@ st.markdown("""
         display: inline-block;
         padding: 1px 6px;
         border-radius: 10px;
-        font-size: 0.7em;
+        font-size: 0.8em;
         margin-left: 6px;
         line-height: 1.2;
     }
@@ -188,10 +194,13 @@ def fetch_papers(conn):
                 p.acceptance,
                 p.payment_amount,
                 p.payment_date,
+                p.ai_plagiarism,
+                p.plagiarism,
                 p.review_done,
                 p.publishing_type,
                 p.paper_uploading_date,
                 p.formatting_date,
+                p.writing_date,
                 p.volume,
                 p.issue
             FROM papers p
@@ -242,21 +251,25 @@ def format_payment(amount):
 def format_review(review_done):
     return 'Completed' if review_done else 'Pending'
 
-# New function to format status with pill badges
 def format_status(status, status_type):
     if status_type == "review":
         badge_class = "badge-completed" if status == "Completed" else "badge-pending"
     elif status_type == "acceptance":
-        if status == "Accepted":
-            badge_class = "badge-accepted"
-        elif status == "Rejected":
-            badge_class = "badge-rejected"
-        elif status == "Pending":
-            badge_class = "badge-pending"
-        else:  # In Review
-            badge_class = "badge-in-review"
-    else:  # payment
+        issue_mapping = {
+            "Accepted": "badge-accepted",
+            "Rejected": "badge-rejected",
+            "Pending": "badge-pending",
+            "In Review": "badge-in-review",
+            "Excess Plagiarism": "badge-excess-plagiarism",
+            "Excess AI": "badge-excess-plagiarism",
+            "Technical Incorrect": "badge-excess-plagiarism",
+            "Grammatical Incorrect": "badge-excess-plagiarism",
+            "References Incorrect": "badge-excess-plagiarism"
+        }
+        badge_class = issue_mapping.get(status, "badge-pending")
+    else:  # payment or unknown
         badge_class = "badge-paid" if status.startswith("₹") else "badge-pending"
+
     return f'<span class="badge {badge_class}">{status}</span>'
 
 
@@ -291,7 +304,9 @@ def add_paper_dialog(conn):
         with col4:
             paper_source = st.selectbox(
                 "Paper Source",
-                options=["Google", "Justdial", "Indiamart", "Website", "WhatsApp", "College Visit", "Office Visit", "Social Media", "Call", "Ads"],
+                options=["Google", "Justdial", "Indiamart", 
+                         "Website", "WhatsApp", "College Visit",
+                           "Office Visit", "Social Media", "Call", "Ads"],
                 index=0,
                 placeholder="Select source",
                 key="paper_source"
@@ -358,101 +373,253 @@ def add_paper_dialog(conn):
 
 @st.dialog("Update Payment")
 def payment_dialog(paper_id, conn):
+
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        st.markdown(f"<h3 style='color:#4CAF50;'>Paper ID: {paper_id}</h3>", 
+                    unsafe_allow_html=True)
+    with col2:
+        if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
+            st.cache_data.clear()
+
+    # Initialize session state for EMI visibility specific to paper_id
+    show_emi_2_key = f"show_emi_2_{paper_id}"
+    show_emi_3_key = f"show_emi_3_{paper_id}"
+    if show_emi_2_key not in st.session_state:
+        st.session_state[show_emi_2_key] = False
+    if show_emi_3_key not in st.session_state:
+        st.session_state[show_emi_3_key] = False
+
     # Fetch current payment data for the paper
     try:
         with conn.session as session:
-            query = text("SELECT payment_date, payment_amount FROM papers WHERE paper_id = :paper_id")
+            query = text("""
+                SELECT payment_amount, emi_1_amount, emi_1_date, 
+                       emi_2_amount, emi_2_date, emi_3_amount, emi_3_date 
+                FROM papers WHERE paper_id = :paper_id
+            """)
             result = session.execute(query, {'paper_id': paper_id}).fetchone()
-            current_payment_date = result.payment_date if result else None
             current_payment_amount = result.payment_amount if result else 0
+            emi_1_amount = result.emi_1_amount if result and result.emi_1_amount else 0
+            emi_1_date = result.emi_1_date if result and result.emi_1_date else None
+            emi_2_amount = result.emi_2_amount if result and result.emi_2_amount else 0
+            emi_2_date = result.emi_2_date if result and result.emi_2_date else None
+            emi_3_amount = result.emi_3_amount if result and result.emi_3_amount else 0
+            emi_3_date = result.emi_3_date if result and result.emi_3_date else None
     except Exception as e:
         st.error(f"Error fetching payment data: {e}")
-        current_payment_date = None
         current_payment_amount = 0
+        emi_1_amount = emi_2_amount = emi_3_amount = 0
+        emi_1_date = emi_2_date = emi_3_date = None
 
-    # Use existing data as default values, fallback to current date and 0 if none
-    payment_date = st.date_input(
-        "Payment Date",
-        value=current_payment_date if current_payment_date else datetime.now()
-    )
+    # Initialize session state based on existing EMI data
+    if emi_1_amount > 0:
+        st.session_state[show_emi_2_key] = True
+    if emi_2_amount > 0:
+        st.session_state[show_emi_3_key] = True
+
+    # Input fields for total payment and EMI details
     payment_amount = st.number_input(
-        "Payment Amount (₹)",
+        "Total Payment Amount (₹)",
         min_value=0,
         step=1,
         format="%d",
-        value=int(current_payment_amount) if current_payment_amount else 0
+        value=int(current_payment_amount) if current_payment_amount else 0,
+        key=f"total_payment_{paper_id}"
     )
 
-    if st.button("Submit Payment"):
+    st.subheader("EMI Details")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        emi_1_amount = st.number_input(
+            "EMI 1 Amount (₹)",
+            min_value=0,
+            step=1,
+            format="%d",
+            value=int(emi_1_amount),
+            key=f"emi_1_amount_{paper_id}"
+        )
+        if st.session_state[show_emi_2_key]:
+            emi_2_amount = st.number_input(
+                "EMI 2 Amount (₹)",
+                min_value=0,
+                step=1,
+                format="%d",
+                value=int(emi_2_amount),
+                key=f"emi_2_amount_{paper_id}"
+            )
+        else:
+            emi_2_amount = 0
+        if st.session_state[show_emi_3_key]:
+            emi_3_amount = st.number_input(
+                "EMI 3 Amount (₹)",
+                min_value=0,
+                step=1,
+                format="%d",
+                value=int(emi_3_amount),
+                key=f"emi_3_amount_{paper_id}"
+            )
+        else:
+            emi_3_amount = 0
+    
+    with col2:
+        emi_1_date = st.date_input(
+            "EMI 1 Date",
+            value=emi_1_date,
+            key=f"emi_1_date_{paper_id}",
+            min_value=None
+        )
+        if st.session_state[show_emi_2_key]:
+            emi_2_date = st.date_input(
+                "EMI 2 Date",
+                value=emi_2_date,
+                key=f"emi_2_date_{paper_id}",
+                min_value=None
+            )
+        else:
+            emi_2_date = None
+        if st.session_state[show_emi_3_key]:
+            emi_3_date = st.date_input(
+                "EMI 3 Date",
+                value=emi_3_date,
+                key=f"emi_3_date_{paper_id}",
+                min_value=None
+            )
+        else:
+            emi_3_date = None
+
+    # Validate EMI amounts and dates
+    total_emi = emi_1_amount + emi_2_amount + emi_3_amount
+    if total_emi > payment_amount and payment_amount > 0:
+        st.warning("Sum of EMI amounts cannot exceed Total Payment Amount")
+
+    # Check if dates are provided for non-zero EMI amounts
+    date_errors = []
+    if emi_1_amount > 0 and emi_1_date is None:
+        date_errors.append("EMI 1 Date is required when EMI 1 Amount is provided")
+    if emi_2_amount > 0 and emi_2_date is None:
+        date_errors.append("EMI 2 Date is required when EMI 2 Amount is provided")
+    if emi_3_amount > 0 and emi_3_date is None:
+        date_errors.append("EMI 3 Date is required when EMI 3 Amount is provided")
+
+    if st.button("Submit Payment", key=f"submit_payment_{paper_id}"):
+        # Prevent saving if EMI sum exceeds total payment
+        if total_emi > payment_amount and payment_amount > 0:
+            st.error("Sum of EMI amounts cannot exceed Total Payment Amount. Please adjust EMI amounts.")
+            return
+
+        # Prevent saving if any non-zero EMI amount lacks a date
+        if date_errors:
+            st.error("Please provide date.")
+            return
+
         try:
             with st.spinner("Updating payment details..."):
-                time.sleep(1)
+                sleep(1)
                 with conn.session as session:
                     query = text("""
                         UPDATE papers 
-                        SET payment_date = :payment_date, payment_amount = :payment_amount 
+                        SET payment_amount = :payment_amount,
+                            emi_1_amount = :emi_1_amount,
+                            emi_1_date = :emi_1_date,
+                            emi_2_amount = :emi_2_amount,
+                            emi_2_date = :emi_2_date,
+                            emi_3_amount = :emi_3_amount,
+                            emi_3_date = :emi_3_date
                         WHERE paper_id = :paper_id
                     """)
                     session.execute(query, {
-                        'payment_date': payment_date,
                         'payment_amount': payment_amount,
+                        'emi_1_amount': emi_1_amount,
+                        'emi_1_date': emi_1_date,
+                        'emi_2_amount': emi_2_amount,
+                        'emi_2_date': emi_2_date,
+                        'emi_3_amount': emi_3_amount,
+                        'emi_3_date': emi_3_date,
                         'paper_id': paper_id
                     })
                     session.commit()
                 st.success("Payment details updated successfully!")
+
+                # Update session state for EMI visibility
+                if emi_1_amount > 0:
+                    st.session_state[show_emi_2_key] = True
+                if emi_2_amount > 0:
+                    st.session_state[show_emi_3_key] = True
+
                 #st.rerun()
         except Exception as e:
             st.error(f"Error updating payment: {e}")
 
 
-@st.dialog("Edit Paper Details", width="large")
+@st.dialog("✏️ Edit Paper Details", width="large")
 def edit_paper_dialog(paper_id, conn):
     # Fetch current paper data
     try:
         with conn.session as session:
-            query = text("""
+            result = session.execute(text("""
                 SELECT paper_id, paper_title, paper_source, receiving_date, volume, issue 
                 FROM papers 
                 WHERE paper_id = :paper_id
-            """)
-            result = session.execute(query, {'paper_id': paper_id}).fetchone()
+            """), {'paper_id': paper_id}).fetchone()
+
             current_paper_id = result.paper_id if result else ""
             current_paper_title = result.paper_title if result else ""
-            current_paper_source = result.paper_source if result else ""
-            current_receiving_date = result.receiving_date if result else None
+            current_paper_source = result.paper_source if result else "Google"
+            current_receiving_date = result.receiving_date if result else datetime.now()
             current_volume = result.volume if result else ""
             current_issue = result.issue if result else ""
-    except Exception as e:
-        st.error(f"Error fetching paper data: {e}")
-        current_paper_id = ""
-        current_paper_title = ""
-        current_paper_source = ""
-        current_receiving_date = None
-        current_volume = ""
-        current_issue = ""
 
-    col1, col2 = st.columns([6, 1])
+    except Exception as e:
+        st.error(f"❌ Error fetching paper data: {e}")
+        current_paper_id = current_paper_title = current_volume = current_issue = ""
+        current_paper_source = "Google"
+        current_receiving_date = datetime.now()
+
+    # Header
+    col1, col2 = st.columns([8, 1])
     with col1:
-        st.markdown(f"<h3 style='color:#4CAF50;'>{current_paper_id} : {current_paper_title}</h3>", unsafe_allow_html=True)
+        st.markdown(
+            f"<h4 style='color:#4CAF50; margin-bottom: 5px;'>{current_paper_id} : {current_paper_title}</h4>",
+            unsafe_allow_html=True
+        )
     with col2:
         if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
             st.cache_data.clear()
 
-    # Input fields with pre-filled values
-    new_paper_id = st.text_input("Paper ID", value=current_paper_id)
-    paper_title = st.text_input("Paper Title", value=current_paper_title)
-    paper_source = st.text_input("Paper Source", value=current_paper_source)
-    receiving_date = st.date_input(
-        "Receiving Date",
-        value=current_receiving_date if current_receiving_date else datetime.now()
-    )
-    volume = st.text_input("Volume", value=current_volume)
-    issue = st.text_input("Issue", value=current_issue)
+    st.markdown("---")
 
-    if st.button("Submit Changes"):
+    # Source options
+    source_options = [
+        "Google", "Justdial", "Indiamart", "Website", "WhatsApp",
+        "College Visit", "Office Visit", "Social Media", "Call", "Ads"
+    ]
+
+    # Form Inputs in columns
+    col1, col2 = st.columns(2)
+    with col1:
+        new_paper_id = st.text_input("📑 Paper ID", value=current_paper_id)
+        paper_source = st.selectbox(
+            "📌 Paper Source",
+            options=source_options,
+            index=source_options.index(current_paper_source) if current_paper_source in source_options else 0,
+            key="paper_source_1"
+        )
+        volume = st.text_input("📚 Volume", value=current_volume)
+    with col2:
+        # Select paper source from list
+
+        paper_title = st.text_input("📝 Paper Title", value=current_paper_title)
+        receiving_date = st.date_input("📅 Receiving Date", value=current_receiving_date)
+        issue = st.text_input("🧾 Issue", value=current_issue)
+
+
+    # Submit button
+    if st.button("✅ Submit Changes"):
         try:
             with conn.session as session:
-                query = text("""
+                session.execute(text("""
                     UPDATE papers 
                     SET paper_id = :new_paper_id,
                         paper_title = :paper_title,
@@ -461,8 +628,7 @@ def edit_paper_dialog(paper_id, conn):
                         volume = :volume,
                         issue = :issue
                     WHERE paper_id = :paper_id
-                """)
-                session.execute(query, {
+                """), {
                     'new_paper_id': new_paper_id,
                     'paper_title': paper_title,
                     'paper_source': paper_source,
@@ -472,44 +638,85 @@ def edit_paper_dialog(paper_id, conn):
                     'paper_id': paper_id
                 })
                 session.commit()
-            st.success("Paper details updated successfully!")
+            st.success("✅ Paper details updated successfully!")
             st.rerun()
         except Exception as e:
-            st.error(f"Error updating paper: {e}")
+            st.error(f"❌ Error updating paper: {e}")
+
+
 
 
 @st.dialog("Edit Author Details", width="large")
 def edit_author_dialog(paper_id, conn):
-    """
-    A Streamlit dialog to edit and manage authors associated with a specific paper.
+    # --- Custom CSS for Compact and Modern Styling ---
+    st.markdown(
+        """
+        <style>
+        .author-card { 
+            background-color: #ffffff; 
+            border: 1px solid #e0e0e0; 
+            border-radius: 8px; 
+            padding: 12px; 
+            margin-bottom: 12px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+        }
+        .author-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 10px; 
+            font-size: 13px; 
+        }
+        .author-grid div { 
+            display: flex; 
+            align-items: center; 
+        }
+        .author-grid strong { 
+            width: 80px; 
+            color: #424242; 
+        }
+        .checklist-container { 
+            display: flex; 
+            flex-wrap: wrap; 
+            gap: 10px; 
+            margin-top: 10px; 
+        }
+        .checklist-container .stCheckbox { 
+            margin-right: 20px; 
+            margin-bottom: 5px; 
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-    Args:
-        paper_id (int): The ID of the paper to edit authors for.
-        conn: The database connection object.
-    """
-
-    # --- Fetch Paper Title for Header ---
+    # --- Fetch Paper Title and Publishing Type ---
     try:
         with conn.session as session:
-            query = text("SELECT paper_title FROM papers WHERE paper_id = :paper_id")
+            query = text("SELECT paper_title, publishing_type FROM papers WHERE paper_id = :paper_id")
             result = session.execute(query, {'paper_id': paper_id}).fetchone()
             paper_title = result.paper_title if result else "Unknown Title"
+            publishing_type = result.publishing_type if result else None
     except Exception as e:
         st.error(f"Error fetching paper data: {e}")
         paper_title = "Unknown Title"
+        publishing_type = None
 
     col1, col2 = st.columns([6, 1])
     with col1:
-        st.markdown(f"<h3 style='color:#4CAF50;'>{paper_id} : {paper_title}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<h3 style='color:#4CAF50;'>{paper_id} : {paper_title}</h3>", 
+                    unsafe_allow_html=True)
     with col2:
-        if st.button(":material/refresh: Refresh", key="refresh_author", type="tertiary"):
+        if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
             st.cache_data.clear()
 
-    # --- Fetch All Authors for the Paper ---
+    # --- Fetch All Authors ---
     try:
         with conn.session as session:
             query = text("""
-                SELECT a.author_id, a.name, a.email, a.phone, a.affiliation, pa.author_position
+                SELECT a.author_id, a.name, a.email, a.phone, a.affiliation, pa.author_position,
+                       pa.written_paper_confirmation_received, pa.paper_receiving_confirmation_sent,
+                       pa.paper_review_confirmation_sent, pa.certificate_ready, pa.certificate_sent,
+                       pa.publishing_confirmation_sent
                 FROM authors a
                 JOIN paper_authors pa ON a.author_id = pa.author_id
                 WHERE pa.paper_id = :paper_id
@@ -519,17 +726,123 @@ def edit_author_dialog(paper_id, conn):
             authors = [
                 {
                     'author_id': row.author_id,
-                    'name': row.name or "",
-                    'email': row.email or "",
-                    'phone': row.phone or "",
-                    'affiliation': row.affiliation or "",
-                    'author_position': row.author_position or None
+                    'name': row.name or "N/A",
+                    'email': row.email or "N/A",
+                    'phone': row.phone or "N/A",
+                    'affiliation': row.affiliation or "N/A",
+                    'author_position': row.author_position or None,
+                    'written_paper_confirmation_received': row.written_paper_confirmation_received or False,
+                    'paper_receiving_confirmation_sent': row.paper_receiving_confirmation_sent or False,
+                    'paper_review_confirmation_sent': row.paper_review_confirmation_sent or False,
+                    'certificate_ready': row.certificate_ready or False,
+                    'certificate_sent': row.certificate_sent or False,
+                    'publishing_confirmation_sent': row.publishing_confirmation_sent or False
                 }
                 for row in results
             ]
     except Exception as e:
         st.error(f"Error fetching author data: {e}")
         authors = []
+
+    if not authors:
+        st.info("No authors assigned to this paper yet.", icon="ℹ️")
+    else:
+        with st.container():
+            for author in authors:
+                with st.container():
+                    if author['author_position'] == 1:
+                        with st.expander(f"{author['name']} (ID: {author['author_id']})", expanded=True):
+                            st.markdown(
+                                f"""
+                                <div class="author-card">
+                                    <div class="author-grid">
+                                        <div><strong>Name:</strong> {author['name']}</div>
+                                        <div><strong>Email:</strong> {author['email']}</div>
+                                        <div><strong>Phone:</strong> {author['phone']}</div>
+                                        <div><strong>Position:</strong> {author['author_position'] or 'None'}</div>
+                                        <div style="grid-column: span 2;"><strong>Affiliation:</strong> {author['affiliation']}</div>
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            with st.form(key=f"checklist_form_{author['author_id']}", border=False):
+                                checklist_values = {}
+                                
+                                # Prepare a list of checkbox labels and keys based on publishing type
+                                checklist_items = []
+
+                                if publishing_type == "Writing + Publishing":
+                                    checklist_items.append(("Written Paper Confirmation Received", 'written_paper_confirmation_received'))
+
+                                elif publishing_type == "Publishing Only":
+                                    checklist_items.append(("Paper Receiving Confirmation Sent", 'paper_receiving_confirmation_sent'))
+
+                                checklist_items += [
+                                    ("Paper Review Confirmation Sent", 'paper_review_confirmation_sent'),
+                                    ("Certificate Ready", 'certificate_ready'),
+                                    ("Certificate Sent", 'certificate_sent'),
+                                    ("Publishing Confirmation Sent", 'publishing_confirmation_sent')
+                                ]
+
+                                # Render checkboxes in rows of 2 columns
+                                for i in range(0, len(checklist_items), 2):
+                                    cols = st.columns(2)
+                                    for j in range(2):
+                                        if i + j < len(checklist_items):
+                                            label, key = checklist_items[i + j]
+                                            db_value = author.get(key, False)
+                                            checklist_values[key] = cols[j].checkbox(
+                                                label, value=db_value, key=f"{key}_{author['author_id']}"
+                                            )
+
+                                # Submit Button
+                                if st.form_submit_button("Update", type="primary", use_container_width=False):
+                                    try:
+                                        with conn.session as session:
+                                            query = text("""
+                                                UPDATE paper_authors
+                                                SET written_paper_confirmation_received = :written_paper_confirmation_received,
+                                                    paper_receiving_confirmation_sent = :paper_receiving_confirmation_sent,
+                                                    paper_review_confirmation_sent = :paper_review_confirmation_sent,
+                                                    certificate_ready = :certificate_ready,
+                                                    certificate_sent = :certificate_sent,
+                                                    publishing_confirmation_sent = :publishing_confirmation_sent
+                                                WHERE paper_id = :paper_id AND author_id = :author_id
+                                            """)
+                                            session.execute(query, {
+                                                'written_paper_confirmation_received': checklist_values.get('written_paper_confirmation_received', False),
+                                                'paper_receiving_confirmation_sent': checklist_values.get('paper_receiving_confirmation_sent', False),
+                                                'paper_review_confirmation_sent': checklist_values.get('paper_review_confirmation_sent', False),
+                                                'certificate_ready': checklist_values.get('certificate_ready', False),
+                                                'certificate_sent': checklist_values.get('certificate_sent', False),
+                                                'publishing_confirmation_sent': checklist_values.get('publishing_confirmation_sent', False),
+                                                'paper_id': paper_id,
+                                                'author_id': author['author_id']
+                                            })
+                                            session.commit()
+                                        st.success("Checklist updated!", icon="✅")
+                                    except Exception as e:
+                                        st.error(f"Error updating checklist: {e}")
+
+                    else:
+                        st.markdown(
+                            f"""
+                            <div class="author-card">
+                                <strong style="font-size:14px;color:#2e7d32;">
+                                    {author['name']} (ID: {author['author_id']})
+                                </strong>
+                                <div class="author-grid">
+                                    <div><strong>Name:</strong> {author['name']}</div>
+                                    <div><strong>Email:</strong> {author['email']}</div>
+                                    <div><strong>Phone:</strong> {author['phone']}</div>
+                                    <div><strong>Position:</strong> {author['author_position'] or 'None'}</div>
+                                    <div style="grid-column: span 2;"><strong>Affiliation:</strong> {author['affiliation']}</div>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True
+                        )
 
     # --- Helper Function: Check for Duplicate Author Position ---
     def is_author_position_duplicate(paper_id, author_position, exclude_author_id=None):
@@ -572,186 +885,128 @@ def edit_author_dialog(paper_id, conn):
             st.error(f"Error fetching authors: {e}")
             return []
 
-    # --- Edit Existing Authors Section ---
-    if not authors:
-        st.info("No authors assigned to this paper yet.")
-    
-    for author in authors:
-        with st.expander(f"ID: {author['author_id']} | {author['name'] or 'Unnamed Author'} | Position: {author['author_position'] or 'None'}", expanded=False):
+    # --- Add New Author Section ---
+    st.write("### Add New Author")
+    with st.container():
+        with st.expander("Add Author", expanded=False):
+            author_suggestions = get_author_suggestions()
+            author_names = [""] + [author['name'] for author in author_suggestions]
+            selected_author_name = st.selectbox(
+                "Search Author by Name",
+                options=author_names,
+                index=0,
+                placeholder="Select or type to search",
+                key="author_search"
+            )
+
+            selected_author = None
+            if selected_author_name:
+                selected_author = next((a for a in author_suggestions if a['name'] == selected_author_name), None)
+
             col1, col2 = st.columns(2)
             with col1:
-                name = st.text_input("Name", value=author['name'], key=f"name_{author['author_id']}")
-                email = st.text_input("Email", value=author['email'], key=f"email_{author['author_id']}")
+                name = st.text_input(
+                    "Author Name",
+                    value=selected_author['name'] if selected_author else "",
+                    key="new_name",
+                    placeholder="Enter author name"
+                )
+                email = st.text_input(
+                    "Author Email",
+                    value=selected_author['email'] if selected_author else "",
+                    key="new_email",
+                    placeholder="Enter email address"
+                )
             with col2:
-                phone = st.text_input("Phone", value=author['phone'], key=f"phone_{author['author_id']}")
+                phone = st.text_input(
+                    "Author Phone",
+                    value=selected_author['phone'] if selected_author else "",
+                    key="new_phone",
+                    placeholder="Enter phone number"
+                )
                 author_position = st.number_input(
                     "Author Position",
                     min_value=1,
                     step=1,
-                    value=author['author_position'] or 1,
+                    value=1,
                     format="%d",
-                    key=f"position_{author['author_id']}"
+                    key="new_position"
                 )
-            affiliation = st.text_area("Affiliation", value=author['affiliation'], key=f"affiliation_{author['author_id']}")
+            affiliation = st.text_area(
+                "Author Affiliation",
+                value=selected_author['affiliation'] if selected_author else "",
+                key="new_affiliation",
+                placeholder="Enter affiliation"
+            )
 
-            if st.button(f"Update Author", key=f"update_{author['author_id']}", use_container_width=True):
-                if is_author_position_duplicate(paper_id, author_position, exclude_author_id=author['author_id']):
+            if st.button("Add Author", key="add_author", type="primary", use_container_width=True):
+                if not name or not email:
+                    st.error("Name and Email are required.")
+                    return
+                if is_author_position_duplicate(paper_id, author_position):
                     st.error("This author position is already taken for this paper.")
-                else:
-                    try:
-                        with conn.session as session:
-                            # Update authors table
-                            author_query = text("""
-                                UPDATE authors
-                                SET name = :name, email = :email, phone = :phone, affiliation = :affiliation
-                                WHERE author_id = :author_id
+                    return
+
+                try:
+                    with conn.session as session:
+                        if selected_author and selected_author['email'] == email:
+                            check_duplicate_paper_author_query = text("""
+                                SELECT COUNT(*) FROM paper_authors
+                                WHERE paper_id = :paper_id AND author_id = :author_id
                             """)
-                            session.execute(author_query, {
+                            if session.execute(check_duplicate_paper_author_query, {
+                                'paper_id': paper_id,
+                                'author_id': selected_author['author_id']
+                            }).scalar() > 0:
+                                st.error("This author is already linked to this paper.")
+                                return
+                            else:
+                                paper_author_query = text("""
+                                    INSERT INTO paper_authors (paper_id, author_id, author_position)
+                                    VALUES (:paper_id, :author_id, :author_position)
+                                """)
+                                session.execute(paper_author_query, {
+                                    'paper_id': paper_id,
+                                    'author_id': selected_author['author_id'],
+                                    'author_position': author_position
+                                })
+                                session.commit()
+                                st.success("Existing author added!", icon="✅")
+                        else:
+                            check_email_query = text("SELECT COUNT(*) FROM authors WHERE email = :email")
+                            if session.execute(check_email_query, {'email': email}).scalar() > 0:
+                                st.error("An author with this email exists. Please search and select them.")
+                                return
+
+                            author_query = text("""
+                                INSERT INTO authors (name, email, phone, affiliation)
+                                VALUES (:name, :email, :phone, :affiliation)
+                                RETURNING author_id
+                            """)
+                            result = session.execute(author_query, {
                                 'name': name,
                                 'email': email if email else None,
                                 'phone': phone if phone else None,
-                                'affiliation': affiliation if affiliation else None,
-                                'author_id': author['author_id']
+                                'affiliation': affiliation if affiliation else None
                             })
+                            new_author_id = result.fetchone()[0]
 
-                            # Update paper_authors table
-                            paper_author_query = text("""
-                                UPDATE paper_authors
-                                SET author_position = :author_position
-                                WHERE paper_id = :paper_id AND author_id = :author_id
-                            """)
-                            session.execute(paper_author_query, {
-                                'author_position': author_position,
-                                'paper_id': paper_id,
-                                'author_id': author['author_id']
-                            })
-                            session.commit()
-                        st.success(f"Author ID {author['author_id']} updated successfully!")
-                    except Exception as e:
-                        st.error(f"Error updating author: {e}")
-
-    # --- Add New Author Section ---
-    st.markdown("### Add New Author")
-    with st.expander("Add New Author", expanded=False):
-        # Selectbox for searching existing authors
-        author_suggestions = get_author_suggestions()
-        author_names = [""] + [author['name'] for author in author_suggestions]
-        selected_author_name = st.selectbox(
-            "Search Author by Name",
-            options=author_names,
-            index=0,
-            placeholder="Select or type to search",
-            key="author_search"
-        )
-
-        # Auto-fill fields if an author is selected
-        selected_author = None
-        if selected_author_name:
-            selected_author = next((a for a in author_suggestions if a['name'] == selected_author_name), None)
-
-        # Input fields
-        col1, col2 = st.columns(2)
-        with col1:
-            name = st.text_input(
-                "Author Name",
-                value=selected_author['name'] if selected_author else "",
-                key="new_name"
-            )
-            email = st.text_input(
-                "Author Email",
-                value=selected_author['email'] if selected_author else "",
-                key="new_email"
-            )
-        with col2:
-            phone = st.text_input(
-                "Author Phone",
-                value=selected_author['phone'] if selected_author else "",
-                key="new_phone"
-            )
-            author_position = st.number_input(
-                "Author Position",
-                min_value=1,
-                step=1,
-                value=1,
-                format="%d",
-                key="new_position"
-            )
-        affiliation = st.text_area(
-            "Author Affiliation",
-            value=selected_author['affiliation'] if selected_author else "",
-            key="new_affiliation"
-        )
-
-        # Button to add author
-        if st.button("Add Author", key="add_author", use_container_width=True):
-            if not name or not email:
-                st.error("Name and Email are required.")
-                return
-            if is_author_position_duplicate(paper_id, author_position):
-                st.error("This author position is already taken for this paper.")
-                return
-
-            try:
-                with conn.session as session:
-                    if selected_author and selected_author['email'] == email:
-                        # Check if this existing author is already linked to the current paper
-                        check_duplicate_paper_author_query = text("""
-                            SELECT COUNT(*) FROM paper_authors
-                            WHERE paper_id = :paper_id AND author_id = :author_id
-                        """)
-                        if session.execute(check_duplicate_paper_author_query, {
-                            'paper_id': paper_id,
-                            'author_id': selected_author['author_id']
-                        }).scalar() > 0:
-                            st.error("This author is already linked to this paper.")
-                            return
-                        else:
                             paper_author_query = text("""
                                 INSERT INTO paper_authors (paper_id, author_id, author_position)
                                 VALUES (:paper_id, :author_id, :author_position)
                             """)
                             session.execute(paper_author_query, {
                                 'paper_id': paper_id,
-                                'author_id': selected_author['author_id'],
+                                'author_id': new_author_id,
                                 'author_position': author_position
                             })
                             session.commit()
-                            st.success("Existing author added to paper successfully!")
-                    else:
-                        # Check for duplicate email for a completely new author
-                        check_email_query = text("SELECT COUNT(*) FROM authors WHERE email = :email")
-                        if session.execute(check_email_query, {'email': email}).scalar() > 0:
-                            st.error("An author with this email already exists. Please search and select them above instead of adding as new.")
-                            return
+                            st.success("New author added!", icon="✅")
+                except Exception as e:
+                    st.error(f"Error adding author: {e}")
 
-                        # Add new author to authors table
-                        author_query = text("""
-                            INSERT INTO authors (name, email, phone, affiliation)
-                            VALUES (:name, :email, :phone, :affiliation)
-                        """)
-                        result = session.execute(author_query, {
-                            'name': name,
-                            'email': email if email else None,
-                            'phone': phone if phone else None,
-                            'affiliation': affiliation if affiliation else None
-                        })
-                        new_author_id = result.lastrowid
-
-                        # Link new author to paper in paper_authors table
-                        paper_author_query = text("""
-                            INSERT INTO paper_authors (paper_id, author_id, author_position)
-                            VALUES (:paper_id, :author_id, :author_position)
-                        """)
-                        session.execute(paper_author_query, {
-                            'paper_id': paper_id,
-                            'author_id': new_author_id,
-                            'author_position': author_position
-                        })
-                        session.commit()
-                        st.success("New author added successfully!")
-            except Exception as e:
-                st.error(f"Error adding author: {e}")
-
+paper_status = ['Accepted','Rejected','Pending','In Review','Excess Plagiarism',
+                'Excess AI','Technical Incorrect','Grammatical Incorrect','References Incorrect']
 
 @st.dialog("Edit Paper Status")
 def edit_paper_status_dialog(paper_id, conn):
@@ -844,8 +1099,8 @@ def edit_paper_status_dialog(paper_id, conn):
         ai_plagiarism = st.text_input("AI Plagiarism (%)", value=current_ai_plagiarism, key="ai_plagiarism")
         acceptance = st.selectbox(
             "Acceptance Status",
-            options=['Accepted', 'Rejected', 'Pending', 'In Review'],
-            index=['Accepted', 'Rejected', 'Pending', 'In Review'].index(current_acceptance) if current_acceptance in ['Accepted', 'Rejected', 'Pending', 'In Review'] else 2,
+            options=paper_status,
+            index = paper_status.index(current_acceptance) if current_acceptance in paper_status else 2,
             key="acceptance"
         )
         if st.button("Update Review Details", key="update_review"):
@@ -939,15 +1194,20 @@ def metrics(df):
         with col1:
             st.metric("Total Papers", len(df), delta=None, help="Total number of papers in the database.")
         with col2:
-            st.metric("Total Published", len(df[df['paper_uploading_date'].notnull()]), delta=f"-{len(df[df['paper_uploading_date'].isnull()])} Not Published")
+            st.metric("Total Published", len(df[df['paper_uploading_date'].notnull()]), 
+                      delta=f"-{len(df[df['paper_uploading_date'].isnull()])} Not Published")
         with col3:
-            st.metric("Accepted Papers", len(df[df['acceptance'] == 'Accepted']), delta=f"-{len(df[df['acceptance'] == 'Rejected'])} Rejected")
+            st.metric("Accepted Papers", len(df[df['acceptance'] == 'Accepted']), 
+                      delta=f"-{len(df[df['acceptance'] == 'Rejected'])} Rejected")
         with col4:
-            st.metric("Review Pending", len(df[df['review_done'].isnull()]), delta=f"{len(df[df['review_done'].notnull()])} Done")
+            st.metric("Review Pending", len(df[df['review_done'].isnull()]), 
+                      delta=f"{len(df[df['review_done'].notnull()])} Done")
         with col5:
-            st.metric("Formatting Pending", len(df[df['formatting_date'].isnull()]), delta=f"{len(df[df['formatting_date'].notnull()])} Done")
+            st.metric("Formatting Pending", len(df[df['formatting_date'].isnull()]), 
+                      delta=f"{len(df[df['formatting_date'].notnull()])} Done")
         with col6:
-            st.metric("Payment Pending", len(df[df['payment_date'].isnull()]), delta=f"{len(df[df['payment_date'].notnull()])} Received")
+            st.metric("Payment Pending", len(df[df['payment_date'].isnull()]), 
+                      delta=f"{len(df[df['payment_date'].notnull()])} Received")
         
         month_order = [
             "January", "February", "March", "April", "May", "June", 
@@ -1026,7 +1286,8 @@ def all_filters(df):
         )
     with col2:
         with st.popover("Filters", use_container_width=True):
-            st.button(":material/cached: Reset Filters", key="reset_filters_button", on_click=reset_all_filters, use_container_width=True)
+            st.button(":material/cached: Reset Filters", key="reset_filters_button", 
+                      on_click=reset_all_filters, use_container_width=True)
             
             # Organize filters into tabs
             tab1, tab2, tab3 = st.tabs(["Status", "Date", "Volume/Issue"])
@@ -1057,7 +1318,8 @@ def all_filters(df):
                 st.session_state.filters['acceptance'] = selected_acceptance
 
                 publishing_types = ['Publishing', 'Writing + Publishing']
-                selected_publishing_type = st.pills("Filter by Publishing Type", options=publishing_types, key="publishing_pills")
+                selected_publishing_type = st.pills("Filter by Publishing Type", options=publishing_types, 
+                                                    key="publishing_pills")
                 st.session_state.filters['publishing_type'] = selected_publishing_type
             
             with tab3:
@@ -1167,8 +1429,8 @@ def all_filters(df):
     return filtered_df, applied_filters
 
 
-def render_table(df, page, items_per_page, conn, applied_filters=False):
 
+def render_table(df, page, items_per_page, conn, applied_filters=False):
     start_idx = page * items_per_page
     end_idx = start_idx + items_per_page
     paginated_papers = df.iloc[start_idx:end_idx]
@@ -1230,10 +1492,30 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                     # Get author names
                     authors_display = fetch_author_names(row['paper_id'], conn)
 
+                    # Get plagiarism and ai_plagiarism values with symbols
+                    plagiarism_value = row['plagiarism'] if pd.notnull(row['plagiarism']) else 'N/A'
+                    plagiarism_display = (
+                        f'<span style="font-weight: 500; color: #e09f36;">'
+                        f'<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">plagiarism</span> '
+                        f'Plag: {plagiarism_value}%'
+                        f'</span>'
+                    )
+                
+                    # Combine author names with plagiarism values
+                    authors_with_plagiarism = (
+                        f"{authors_display} | {plagiarism_display}"
+                    )
+
                     # Determine publishing type badge
                     pub_type = row['publishing_type']
-                    badge_class = "pill-publishing" if pub_type == 'Publishing' else "pill-writing-publishing"
-                    pub_badge = f'<span class="small-pill {badge_class}">{pub_type}</span>'
+                    badge_class = "pill-writing-publishing" if pub_type == 'Writing + Publishing' else ""
+                    pub_badge = f'<span class="small-pill {badge_class}">{pub_type}</span>' if pub_type == 'Writing + Publishing' else ''
+
+                    writing_badge = ''
+                    if pub_type == 'Writing + Publishing':
+                        writing_status = "Writing Done" if pd.notnull(row['writing_date']) else "Writing Pending"
+                        writing_class = "pill-published tick" if writing_status == "Writing Done" else "pill-not-published cross"
+                        writing_badge = f'<span class="small-pill {writing_class}">{writing_status}</span>'
 
                     # Determine publication status
                     pub_status = "Published" if pd.notnull(row['paper_uploading_date']) else "Not Published"
@@ -1245,8 +1527,8 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                     with col1:
                         st.write(int(row["paper_id"]))
                     with col2:
-                        st.markdown(f'<div class="data-row">{row["paper_title"]} {pub_badge} {status_badge}</div>', unsafe_allow_html=True)
-                        st.markdown(f'<div class="author-names">{authors_display}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{row["paper_title"]} {pub_badge} {writing_badge} {status_badge}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="author-names">{authors_with_plagiarism}</div>', unsafe_allow_html=True)
                     with col3:
                         st.markdown(f'<div class="data-row">{format_date(row["receiving_date"])}</div>', unsafe_allow_html=True)
                     with col4:

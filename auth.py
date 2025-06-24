@@ -36,15 +36,11 @@ JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
 VALID_APPS = {"main", "operations", 'ijisem'}
 
-# Flask endpoints
-FLASK_AUTH_URL = "https://crmserver.agvolumes.com/auth/validate_and_details"
-FLASK_LOGIN_URL = "https://crmserver.agvolumes.com/login"
-FLASK_LOGOUT_URL = "https://crmserver.agvolumes.com/logout"
 
 # # Configuration
-# FLASK_AUTH_URL = "http://localhost:5001/auth/validate_and_details"
-# FLASK_LOGIN_URL = "http://localhost:5001/login"
-# FLASK_LOGOUT_URL = "http://localhost:5001/logout"
+FLASK_AUTH_URL = st.secrets["general"]["FLASK_AUTH_URL"]
+FLASK_LOGIN_URL = st.secrets["general"]["FLASK_LOGIN_URL"]
+FLASK_LOGOUT_URL = st.secrets["general"]["FLASK_LOGOUT_URL"]
 
 
 def clear_auth_session():

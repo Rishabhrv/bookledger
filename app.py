@@ -88,13 +88,9 @@ token = st.session_state.token
 #token='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJleHAiOjE3NDk4MTUzNTl9.8N792ejuV8l6-rt-M5sdXIuNl5X40BotIdzjzILf6oY'
 
 # Base URL for your app
-BASE_URL = "https://newcrm.agvolumes.com" 
-#BASE_URL = "http://localhost:8501"  
+BASE_URL  = st.secrets["general"]["BASE_URL"]
 
-#UPLOAD_DIR = r"D:\Rishabh\bookledger\uploads"
-UPLOAD_DIR = "/home/rishabhvyas/mis_files/syllabus"
-
-
+UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
 
 ########################################################################################################################
 ##################################--------------- Configure Functions ----------------------------######################
