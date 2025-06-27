@@ -12,6 +12,14 @@ from logging.handlers import RotatingFileHandler
 from auth import validate_token
 from constants import ACCESS_TO_BUTTON
 
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
+import io
+import os
+
 
 ####################################################################################################################
 ##################################--------------- Logs ----------------------------#################################
@@ -75,9 +83,6 @@ chek_time = time.time()
 validate_token()
 total_chek_time = time.time() - chek_time
 
-# st.session_state.role = 'admin'
-# st.session_state.username = 'Yogesh Sharma'
-# st.session_state.app = 'main'
 
 user_role = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
@@ -85,12 +90,16 @@ user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 token = st.session_state.token
-#token='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoxLCJleHAiOjE3NDk4MTUzNTl9.8N792ejuV8l6-rt-M5sdXIuNl5X40BotIdzjzILf6oY'
+
 
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
-
 UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
+EMAIL_ADDRESS = st.secrets["general"]["EMAIL_ADDRESS"]
+EMAIL_PASSWORD = st.secrets["general"]["EMAIL_PASSWORD"]
+SMTP_SERVER = st.secrets["general"]["SMTP_SERVER"]
+SMTP_PORT = st.secrets["general"]["SMTP_PORT"]
+ADMIN_EMAIL = st.secrets["general"]["ADMIN_EMAIL"]
 
 ########################################################################################################################
 ##################################--------------- Configure Functions ----------------------------######################
@@ -214,6 +223,20 @@ def connect_db():
 
 # Connect to MySQL
 conn = connect_db()
+
+# Database connection
+@st.cache_resource
+def connect_ijisem_db():
+    try:
+        def get_connection():
+            return st.connection('ijisem', type='sql')
+        connect_ijisem_db_conn = get_connection()
+        return connect_ijisem_db_conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
+
+ijisem_conn = connect_ijisem_db()
 
 
 ########################################################################################################################
@@ -532,6 +555,240 @@ def fetch_author_names(book_id, conn):
             return "No authors"
     except Exception as e:
         return f"Database error: {str(e)}"
+    
+
+def send_email(subject, body, attachment_data, filename):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = ADMIN_EMAIL
+        msg['Subject'] = subject
+
+        msg.attach(MIMEText(body, 'plain'))
+
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(attachment_data)
+
+        encoders.encode_base64(part)
+        part.add_header(
+            'Content-Disposition',
+            f'attachment; filename={filename}'
+        )
+        msg.attach(part)
+
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Failed to send email: {e}")
+        return False
+
+def get_all_ijisem_data(conn):
+    # Fetch papers
+    papers_query = "SELECT * FROM papers"
+    papers_df = conn.query(papers_query)
+    
+    # Fetch authors
+    authors_query = "SELECT * FROM authors"
+    authors_df = conn.query(authors_query)
+    
+    # Fetch paper_authors
+    paper_authors_query = "SELECT * FROM paper_authors"
+    paper_authors_df = conn.query(paper_authors_query)
+    
+    # Merge data
+    merged_df = paper_authors_df.merge(papers_df, on='paper_id', how='left')
+    merged_df = merged_df.merge(authors_df, on='author_id', how='left')
+    
+    # Pivot authors to have Author 1 Name))^    author_pivot = merged_df.pivot_table(
+    author_pivot = merged_df.pivot_table(
+        index=['paper_id', 'paper_title'],
+        columns='author_position',
+        values=['name', 'email', 'phone', 'affiliation'],
+        aggfunc='first'
+    ).reset_index()
+    
+    # Flatten the multi-level column names
+    author_pivot.columns = [
+        f'{col[0]}_{col[1]}' if col[1] else col[0] 
+        for col in author_pivot.columns
+    ]
+    
+    # Rename columns to desired format
+    renamed_columns = {'paper_id': 'paper_id', 'paper_title': 'paper_title'}
+    for col in author_pivot.columns:
+        if col not in ['paper_id', 'paper_title']:
+            field, position = col.rsplit('_', 1)
+            renamed_columns[col] = f'Author {position} {field.capitalize()}'
+    
+    author_pivot.rename(columns=renamed_columns, inplace=True)
+    
+    # Merge back with paper details
+    final_df = papers_df.merge(
+        author_pivot[['paper_id'] + [col for col in author_pivot.columns if col.startswith('Author')]], 
+        on='paper_id', 
+        how='left'
+    )
+    
+    return final_df
+
+def get_all_booktracker_data(conn):
+    # Fetch books
+    books_query = "SELECT * FROM books"
+    books_df = conn.query(books_query)
+    
+    # Fetch authors
+    authors_query = "SELECT * FROM authors"
+    authors_df = conn.query(authors_query)
+    
+    # Fetch book_authors
+    book_authors_query = "SELECT * FROM book_authors"
+    book_authors_df = conn.query(book_authors_query)
+    
+    # Fetch inventory
+    inventory_query = "SELECT * FROM inventory"
+    inventory_df = conn.query(inventory_query)
+    
+    # Merge data
+    merged_df = book_authors_df.merge(books_df, on='book_id', how='left')
+    merged_df = merged_df.merge(authors_df, on='author_id', how='left')
+    merged_df = merged_df.merge(inventory_df, on='book_id', how='left')
+    
+    # Pivot authors to have Author 1 Name, Author 1 Email, etc.
+    author_pivot = merged_df.pivot_table(
+        index=['book_id', 'title'],
+        columns='author_position',
+        values=['name', 'email', 'phone'],
+        aggfunc='first'
+    ).reset_index()
+    
+    # Flatten the multi-level column names
+    author_pivot.columns = [
+        f'{col[0]}_{col[1]}' if col[1] else col[0] 
+        for col in author_pivot.columns
+    ]
+    
+    # Rename columns to desired format
+    renamed_columns = {'book_id': 'book_id', 'title': 'title'}
+    for col in author_pivot.columns:
+        if col not in ['book_id', 'title']:
+            field, position = col.rsplit('_', 1)
+            renamed_columns[col] = f'Author {position} {field.capitalize()}'
+    
+    author_pivot.rename(columns=renamed_columns, inplace=True)
+    
+    # Merge back with book details and inventory
+    final_df = books_df.merge(
+        author_pivot[['book_id'] + [col for col in author_pivot.columns if col.startswith('Author')]], 
+        on='book_id',
+        how='left'
+    ).merge(
+        inventory_df,
+        on='book_id',
+        how='left'
+    )
+    
+    return final_df
+
+def export_data():
+    st.header("Export Data")
+    
+    with st.container(border=True):
+        col1, col2 = st.columns([1,1], gap="small")
+        with col1:
+            st.subheader("Database Selection")
+            database = st.radio(
+                "Select Database",
+                ["MIS", "IJISEM"],
+                index=0,
+                horizontal=True
+            )
+        
+        with col2:
+            st.subheader("Export Options")
+            if database == "MIS":
+                export_all = st.checkbox("All Data Export", value=True)
+                export_authors = st.checkbox("Only Author Data")
+                export_books = st.checkbox("Only Book Data")
+                export_inventory = st.checkbox("Only Inventory Data")
+                
+                export_options = []
+                if export_all:
+                    export_options.append("All Data Export")
+                if export_authors:
+                    export_options.append("Only Author Data")
+                if export_books:
+                    export_options.append("Only Book Data")
+                if export_inventory:
+                    export_options.append("Only Inventory Data")
+            else:
+                export_all = st.checkbox("All Data Export", value=True)
+                export_authors = st.checkbox("Only Author Data")
+                export_papers = st.checkbox("Only Papers Data")
+                
+                export_options = []
+                if export_all:
+                    export_options.append("All Data Export")
+                if export_authors:
+                    export_options.append("Only Author Data")
+                if export_papers:
+                    export_options.append("Only Papers Data")
+        
+        if st.button("Export"):
+            if not export_options:
+                st.error("Please select at least one export option")
+                return
+                
+            with st.spinner("Generating export..."):
+                dfs = []
+                if database == "IJISEM":
+                    for option in export_options:
+                        if option == "All Data Export":
+                            df = get_all_ijisem_data(ijisem_conn)
+                            dfs.append(('All_Data', df))
+                        elif option == "Only Author Data":
+                            df = ijisem_conn.query("SELECT * FROM authors")
+                            dfs.append(('Authors', df))
+                        else:  # Only Papers Data
+                            df = ijisem_conn.query("SELECT * FROM papers")
+                            dfs.append(('Papers', df))
+                else:  # booktracker
+                    for option in export_options:
+                        if option == "All Data Export":
+                            df = get_all_booktracker_data(conn)
+                            dfs.append(('All_Data', df))
+                        elif option == "Only Author Data":
+                            df = conn.query("SELECT * FROM authors")
+                            dfs.append(('Authors', df))
+                        elif option == "Only Book Data":
+                            df = conn.query("SELECT * FROM books")
+                            dfs.append(('Books', df))
+                        else:  # Inventory Data Export
+                            df = conn.query("SELECT * FROM inventory")
+                            dfs.append(('Inventory', df))
+                
+                # Create Excel file in memory
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    for sheet_name, df in dfs:
+                        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+                
+                # Get current timestamp for filename
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{database}_export_{timestamp}.xlsx"
+                
+                # Send email
+                subject = f"{database} Data Export - {', '.join(export_options)}"
+                body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
+                
+                if send_email(subject, body, output.getvalue(), filename):
+                    st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
+                    st.balloons()
+                else:
+                    st.error("Failed to send export email")
 
 
 ###################################################################################################################################
@@ -558,7 +815,7 @@ def manage_users(conn):
         ).fetchall()
     
     # Tabs for user management
-    tab1, tab2, tab3 = st.tabs(["View Users", "Add New User", "Edit Users"])
+    tab1, tab2, tab3, tab4 = st.tabs(["View Users", "Edit Users", "Add New User",  "Export Data"])
 
     # Tab 1: View Users (Table + Add New User in Expander)
     with tab1:
@@ -614,8 +871,7 @@ def manage_users(conn):
                 key="user_table"
             )
     
-    # Tab 2: Add New User
-    with tab2:
+    with tab3:
         with st.container(border=True):
             col1, col2 = st.columns(2)
             with col1:
@@ -710,8 +966,7 @@ def manage_users(conn):
                         st.success("User Added Successfully!", icon="✔️")
                         st.rerun()
 
-    # Tab 3: Edit Users
-    with tab3:
+    with tab2:
         if not users:
             st.error("❌ No users found in database.")
         else:
@@ -835,9 +1090,11 @@ def manage_users(conn):
                                 st.success("User Deleted Successfully!", icon="✔️")
                                 st.session_state.confirm_delete_user_id = None
                                 st.rerun()
-
-
-
+    
+    with tab4:
+        export_data()
+        
+        
 ###################################################################################################################################
 ##################################--------------- Edit Auhtor Details ----------------------------##################################
 ###################################################################################################################################
