@@ -1183,8 +1183,8 @@ def edit_author_dialog(paper_id, conn):
             )
 
             if st.button("Add Author", key="add_author", type="primary", use_container_width=True):
-                if not name or not email:
-                    st.error("Name and Email are required.")
+                if not name:
+                    st.error("Name is required.")
                     return
                 if is_author_position_duplicate(paper_id, author_position):
                     st.error("This author position is already taken for this paper.")
@@ -1232,12 +1232,6 @@ def edit_author_dialog(paper_id, conn):
                             session.commit()
                             st.success("Existing author updated and added to paper!", icon="✅")
                         else:
-                            # Check for existing email
-                            check_email_query = text("SELECT COUNT(*) FROM authors WHERE email = :email")
-                            if session.execute(check_email_query, {'email': email}).scalar() > 0:
-                                st.error("An author with this email exists. Please search and select them.")
-                                return
-
                             # Create new author
                             author_query = text("""
                                 INSERT INTO authors (name, email, phone, affiliation)

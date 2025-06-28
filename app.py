@@ -11,6 +11,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
 from constants import ACCESS_TO_BUTTON
+import uuid
 
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -89,6 +90,7 @@ user_app = st.session_state.get("app", "Unknown")
 user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
+st.session_state.session_id = str(uuid.uuid4())
 token = st.session_state.token
 
 
@@ -237,6 +239,48 @@ def connect_ijisem_db():
         st.stop()
 
 ijisem_conn = connect_ijisem_db()
+
+
+########################################################################################################################
+##################################--------------- Activity Log ----------------------------######################
+#######################################################################################################################
+
+
+# from datetime import datetime
+# def log_activity(conn, user_id, username, session_id, action, details):
+#     try:
+#         with conn.session as s:
+#             s.execute(
+#                 text("""
+#                     INSERT INTO activity_log (user_id, username, session_id, action, details, timestamp)
+#                     VALUES (:user_id, :username, :session_id, :action, :details, :timestamp)
+#                 """),
+#                 {
+#                     "user_id": user_id,
+#                     "username": username,
+#                     "session_id": session_id,
+#                     "action": action,
+#                     "details": details,
+#                     "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+#                 }
+#             )
+#             s.commit()
+#     except Exception as e:
+#         st.error(f"Error logging activity: {e}")
+    
+
+
+# if "activity_logged" not in st.session_state:
+#     log_activity(
+#                 conn,
+#                 st.session_state.user_id,
+#                 st.session_state.username,
+#                 st.session_state.session_id,
+#                 "logged in",
+#                 f"App: {st.session_state.app}"
+#             )
+#     st.session_state.activity_logged = True
+
 
 
 ########################################################################################################################
@@ -1639,6 +1683,265 @@ def add_book_dialog(conn):
 ###################################################################################################################################
 
 from datetime import datetime
+
+# @st.dialog("Manage ISBN and Book Title", width="large")
+# def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
+#     # Fetch current book details
+#     book_details = fetch_book_details(book_id, conn)
+#     if book_details.empty:
+#         st.error("❌ Book not found in database.")
+#         return
+    
+#     # Extract current values
+#     current_title = book_details.iloc[0]['title']
+#     current_date = book_details.iloc[0]['date']
+#     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
+#     current_publisher = book_details.iloc[0].get('publisher', '')
+#     current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
+
+#     publisher_colors = {
+#         "AGPH": {"color": "#ffffff", "background": "#e4be17"},
+#         "Cipher": {"color": "#ffffff", "background": "#8f1b83"},
+#         "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},
+#         "AG Classics": {"color": "#ffffff", "background": "#d81b60"},
+#         "AG Kids": {"color": "#ffffff", "background": "#f57c00"},
+#         "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}
+#     }
+    
+#     publisher_badge = ""
+#     if current_publisher in publisher_colors:
+#         style = publisher_colors[current_publisher]
+#         publisher_style = f"color: {style['color']}; font-size: 12px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
+#         publisher_badge = f'<span style="{publisher_style}">{current_publisher}</span>'
+
+#     # Initialize session state for tracking previous values
+#     if f"apply_isbn_{book_id}_prev" not in st.session_state:
+#         st.session_state[f"apply_isbn_{book_id}_prev"] = bool(current_apply_isbn)
+#     if f"receive_isbn_{book_id}_prev" not in st.session_state:
+#         st.session_state[f"receive_isbn_{book_id}_prev"] = bool(pd.notna(current_isbn))
+
+#     # Main container
+#     with st.container():
+#         st.markdown(f"### {book_id} - {current_title}{publisher_badge}", unsafe_allow_html=True)
+
+#         # Book Details Section
+#         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
+#         with st.container(border=True):
+#             st.markdown('<div class="info-box">', unsafe_allow_html=True)
+#             col1, col2 = st.columns([3, 1])
+#             with col1:
+#                 new_title = st.text_input(
+#                     "Book Title",
+#                     value=current_title,
+#                     key=f"title_{book_id}",
+#                     help="Enter the book title"
+#                 )
+#             with col2:
+#                 new_date = st.date_input(
+#                     "Book Date",
+#                     value=current_date if current_date else datetime.today(),
+#                     key=f"date_{book_id}",
+#                     help="Select the book date"
+#                 )
+#             new_is_publish_only = st.toggle(
+#                 "Publish Only?",
+#                 value=current_is_publish_only,
+#                 key=f"is_publish_only_{book_id}",
+#                 help="Enable this to mark the book as publish only (disables writing operations)"
+#             )
+#             st.markdown('</div>', unsafe_allow_html=True)
+        
+#         st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
+#         with st.expander("Authors", expanded=False):
+#             authors_data = fetch_book_authors(book_id, conn)
+#             if authors_data.empty:
+#                 st.info("No authors associated with this book.")
+#             else:
+#                 authors_data = authors_data.sort_values(by='author_position')
+#                 with st.container(border=False):
+#                     col1, col2 = st.columns([2, 1])
+#                     with col1:
+#                         st.markdown("#### 👤 Author Name")
+#                     with col2:
+#                         st.markdown("#### 🏷️ Position")
+#                 for _, author in authors_data.iterrows():
+#                     col1, col2 = st.columns([2, 1])
+#                     with col1:
+#                         st.markdown(f"<div style='margin-bottom: 6px;'>➤ {author['name']}</div>", unsafe_allow_html=True)
+#                     with col2:
+#                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
+#                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
+
+#         if not has_open_author_position(conn, book_id):
+#             # ISBN Details Section
+#             st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
+#             with st.container(border=True):
+#                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
+#                 apply_isbn = st.checkbox(
+#                     "ISBN Applied?",
+#                     value=bool(current_apply_isbn),
+#                     key=f"apply_{book_id}",
+#                     help="Check if ISBN application has been made"
+#                 )
+#                 receive_isbn = st.checkbox(
+#                     "ISBN Received?",
+#                     value=bool(pd.notna(current_isbn)),
+#                     key=f"receive_{book_id}",
+#                     disabled=not apply_isbn,
+#                     help="Check if ISBN has been received (requires ISBN Applied)"
+#                 )
+#                 # Log checkbox interactions
+#                 if apply_isbn != st.session_state[f"apply_isbn_{book_id}_prev"]:
+#                     log_activity(
+#                         conn,
+#                         st.session_state.user_id,
+#                         st.session_state.username,
+#                         st.session_state.session_id,
+#                         "toggled checkbox",
+#                         f"Book ID: {book_id}, ISBN Applied changed to '{apply_isbn}'"
+#                     )
+#                     st.session_state[f"apply_isbn_{book_id}_prev"] = apply_isbn
+#                 if receive_isbn != st.session_state[f"receive_isbn_{book_id}_prev"]:
+#                     log_activity(
+#                         conn,
+#                         st.session_state.user_id,
+#                         st.session_state.username,
+#                         st.session_state.session_id,
+#                         "toggled checkbox",
+#                         f"Book ID: {book_id}, ISBN Received changed to '{receive_isbn}'"
+#                     )
+#                     st.session_state[f"receive_isbn_{book_id}_prev"] = receive_isbn
+
+#                 if apply_isbn and receive_isbn:
+#                     col3, col4 = st.columns(2)
+#                     with col3:
+#                         new_isbn = st.text_input(
+#                             "ISBN",
+#                             value=current_isbn if pd.notna(current_isbn) else "",
+#                             key=f"isbn_input_{book_id}",
+#                             help="Enter the ISBN number"
+#                         )
+#                     with col4:
+#                         default_date = current_isbn_receive_date if pd.notna(current_isbn_receive_date) else datetime.today()
+#                         isbn_receive_date = st.date_input(
+#                             "ISBN Receive / Allotment Date",
+#                             value=default_date,
+#                             key=f"date_input_{book_id}",
+#                             help="Select the date ISBN was received"
+#                         )
+#                 else:
+#                     new_isbn = None
+#                     isbn_receive_date = None
+#                 st.markdown('</div>', unsafe_allow_html=True)
+#         else:
+#             st.info("This book has open author positions. ISBN management is not applicable.")
+
+#         # Save Button
+#         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
+#             with st.spinner("Saving changes..."):
+#                 with conn.session as s:
+#                     try:
+#                         # Track changes for logging
+#                         changes = []
+#                         if new_title != current_title:
+#                             changes.append(f"Updated title from '{current_title}' to '{new_title}'")
+#                         if new_date != current_date:
+#                             changes.append(f"Updated date from '{current_date}' to '{new_date}'")
+#                         if new_is_publish_only != current_is_publish_only:
+#                             changes.append(f"Updated is_publish_only to '{new_is_publish_only}'")
+#                         if apply_isbn != bool(current_apply_isbn):
+#                             changes.append(f"Updated ISBN Applied to '{apply_isbn}'")
+#                         if receive_isbn != bool(pd.notna(current_isbn)):
+#                             changes.append(f"Updated ISBN Received to '{receive_isbn}'")
+#                         if apply_isbn and receive_isbn and new_isbn != current_isbn:
+#                             changes.append(f"Updated ISBN to '{new_isbn}'")
+#                         if apply_isbn and receive_isbn and isbn_receive_date != current_isbn_receive_date:
+#                             changes.append(f"Updated ISBN Receive Date to '{isbn_receive_date}'")
+
+#                         # Update database
+#                         if apply_isbn and receive_isbn and new_isbn:
+#                             s.execute(
+#                                 text("""
+#                                     UPDATE books 
+#                                     SET apply_isbn = :apply_isbn, 
+#                                         isbn = :isbn, 
+#                                         isbn_receive_date = :isbn_receive_date, 
+#                                         title = :title, 
+#                                         date = :date,
+#                                         is_publish_only = :is_publish_only
+#                                     WHERE book_id = :book_id
+#                                 """),
+#                                 {
+#                                     "apply_isbn": 1, 
+#                                     "isbn": new_isbn, 
+#                                     "isbn_receive_date": isbn_receive_date, 
+#                                     "title": new_title, 
+#                                     "date": new_date,
+#                                     "is_publish_only": 1 if new_is_publish_only else 0,
+#                                     "book_id": book_id
+#                                 }
+#                             )
+#                         elif apply_isbn and not receive_isbn:
+#                             s.execute(
+#                                 text("""
+#                                     UPDATE books 
+#                                     SET apply_isbn = :apply_isbn, 
+#                                         isbn = NULL, 
+#                                         isbn_receive_date = NULL, 
+#                                         title = :title, 
+#                                         date = :date,
+#                                         is_publish_only = :is_publish_only
+#                                     WHERE book_id = :book_id
+#                                 """),
+#                                 {
+#                                     "apply_isbn": 1, 
+#                                     "title": new_title, 
+#                                     "date": new_date,
+#                                     "is_publish_only": 1 if new_is_publish_only else 0,
+#                                     "book_id": book_id
+#                                 }
+#                             )
+#                         else:
+#                             s.execute(
+#                                 text("""
+#                                     UPDATE books 
+#                                     SET apply_isbn = :apply_isbn, 
+#                                         isbn = NULL, 
+#                                         isbn_receive_date = NULL, 
+#                                         title = :title, 
+#                                         date = :date,
+#                                         is_publish_only = :is_publish_only
+#                                     WHERE book_id = :book_id
+#                                 """),
+#                                 {
+#                                     "apply_isbn": 0, 
+#                                     "title": new_title, 
+#                                     "date": new_date,
+#                                     "is_publish_only": 1 if new_is_publish_only else 0,
+#                                     "book_id": book_id
+#                                 }
+#                             )
+#                         s.commit()
+
+#                         # Log changes if any
+#                         if changes:
+#                             details = f"Book ID: {book_id}, {', '.join(changes)}"
+#                             log_activity(
+#                                 conn,
+#                                 st.session_state.user_id,
+#                                 st.session_state.username,
+#                                 st.session_state.session_id,
+#                                 "updated book",
+#                                 details
+#                             )
+
+#                         st.success("Book Details Updated Successfully!", icon="✔️")
+#                         time.sleep(1)
+#                         st.rerun()
+#                     except Exception as db_error:
+#                         s.rollback()
+#                         st.error(f"Database error: {db_error}")
+
 
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
