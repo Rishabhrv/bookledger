@@ -1125,8 +1125,13 @@ def edit_author_dialog(paper_id, conn):
     st.write("### Add New Author")
     with st.container():
         with st.expander("Add Author", expanded=False):
+            # Store form state in session_state to manage reset
+            if 'author_form_reset' not in st.session_state:
+                st.session_state.author_form_reset = False
+                
             author_suggestions = get_author_suggestions()
-            author_names = [""] + [author['name'] for author in author_suggestions]
+            # Modified to show author ID in selectbox
+            author_names = [""] + [f"{author['name']} (ID: {author['author_id']})" for author in author_suggestions]
             selected_author_name = st.selectbox(
                 "Search Author by Name",
                 options=author_names,
@@ -1137,27 +1142,29 @@ def edit_author_dialog(paper_id, conn):
 
             selected_author = None
             if selected_author_name:
-                selected_author = next((a for a in author_suggestions if a['name'] == selected_author_name), None)
+                # Extract name from format "Name (ID: X)"
+                name_part = selected_author_name.split(' (ID:')[0]
+                selected_author = next((a for a in author_suggestions if a['name'] == name_part), None)
 
             col1, col2 = st.columns(2)
             with col1:
                 name = st.text_input(
                     "Author Name",
                     value=selected_author['name'] if selected_author else "",
-                    key="new_name",
+                    key=f"new_name_{st.session_state.get('author_form_reset', False)}",
                     placeholder="Enter author name"
                 )
                 email = st.text_input(
                     "Author Email",
                     value=selected_author['email'] if selected_author else "",
-                    key="new_email",
+                    key=f"new_email_{st.session_state.get('author_form_reset', False)}",
                     placeholder="Enter email address"
                 )
             with col2:
                 phone = st.text_input(
                     "Author Phone",
                     value=selected_author['phone'] if selected_author else "",
-                    key="new_phone",
+                    key=f"new_phone_{st.session_state.get('author_form_reset', False)}",
                     placeholder="Enter phone number"
                 )
                 author_position = st.number_input(
@@ -1166,12 +1173,12 @@ def edit_author_dialog(paper_id, conn):
                     step=1,
                     value=1,
                     format="%d",
-                    key="new_position"
+                    key=f"new_position_{st.session_state.get('author_form_reset', False)}"
                 )
             affiliation = st.text_area(
                 "Author Affiliation",
                 value=selected_author['affiliation'] if selected_author else "",
-                key="new_affiliation",
+                key=f"new_affiliation_{st.session_state.get('author_form_reset', False)}",
                 placeholder="Enter affiliation"
             )
 
@@ -1185,7 +1192,22 @@ def edit_author_dialog(paper_id, conn):
 
                 try:
                     with conn.session as session:
-                        if selected_author and selected_author['email'] == email:
+                        if selected_author:
+                            # Update existing author if fields changed
+                            author_query = text("""
+                                UPDATE authors 
+                                SET name = :name, email = :email, phone = :phone, affiliation = :affiliation
+                                WHERE author_id = :author_id
+                            """)
+                            session.execute(author_query, {
+                                'name': name,
+                                'email': email if email else None,
+                                'phone': phone if phone else None,
+                                'affiliation': affiliation if affiliation else None,
+                                'author_id': selected_author['author_id']
+                            })
+
+                            # Check if author is already linked to paper
                             check_duplicate_paper_author_query = text("""
                                 SELECT COUNT(*) FROM paper_authors
                                 WHERE paper_id = :paper_id AND author_id = :author_id
@@ -1196,28 +1218,30 @@ def edit_author_dialog(paper_id, conn):
                             }).scalar() > 0:
                                 st.error("This author is already linked to this paper.")
                                 return
-                            else:
-                                paper_author_query = text("""
-                                    INSERT INTO paper_authors (paper_id, author_id, author_position)
-                                    VALUES (:paper_id, :author_id, :author_position)
-                                """)
-                                session.execute(paper_author_query, {
-                                    'paper_id': paper_id,
-                                    'author_id': selected_author['author_id'],
-                                    'author_position': author_position
-                                })
-                                session.commit()
-                                st.success("Existing author added!", icon="✅")
+                            
+                            # Add to paper_authors
+                            paper_author_query = text("""
+                                INSERT INTO paper_authors (paper_id, author_id, author_position)
+                                VALUES (:paper_id, :author_id, :author_position)
+                            """)
+                            session.execute(paper_author_query, {
+                                'paper_id': paper_id,
+                                'author_id': selected_author['author_id'],
+                                'author_position': author_position
+                            })
+                            session.commit()
+                            st.success("Existing author updated and added to paper!", icon="✅")
                         else:
+                            # Check for existing email
                             check_email_query = text("SELECT COUNT(*) FROM authors WHERE email = :email")
                             if session.execute(check_email_query, {'email': email}).scalar() > 0:
                                 st.error("An author with this email exists. Please search and select them.")
                                 return
 
+                            # Create new author
                             author_query = text("""
                                 INSERT INTO authors (name, email, phone, affiliation)
                                 VALUES (:name, :email, :phone, :affiliation)
-                                RETURNING author_id
                             """)
                             result = session.execute(author_query, {
                                 'name': name,
@@ -1225,8 +1249,10 @@ def edit_author_dialog(paper_id, conn):
                                 'phone': phone if phone else None,
                                 'affiliation': affiliation if affiliation else None
                             })
-                            new_author_id = result.fetchone()[0]
+                            session.flush()
+                            new_author_id = session.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
+                            # Add to paper_authors
                             paper_author_query = text("""
                                 INSERT INTO paper_authors (paper_id, author_id, author_position)
                                 VALUES (:paper_id, :author_id, :author_position)
@@ -1238,6 +1264,11 @@ def edit_author_dialog(paper_id, conn):
                             })
                             session.commit()
                             st.success("New author added!", icon="✅")
+                        
+                        # Reset form
+                        st.session_state.author_form_reset = not st.session_state.author_form_reset
+                        st.rerun()
+
                 except Exception as e:
                     st.error(f"Error adding author: {e}")
 

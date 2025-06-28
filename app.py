@@ -295,14 +295,16 @@ def get_page_url(page_path, token):
     """Generate a URL with the token as a query parameter."""
     return f"{BASE_URL}/{page_path}?token={token}"
 
-def get_isbn_display(isbn, apply_isbn):
+def get_isbn_display(book_id, isbn, apply_isbn):
+    if has_open_author_position(conn, book_id):
+        return f"<span style='color:#4b5563; background-color:#f3f4f6; font-size:12px; font-weight:501; padding:3px 8px; border-radius:12px; display:inline-flex; align-items:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);'>Not Applicable</span>"
     if pd.notna(isbn):
-        return f"**<span style='color:#15803d; background-color:#ffffff; font-size:12px; padding: 2px 6px; border-radius: 4px;'>{isbn}</span>**"  # Grayish background and smaller font for valid ISBN
+        return f"<span style='color:#15803d; background-color:#ecfdf5; font-size:12px; font-weight:501; padding:3px 8px; border-radius:12px; display:inline-flex; align-items:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);'>{isbn}</span>"
     elif apply_isbn == 0:
-        return f"**<span style='color:#dc2626; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>Not Applied</span>**"  # Red for Not Applied
+        return f"<span style='color:#dc2626; background-color:#fef2f2; font-size:12px; font-weight:501; padding:3px 8px; border-radius:12px; display:inline-flex; align-items:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);'>Not Applied</span>"
     elif apply_isbn == 1:
-        return f"**<span style='color:#606975; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>Not Received</span>**"  # Orange for Not Received
-    return f"**<span style='color:#000000; background-color:#ffffff; font-size:13.5px; padding: 2px 6px; border-radius: 4px;'>-</span>**"  # Black for default/unknown case
+        return f"<span style='color:#1e40af; background-color:#eff6ff; font-size:12px; font-weight:501; padding:3px 8px; border-radius:12px; display:inline-flex; align-items:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);'>Not Received</span>"
+    return f"<span style='color:#1f2937; background-color:#f3f4f6; font-size:12px; font-weight:501; padding:3px 8px; border-radius:12px; display:inline-flex; align-items:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);'>-</span>"
 
 
 # Function to check if a button is allowed for the user's role and access
@@ -330,6 +332,53 @@ def is_button_allowed(button_name, debug=False):
     if debug:
         st.write(f"Debug: allowed_buttons={allowed_buttons}")
     return button_name in allowed_buttons
+
+def has_open_author_position(conn, book_id):
+    query = """
+    WITH author_counts AS (
+        SELECT 
+            b.book_id,
+            b.title,
+            b.date,
+            b.author_type,
+            b.publisher,
+            COUNT(ba.author_id) as author_count,
+            MAX(CASE WHEN ba.author_position = '1st' THEN 'Booked' ELSE NULL END) as position_1,
+            MAX(CASE WHEN ba.author_position = '2nd' THEN 'Booked' ELSE NULL END) as position_2,
+            MAX(CASE WHEN ba.author_position = '3rd' THEN 'Booked' ELSE NULL END) as position_3,
+            MAX(CASE WHEN ba.author_position = '4th' THEN 'Booked' ELSE NULL END) as position_4
+        FROM books b
+        LEFT JOIN book_authors ba ON b.book_id = ba.book_id
+        WHERE b.author_type IN ('Double', 'Triple', 'Multiple')
+        GROUP BY b.book_id, b.title, b.date, b.author_type, b.publisher
+        HAVING 
+            (b.author_type = 'Double' AND COUNT(ba.author_id) < 2) OR
+            (b.author_type = 'Triple' AND COUNT(ba.author_id) < 3) OR
+            (b.author_type = 'Multiple' AND COUNT(ba.author_id) < 4)
+    )
+    SELECT 
+        book_id,
+        title,
+        date,
+        author_type,
+        publisher,
+        COALESCE(position_1, 'Vacant') as position_1,
+        CASE 
+            WHEN author_type IN ('Double', 'Triple', 'Multiple') THEN COALESCE(position_2, 'Vacant')
+            ELSE 'N/A'
+        END as position_2,
+        CASE 
+            WHEN author_type IN ('Triple', 'Multiple') THEN COALESCE(position_3, 'Vacant')
+            ELSE 'N/A'
+        END as position_3,
+        CASE 
+            WHEN author_type = 'Multiple' THEN COALESCE(position_4, 'Vacant')
+            ELSE 'N/A'
+        END as position_4
+    FROM author_counts;
+    """
+    df = conn.query(query)
+    return book_id in df['book_id'].values
 
 
 # Function to fetch book_author details for multiple book_ids
@@ -375,16 +424,12 @@ def fetch_all_printeditions(book_ids, conn):
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
 
 
-def get_status_pill(book_id, row, authors_df, printeditions_df):
-    # Filter authors and print editions for the specific book_id
-    book_authors_df = authors_df[authors_df['book_id'] == book_id]
-    book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
-    
-    # Base pill style with vertical stacking and modern design
+def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
+    # Base pill style with modern design and vertical stacking
     pill_style = (
-        "padding: 1px 12px; "
+        "padding: 6px 12px; "
         "border-radius: 10px; "
-        "background: #ffffff; "
+        "background: linear-gradient(145deg, #ffffff, #f1f5f9); "
         "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
         "display: flex; "
         "flex-direction: column; "
@@ -393,18 +438,19 @@ def get_status_pill(book_id, row, authors_df, printeditions_df):
         "box-shadow: 0 2px 4px rgba(0,0,0,0.06); "
         "line-height: 1.5; "
         "gap: 4px; "
-        "min-width: 120px;"
+        "min-width: 120px; "
+        "width: 10px; "
+        "transition: all 0.2s;"
     )
 
-    # Define operations sequence with completion states and colors
+    # Define status configurations
     operations_sequence = [
-        ("writing", "In Writing", "Writing Complete", "#1d4ed8", "#3b82f6"),  # Blue shades
-        ("proofreading", "In Proofreading", "Proofreading Complete", "#6b21a8", "#a855f7"),  # Purple shades
-        ("formatting", "In Formatting", "Formatting Complete", "#c2410c", "#f97316"),  # Orange shades
-        ("cover", "In Cover Design", "Operations Complete", "#047857", "#10b981")  # Emerald shades
+        ("writing", "In Writing", "Writing Complete", "#6b7280", "#dbeafe"),  # Blue shades
+        ("proofreading", "In Proofreading", "Proofreading Complete", "#6b7280", "#ede9fe"),  # Purple shades
+        ("formatting", "In Formatting", "Formatting Complete", "#6b7280", "#fef3c7"),  # Amber shades
+        ("cover", "In Cover Design", "Operations Done", "#6b7280", "#ccfbf1")  # Teal shades
     ]
 
-    # Define author checklist sequence with pending/complete colors
     checklist_sequence = [
         ("welcome_mail_sent", "Welcome Mail", "#dc2626", "#15803d"),  # Red to Green
         ("cover_agreement_sent", "Cover/Agreement", "#dc2626", "#15803d"),
@@ -416,119 +462,89 @@ def get_status_pill(book_id, row, authors_df, printeditions_df):
         ("printing_confirmation", "Print Confirmation", "#dc2626", "#15803d")
     ]
 
+    # Check post-printing statuses
+    if row.get('deliver', 0) == 1:
+        return (
+            f"<div style='{pill_style}'>"
+            f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Delivered ✓</span>"
+            f"</div>"
+        )
+
+    # Check print editions
+    book_printeditions = printeditions_grouped.get(book_id, pd.DataFrame())
+    if not book_printeditions.empty:
+        latest_print = book_printeditions.sort_values(by='print_id', ascending=False).iloc[0]
+        if latest_print['status'] == "Received":
+            return (
+                f"<div style='{pill_style}'>"
+                f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Dispatch ✓</span>"
+                f"</div>"
+            )
+        elif latest_print['status'] == "In Printing":
+            return (
+                f"<div style='{pill_style}'>"
+                f"<span style='color: #b45309; font-size: 13.5px; font-weight: 600; display: block;'>In Printing</span>"
+                f"</div>"
+            )
+
     # Check operations status
     operations_status = "Not Started"
-    operations_color = "#6b7280"  # Neutral gray
+    operations_color = "#6b7280"
     operations_checkmark = ""
-    if row['writing_start'] is not None and pd.notnull(row['writing_start']):
-        if row['writing_end'] is None or pd.isnull(row['writing_end']):
-            operations_status = "In Writing"
-            operations_color = "#1d4ed8"
-        elif row['proofreading_start'] is None or pd.isnull(row['proofreading_start']):
-            operations_status = "Writing Complete"
-            operations_color = "#15803d"
-            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
-        elif row['proofreading_end'] is None or pd.isnull(row['proofreading_end']):
-            operations_status = "In Proofreading"
-            operations_color = "#6b21a8"
-        elif row['formatting_start'] is None or pd.isnull(row['formatting_start']):
-            operations_status = "Proofreading Complete"
-            operations_color = "#15803d"
-            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
-        elif row['formatting_end'] is None or pd.isnull(row['formatting_end']):
-            operations_status = "In Formatting"
-            operations_color = "#c2410c"
-        elif row['cover_start'] is None or pd.isnull(row['cover_start']):
-            operations_status = "Formatting Complete"
-            operations_color = "#15803d"
-            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
-        elif row['cover_end'] is None or pd.isnull(row['cover_end']):
-            operations_status = "In Cover Design"
-            operations_color = "#047857"
-        else:
-            operations_status = "Operations Done"
-            operations_color = "#15803d"
-            operations_checkmark = "<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span>"
+    for stage, in_progress, complete, color, _ in operations_sequence:
+        start_field = f"{stage}_start"
+        end_field = f"{stage}_end"
+        if row.get(start_field) is not None and pd.notnull(row.get(start_field)):
+            if row.get(end_field) is None or pd.isnull(row.get(end_field)):
+                operations_status = in_progress
+                operations_color = color
+            else:
+                operations_status = complete
+                operations_color = "#6b7280"
+                operations_checkmark = " ✓"
+            break
 
     # Check author checklist
     checklist_status = "No Authors"
     checklist_color = "#6b7280"
-    try:
-        if not book_authors_df.empty:
-            earliest_pending_index = len(checklist_sequence)
-            earliest_pending_step = None
+    book_authors = authors_grouped.get(book_id, pd.DataFrame())
+    if not book_authors.empty:
+        earliest_pending_index = len(checklist_sequence)
+        earliest_pending_step = None
+        for _, author in book_authors.iterrows():
+            for idx, (field, label, pending_color, _) in enumerate(checklist_sequence):
+                if not author[field]:
+                    if idx < earliest_pending_index:
+                        earliest_pending_index = idx
+                        earliest_pending_step = label
+                    break
+        if earliest_pending_index < len(checklist_sequence):
+            checklist_status = earliest_pending_step
+            checklist_color = checklist_sequence[earliest_pending_index][2]
+        else:
+            checklist_status = "Checklist Complete"
+            checklist_color = "#15803d"
 
-            for _, author in book_authors_df.iterrows():
-                for idx, (field, label, pending_color, _) in enumerate(checklist_sequence):
-                    if not author[field]:
-                        if idx < earliest_pending_index:
-                            earliest_pending_index = idx
-                            earliest_pending_step = label
-                        break
-
-            if earliest_pending_index < len(checklist_sequence):
-                checklist_status = f"{earliest_pending_step}"
-                checklist_color = checklist_sequence[earliest_pending_index][2]  # Pending color
-            else:
-                checklist_status = "Checklist Complete"
-                checklist_color = "#15803d"  # Green for complete
-    except Exception as e:
-        checklist_status = "Error Processing Authors"
-        checklist_color = "#6b7280"
-        print(f"Error processing authors for book_id {book_id}: {e}")
-
-    # Check post-printing statuses
-    if row.get('deliver', 0) == 1:
-        status = "Delivered"
-        text_color = "#15803d"  # Green
-        return (
-            f"<div style='{pill_style}'>"
-            f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
-            f"</div>"
-        )
-    
-    if not book_printeditions_df.empty:
-        latest_print = book_printeditions_df.sort_values(by='print_id', ascending=False).iloc[0]
-        if latest_print['status'] == "Received":
-            status = "Ready For Dispatch"
-            text_color = "#15803d"  # Green
-            return (
-                f"<div style='{pill_style}'>"
-                f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
-                f"</div>"
-            )
-        elif latest_print['status'] == "In Printing":
-            status = "In Printing"
-            text_color = "#d97706"  # Amber for in-progress
-            return (
-                f"<div style='{pill_style}'>"
-                f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}</span>"
-                f"</div>"
-            )
-
-    # Determine combined status for pre-printing stages
+    # Check if ready for print
     if (checklist_status == "Checklist Complete" and
-            row['formatting_end'] is not None and pd.notnull(row['formatting_end']) and
-            row['cover_end'] is not None and pd.notnull(row['cover_end'])):
-        status = "Ready For Print"
-        text_color = "#15803d"  # Green
+            row.get('formatting_end') is not None and pd.notnull(row.get('formatting_end')) and
+            row.get('cover_end') is not None and pd.notnull(row.get('cover_end'))):
         return (
             f"<div style='{pill_style}'>"
-            f"<span style='color: {text_color}; font-size: 12.5px; font-weight: 600;'>{status}<span style='color: #15803d; margin-left: 4px; font-size: 11px;'>✓</span></span>"
+            f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Print ✓</span>"
             f"</div>"
         )
 
-    # Combine checklist and operations status vertically, add red 'x' for pending checklist steps
+    # Combine checklist and operations status vertically
+    x_mark = "" if checklist_status in ["Checklist Complete", "No Authors"] else " ✗"
     primary_style = f"color: {checklist_color}; font-size: 13.5px; font-weight: 600; display: block;"
     secondary_style = f"color: {operations_color}; font-size: 11px; font-weight: 450; display: block;"
-    x_mark = "" if checklist_status in ["Checklist Complete", "No Authors"] else "<span style='color: #dc2626; margin-left: 4px; font-size: 11px;'>✗</span>"
-    status = (
+    return (
         f"<div style='{pill_style}'>"
         f"<span style='{primary_style}'>{checklist_status}{x_mark}</span>"
         f"<span style='{secondary_style}'>{operations_status}{operations_checkmark}</span>"
         f"</div>"
     )
-    return status
 
 def fetch_author_names(book_id, conn):
     """Fetch author names for a paper, formatted with Material Icons."""
@@ -792,7 +808,7 @@ def export_data():
 
 
 ###################################################################################################################################
-##################################--------------- Admin Panel ----------------------------##################################
+##################################--------------- Manage Users ----------------------------##################################
 ###################################################################################################################################
 
 @st.dialog("Manage Users", width="large")
@@ -1707,44 +1723,47 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
 
-        # ISBN Details Section
-        st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
-        with st.container(border=True):
-            st.markdown('<div class="info-box">', unsafe_allow_html=True)
-            apply_isbn = st.checkbox(
-                "ISBN Applied?",
-                value=bool(current_apply_isbn),
-                key=f"apply_{book_id}",
-                help="Check if ISBN application has been made"
-            )
-            receive_isbn = st.checkbox(
-                "ISBN Received?",
-                value=bool(pd.notna(current_isbn)),
-                key=f"receive_{book_id}",
-                disabled=not apply_isbn,
-                help="Check if ISBN has been received (requires ISBN Applied)"
-            )
-            if apply_isbn and receive_isbn:
-                col3, col4 = st.columns(2)
-                with col3:
-                    new_isbn = st.text_input(
-                        "ISBN",
-                        value=current_isbn if pd.notna(current_isbn) else "",
-                        key=f"isbn_input_{book_id}",
-                        help="Enter the ISBN number"
-                    )
-                with col4:
-                    default_date = current_isbn_receive_date if pd.notna(current_isbn_receive_date) else datetime.today()
-                    isbn_receive_date = st.date_input(
-                        "ISBN Receive / Allotment Date",
-                        value=default_date,
-                        key=f"date_input_{book_id}",
-                        help="Select the date ISBN was received"
-                    )
-            else:
-                new_isbn = None
-                isbn_receive_date = None
-            st.markdown('</div>', unsafe_allow_html=True)
+        if not has_open_author_position(conn, book_id):
+            # ISBN Details Section
+            st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
+            with st.container(border=True):
+                st.markdown('<div class="info-box">', unsafe_allow_html=True)
+                apply_isbn = st.checkbox(
+                    "ISBN Applied?",
+                    value=bool(current_apply_isbn),
+                    key=f"apply_{book_id}",
+                    help="Check if ISBN application has been made"
+                )
+                receive_isbn = st.checkbox(
+                    "ISBN Received?",
+                    value=bool(pd.notna(current_isbn)),
+                    key=f"receive_{book_id}",
+                    disabled=not apply_isbn,
+                    help="Check if ISBN has been received (requires ISBN Applied)"
+                )
+                if apply_isbn and receive_isbn:
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        new_isbn = st.text_input(
+                            "ISBN",
+                            value=current_isbn if pd.notna(current_isbn) else "",
+                            key=f"isbn_input_{book_id}",
+                            help="Enter the ISBN number"
+                        )
+                    with col4:
+                        default_date = current_isbn_receive_date if pd.notna(current_isbn_receive_date) else datetime.today()
+                        isbn_receive_date = st.date_input(
+                            "ISBN Receive / Allotment Date",
+                            value=default_date,
+                            key=f"date_input_{book_id}",
+                            help="Select the date ISBN was received"
+                        )
+                else:
+                    new_isbn = None
+                    isbn_receive_date = None
+                st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info("This book has open author positions. ISBN management is not applicable.")
 
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
@@ -5380,6 +5399,70 @@ with srcol5:
                         disabled=True
                     )
 
+# Define base badge styles for consistency
+BASE_BADGE_STYLE = {
+    "font-size": "10px",
+    "font-weight": "500",
+    "padding": "3px 8px",
+    "border-radius": "12px",
+    "display": "inline-flex",
+    "align-items": "center",
+    "box-shadow": "0 1px 2px rgba(0,0,0,0.05)",
+    "margin-left": "5px"
+}
+
+# Publisher-specific styles
+PUBLISHER_STYLES = {
+    "Cipher": {"color": "#ffffff", "background": "#9178e3"},
+    "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},
+    "AG Classics": {"color": "#ffffff", "background": "#d81b60"},
+    "AG Kids": {"color": "#ffffff", "background": "#f57c00"},
+    "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}
+}
+
+# # Author type-specific styles
+AUTHOR_TYPE_STYLES = {
+    "Single": {"color": "#15803d", "background": "#ecfdf5"},  # Teal with light teal background
+    "Double": {"color": "#15803d", "background": "#ecfdf5"},  # Purple with light purple background
+    "Triple": {"color": "#15803d", "background": "#ecfdf5"},  # Amber with light amber background
+    "Multiple": {"color": "#15803d", "background": "#ecfdf5"}  # Red with light red background
+}
+
+# AUTHOR_TYPE_STYLES = {
+#     "Single": {"color": "#b45309", "background": "#fef3c7"},  # Teal with light teal background
+#     "Double": {"color": "#b45309", "background": "#fef3c7"},  # Purple with light purple background
+#     "Triple": {"color": "#b45309", "background": "#fef3c7"},  # Amber with light amber background
+#     "Multiple": {"color": "#b45309", "background": "#fef3c7"}  # Red with light red background
+# }
+
+def generate_badge(content, color, background, extra_styles=None):
+    """Generate HTML for a styled badge."""
+    styles = {**BASE_BADGE_STYLE, "color": color, "background-color": background}
+    if extra_styles:
+        styles.update(extra_styles)
+    style_str = "; ".join(f"{k}: {v}" for k, v in styles.items())
+    return f'<span style="{style_str}">{content}</span>'
+
+def get_author_badge(author_type, author_count):
+    """Generate author type badge with distinct styles."""
+    author_type = author_type if author_type in AUTHOR_TYPE_STYLES else "Multiple"
+    style = AUTHOR_TYPE_STYLES[author_type]
+    content = author_type if author_type != "Multiple" else f"Multiple, {author_count if author_count > 0 else 'Unknown'}"
+    return generate_badge(content, style["color"], style["background"])
+
+def get_publish_badge(is_publish_only):
+    """Generate publish-only badge if applicable."""
+    if is_publish_only == 1:
+        return generate_badge("Publish Only", "#c2410c", "#fff7ed")
+    return ""
+
+def get_publisher_badge(publisher):
+    """Generate publisher badge if applicable."""
+    if publisher in PUBLISHER_STYLES:
+        style = PUBLISHER_STYLES[publisher]
+        return generate_badge(publisher, style["color"], style["background"])
+    return ""
+
 
 #actual icons
 price_icon = ":material/currency_rupee:"
@@ -5407,85 +5490,53 @@ paginated_books = filtered_books.iloc[start_idx:end_idx]
 
 
 # Display the table
-column_size = [0.5, 3.8, 1, 0.98, 1.2, 2]
+column_size = [0.5, 3.8, 1, 0.95, 1.2, 2]
 render_start = time.time()
-cont = st.container(border=False)
-with cont:
+# Main rendering loop (partial, focusing on col5)
+with st.container(border=False):
     if paginated_books.empty:
         st.error("No books available.")
     else:
-        # Show book count for filters or search query
         if applied_filters or search_query:
             st.warning(f"Showing {start_idx + 1}-{min(end_idx, len(filtered_books))} of {len(filtered_books)} books")
-        
+
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
-        
-        
-        # Group and sort paginated books by month (for display purposes only)
+
+        # Preprocess DataFrames to group by book_id
+        authors_grouped = {book_id: group for book_id, group in authors_df.groupby('book_id')}
+        printeditions_grouped = {book_id: group for book_id, group in printeditions_df.groupby('book_id')}
+
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
 
-        # Table Body
-        
         for month, monthly_books in reversed_grouped_books:
             monthly_books = monthly_books.sort_values(by='date', ascending=False)
             num_books = len(monthly_books)
             st.markdown(f'<div class="month-header">{month.strftime("%B %Y")} ({num_books} books)</div>', unsafe_allow_html=True)
-            
+
             for _, row in monthly_books.iterrows():
                 st.markdown('<div class="data-row">', unsafe_allow_html=True)
                 authors_display = fetch_author_names(row['book_id'], conn)
                 col1, col2, col3, col4, col5, col6 = st.columns(column_size, vertical_alignment="center")
+
                 with col1:
                     st.write(row['book_id'])
                 with col2:
                     author_count = author_count_dict.get(row['book_id'], 0)
-                    badge_content = ""
-                    badge_style = ""
-                    publish_badge = ""
-                    publisher_badge = ""
-                    
-                    # Handle the author type badge
-                    author_type = row.get('author_type', 'Multiple')  # Safe access with default
-                    if author_type in ["Single", "Double", "Triple"]:
-                        badge_content = author_type
-                        badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
-                    else:  # Multiple
-                        badge_content = f"Multiple, {author_count}"
-                        badge_style = "color: #2aba25; font-size: 12px; background-color: #f7f7f7; padding: 2px 6px; border-radius: 12px;"
-                    
-                    # Handle the "Publish Only" badge
-                    if row['is_publish_only'] == 1:
-                        publish_badge = '<span style="color: #ff9800; font-size: 12px; background-color: #fff3e0; padding: 2px 6px; border-radius: 12px; margin-left: 5px;">Publish Only</span>'
-                    
-                    # Handle the publisher badge with distinct colors
-                    publisher = row.get('publisher', '')  # Safe access
-                    publisher_colors = {
-                        "Cipher": {"color": "#ffffff", "background": "#9178e3"},  # White text on deep purple
-                        "AG Volumes": {"color": "#ffffff", "background": "#2b1a70"},  # White text on deep purple
-                        "AG Classics": {"color": "#ffffff", "background": "#d81b60"},  # White text on magenta
-                        "AG Kids": {"color": "#ffffff", "background": "#f57c00"},  # White text on light blue
-                        "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}  # White text on orange
-                    }
-                    if publisher in publisher_colors:
-                        style = publisher_colors[publisher]
-                        publisher_style = f"color: {style['color']}; font-size: 10px; background-color: {style['background']}; padding: 2px 6px; border-radius: 12px; margin-left: 5px;"
-                        publisher_badge = f'<span style="{publisher_style}">{publisher}</span>'
-                    
-                    # Display the title with all badges
-                    st.markdown(
-                        f"{row['title']} <span style='{badge_style}'>{badge_content}</span>{publish_badge}{publisher_badge}",
-                        unsafe_allow_html=True
-                    )
+                    author_badge = get_author_badge(row.get('author_type', 'Multiple'), author_count)
+                    publish_badge = get_publish_badge(row.get('is_publish_only', 0))
+                    publisher_badge = get_publisher_badge(row.get('publisher', ''))
+                    title_with_badges = f"{row['title']} {author_badge}{publish_badge}{publisher_badge}"
+                    st.markdown(title_with_badges, unsafe_allow_html=True)
                     st.markdown(f'<div class="author-names">{authors_display}</div>', unsafe_allow_html=True)
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:
-                    st.markdown(get_isbn_display(row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
+                    st.markdown(get_isbn_display(row["book_id"], row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
                 with col5:
-                    st.markdown(get_status_pill(row["book_id"], row, authors_df,printeditions_df), unsafe_allow_html=True)
+                    st.markdown(get_status_pill(row["book_id"], row, authors_grouped, printeditions_grouped), unsafe_allow_html=True)
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
                     with btn_col1:
