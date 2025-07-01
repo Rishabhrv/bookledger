@@ -39,8 +39,14 @@ def connect_db():
 
 
 from datetime import datetime
+import pytz
+
 def log_activity(conn, user_id, username, session_id, action, details):
     try:
+        # Get current time in Indian Standard Time
+        ist = pytz.timezone('Asia/Kolkata')
+        ist_time = datetime.now(ist)
+
         with conn.session as s:
             s.execute(
                 text("""
@@ -53,12 +59,13 @@ def log_activity(conn, user_id, username, session_id, action, details):
                     "session_id": session_id,
                     "action": action,
                     "details": details,
-                    "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    "timestamp": ist_time.strftime('%Y-%m-%d %H:%M:%S')
                 }
             )
             s.commit()
     except Exception as e:
         st.error(f"Error logging activity: {e}")
+
 
 
 def clean_old_logs(conn, days_to_keep=30):
