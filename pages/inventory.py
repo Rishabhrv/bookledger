@@ -447,26 +447,26 @@ def update_book_details(book_id, current_data):
                 if print_status != 0:
                     # Sales changes
                     if website_sales != int(current_data['AGPH Store']):
-                        sales_changes.append(f"AGPH Store Sales changed from '{int(current_data['AGPH Store'])}' to '{website_sales}'")
+                        sales_changes.append("AGPH Store Sales changed")
                     if amazon_sales != int(current_data['Amazon']):
-                        sales_changes.append(f"Amazon Sales changed from '{int(current_data['Amazon'])}' to '{amazon_sales}'")
+                        sales_changes.append("Amazon Sales changed")
                     if flipkart_sales != int(current_data['Filpkart']):
-                        sales_changes.append(f"Flipkart Sales changed from '{int(current_data['Filpkart'])}' to '{flipkart_sales}'")
+                        sales_changes.append("Flipkart Sales changed")
                     if direct_sales != int(current_data['Direct']):
-                        sales_changes.append(f"Direct Sales changed from '{int(current_data['Direct'])}' to '{direct_sales}'")
+                        sales_changes.append("Direct Sales changed")
                     current_rack = str(current_data['Cell No.']) if pd.notnull(current_data['Cell No.']) else ''
                     if rack_number != current_rack:
-                        sales_changes.append(f"Cell No. changed from '{current_rack}' to '{rack_number}'")
+                        sales_changes.append("Cell No. changed")
 
                     # Links changes
                     if agph_link != current_links['agph_link']:
-                        links_changes.append(f"AGPH Store Link changed from '{current_links['agph_link']}' to '{agph_link}'")
+                        links_changes.append("AGPH Store Link changed")
                     if amazon_link != current_links['amazon_link']:
-                        links_changes.append(f"Amazon Link changed from '{current_links['amazon_link']}' to '{amazon_link}'")
+                        links_changes.append("Amazon Link changed")
                     if flipkart_link != current_links['flipkart_link']:
-                        links_changes.append(f"Flipkart Link changed from '{current_links['flipkart_link']}' to '{flipkart_link}'")
+                        links_changes.append("Flipkart Link changed")
                     if google_link != current_links['google_link']:
-                        links_changes.append(f"Google Link changed from '{current_links['google_link']}' to '{google_link}'")
+                        links_changes.append("Google Link changed")
 
                 # Validate inputs for print edition
                 if new_num_copies > 0:
@@ -590,7 +590,7 @@ def update_book_details(book_id, current_data):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added print edition",
-                                f"Book ID: {book_id}, Copies={new_num_copies}, Cost={print_cost or 'N/A'}, Color={print_color}, Binding={binding}, Size={book_size}, Color Pages={new_color_pages or 'N/A'}"
+                                f"Book ID: {book_id}, Print Edition added"
                             )
                         except Exception as e:
                             st.error(f"Error logging print edition addition: {str(e)}")
