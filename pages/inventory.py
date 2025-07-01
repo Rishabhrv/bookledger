@@ -4,6 +4,9 @@ import plotly.express as px
 import time
 from auth import validate_token
 from sqlalchemy import text
+from constants import log_activity
+from constants import connect_db
+
 
 
 logo = "logo/logo_black.png"
@@ -100,17 +103,35 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Database connection
-def connect_db():
+
+conn = connect_db()
+
+# Initialize session state from query parameters
+query_params = st.query_params
+click_id = query_params.get("click_id", [None])
+session_id = query_params.get("session_id", [None])
+
+# Set session_id in session state
+st.session_state.session_id = session_id
+
+# Initialize logged_click_ids if not present
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
     try:
-        @st.cache_resource
-        def get_connection():
-            return st.connection('mysql', type='sql')
-        conn = get_connection()
-        return conn
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Inventory"
+        )
+        st.session_state.logged_click_ids.add(click_id)
     except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
+        st.error(f"Error logging navigation: {str(e)}")
 
 @st.cache_data
 def fetch_data():
@@ -303,7 +324,7 @@ def update_book_details(book_id, current_data):
                 website_sales = st.number_input("AGPH Store Sales", min_value=0, value=int(current_data['AGPH Store']), step=1)
                 amazon_sales = st.number_input("Amazon Sales", min_value=0, value=int(current_data['Amazon']), step=1)
             with col2:
-                flipkart_sales = st.number_input("Filpkart Sales", min_value=0, value=int(current_data['Filpkart']), step=1)
+                flipkart_sales = st.number_input("Flipkart Sales", min_value=0, value=int(current_data['Filpkart']), step=1)
                 direct_sales = st.number_input("Direct Sales", min_value=0, value=int(current_data['Direct']), step=1)
             rack_number = st.text_input("Cell No.", value=str(current_data['Cell No.']) if pd.notnull(current_data['Cell No.']) else '')
 
@@ -312,7 +333,7 @@ def update_book_details(book_id, current_data):
             st.markdown("#### Book Links")
             agph_link = st.text_input("AGPH Store Link", value=current_links['agph_link'])
             amazon_link = st.text_input("Amazon Link", value=current_links['amazon_link'])
-            flipkart_link = st.text_input("Filpkart Link", value=current_links['flipkart_link'])
+            flipkart_link = st.text_input("Flipkart Link", value=current_links['flipkart_link'])
             google_link = st.text_input("Google Link", value=current_links['google_link'])
 
     with tab3:
@@ -418,7 +439,36 @@ def update_book_details(book_id, current_data):
         with st.spinner('Saving...'):
             time.sleep(1)
             try:
-                # Validate inputs
+                # Track changes for each tab
+                sales_changes = []
+                links_changes = []
+                print_edition_added = False
+
+                if print_status != 0:
+                    # Sales changes
+                    if website_sales != int(current_data['AGPH Store']):
+                        sales_changes.append(f"AGPH Store Sales changed from '{int(current_data['AGPH Store'])}' to '{website_sales}'")
+                    if amazon_sales != int(current_data['Amazon']):
+                        sales_changes.append(f"Amazon Sales changed from '{int(current_data['Amazon'])}' to '{amazon_sales}'")
+                    if flipkart_sales != int(current_data['Filpkart']):
+                        sales_changes.append(f"Flipkart Sales changed from '{int(current_data['Filpkart'])}' to '{flipkart_sales}'")
+                    if direct_sales != int(current_data['Direct']):
+                        sales_changes.append(f"Direct Sales changed from '{int(current_data['Direct'])}' to '{direct_sales}'")
+                    current_rack = str(current_data['Cell No.']) if pd.notnull(current_data['Cell No.']) else ''
+                    if rack_number != current_rack:
+                        sales_changes.append(f"Cell No. changed from '{current_rack}' to '{rack_number}'")
+
+                    # Links changes
+                    if agph_link != current_links['agph_link']:
+                        links_changes.append(f"AGPH Store Link changed from '{current_links['agph_link']}' to '{agph_link}'")
+                    if amazon_link != current_links['amazon_link']:
+                        links_changes.append(f"Amazon Link changed from '{current_links['amazon_link']}' to '{amazon_link}'")
+                    if flipkart_link != current_links['flipkart_link']:
+                        links_changes.append(f"Flipkart Link changed from '{current_links['flipkart_link']}' to '{flipkart_link}'")
+                    if google_link != current_links['google_link']:
+                        links_changes.append(f"Google Link changed from '{current_links['google_link']}' to '{google_link}'")
+
+                # Validate inputs for print edition
                 if new_num_copies > 0:
                     if print_cost:
                         try:
@@ -429,60 +479,86 @@ def update_book_details(book_id, current_data):
                     if print_color == "Full Color" and (new_color_pages is None or new_color_pages <= 0):
                         st.error("Number of Color Pages must be greater than 0 for Full Color.")
                         return
+                    print_edition_added = True
 
                 with conn.session as session:
-                    if print_status != 0:  # Only update sales and links if print_status is not 0
-                        # Check if inventory record exists
-                        result = session.execute(text("SELECT COUNT(*) FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
-                        if result[0] == 0:
-                            # Insert new inventory record
+                    if print_status != 0:
+                        # Update sales
+                        if sales_changes:
+                            result = session.execute(text("SELECT COUNT(*) FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+                            if result[0] == 0:
+                                # Insert new inventory record
+                                session.execute(text("""
+                                    INSERT INTO inventory (book_id, website_sales, amazon_sales, flipkart_sales, direct_sales, rack_number)
+                                    VALUES (:book_id, :website_sales, :amazon_sales, :flipkart_sales, :direct_sales, :rack_number)
+                                """), {
+                                    "book_id": book_id,
+                                    "website_sales": website_sales,
+                                    "amazon_sales": amazon_sales,
+                                    "flipkart_sales": flipkart_sales,
+                                    "direct_sales": direct_sales,
+                                    "rack_number": rack_number if rack_number != '' else None
+                                })
+                            else:
+                                # Update existing inventory record
+                                result = session.execute(text("""
+                                    UPDATE inventory
+                                    SET website_sales = :website_sales, amazon_sales = :amazon_sales, 
+                                        flipkart_sales = :flipkart_sales, direct_sales = :direct_sales,
+                                        rack_number = :rack_number
+                                    WHERE book_id = :book_id
+                                """), {
+                                    "website_sales": website_sales,
+                                    "amazon_sales": amazon_sales,
+                                    "flipkart_sales": flipkart_sales,
+                                    "direct_sales": direct_sales,
+                                    "rack_number": rack_number if rack_number != '' else None,
+                                    "book_id": book_id
+                                })
+                                if result.rowcount == 0:
+                                    st.warning(f"No rows updated for book_id {book_id} in inventory table.")
+                            # Log sales changes
+                            try:
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "updated sales",
+                                    f"Book ID: {book_id}, {', '.join(sales_changes)}"
+                                )
+                            except Exception as e:
+                                st.error(f"Error logging sales update: {str(e)}")
+
+                        # Update links
+                        if links_changes:
                             session.execute(text("""
-                                INSERT INTO inventory (book_id, website_sales, amazon_sales, flipkart_sales, direct_sales, rack_number)
-                                VALUES (:book_id, :website_sales, :amazon_sales, :flipkart_sales, :direct_sales, :rack_number)
-                            """), {
-                                "book_id": book_id,
-                                "website_sales": website_sales,
-                                "amazon_sales": amazon_sales,
-                                "flipkart_sales": flipkart_sales,
-                                "direct_sales": direct_sales,
-                                "rack_number": rack_number if rack_number != '' else None,
-                                "book_id": book_id
-                            })
-                        else:
-                            # Update existing inventory record
-                            result = session.execute(text("""
-                                UPDATE inventory
-                                SET website_sales = :website_sales, amazon_sales = :amazon_sales, 
-                                    flipkart_sales = :flipkart_sales, direct_sales = :direct_sales,
-                                    rack_number = :rack_number
+                                UPDATE books
+                                SET agph_link = :agph_link, amazon_link = :amazon_link, 
+                                    flipkart_link = :flipkart_link, google_link = :google_link
                                 WHERE book_id = :book_id
                             """), {
-                                "website_sales": website_sales,
-                                "amazon_sales": amazon_sales,
-                                "flipkart_sales": flipkart_sales,
-                                "direct_sales": direct_sales,
-                                "rack_number": rack_number if rack_number != '' else None,
+                                "agph_link": agph_link,
+                                "amazon_link": amazon_link,
+                                "flipkart_link": flipkart_link,
+                                "google_link": google_link,
                                 "book_id": book_id
                             })
-                            if result.rowcount == 0:
-                                st.warning(f"No rows updated for book_id {book_id} in inventory table.")
-
-                        # Update books table (links)
-                        session.execute(text("""
-                            UPDATE books
-                            SET agph_link = :agph_link, amazon_link = :amazon_link, 
-                                flipkart_link = :flipkart_link, google_link = :google_link
-                            WHERE book_id = :book_id
-                        """), {
-                            "agph_link": agph_link,
-                            "amazon_link": amazon_link,
-                            "flipkart_link": flipkart_link,
-                            "google_link": google_link,
-                            "book_id": book_id
-                        })
+                            # Log links changes
+                            try:
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "updated links",
+                                    f"Book ID: {book_id}, {', '.join(links_changes)}"
+                                )
+                            except Exception as e:
+                                st.error(f"Error logging links update: {str(e)}")
 
                     # Create new PrintEdition if copies > 0
-                    if new_num_copies > 0:
+                    if print_edition_added:
                         result = session.execute(
                             text("SELECT COALESCE(MAX(edition_number), 0) + 1 AS next_edition FROM PrintEditions WHERE book_id = :book_id"),
                             {"book_id": book_id}
@@ -506,6 +582,18 @@ def update_book_details(book_id, current_data):
                                 "color_pages": new_color_pages if print_color == "Full Color" else None
                             }
                         )
+                        # Log print edition addition
+                        try:
+                            log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "added print edition",
+                                f"Book ID: {book_id}, Copies={new_num_copies}, Cost={print_cost or 'N/A'}, Color={print_color}, Binding={binding}, Size={book_size}, Color Pages={new_color_pages or 'N/A'}"
+                            )
+                        except Exception as e:
+                            st.error(f"Error logging print edition addition: {str(e)}")
 
                     # Commit changes
                     session.commit()

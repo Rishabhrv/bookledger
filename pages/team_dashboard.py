@@ -8,6 +8,9 @@ import os
 import datetime
 import altair as alt
 from auth import validate_token
+from constants import log_activity
+from constants import connect_db
+import uuid
 
 
 # Set page configuration
@@ -57,6 +60,8 @@ role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
+# if "session_id" not in st.session_state:
+#     st.session_state.session_id = str(uuid.uuid4())
 
 
 # role_user = 'admin'
@@ -101,20 +106,106 @@ else:
 
 st.cache_data.clear()
 
-# --- Database Connection ---
-def connect_db():
-    try:
-        @st.cache_resource
-        def get_connection():
-            return st.connection('mysql', type='sql')
-        conn = get_connection()
-        return conn
-    except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
-
 # Connect to MySQL
 conn = connect_db()
+
+# if user_app == 'operations':
+#     if "activity_logged" not in st.session_state:
+#         log_activity(
+#                     conn,
+#                     st.session_state.user_id,
+#                     st.session_state.username,
+#                     st.session_state.session_id,
+#                     "logged in",
+#                     f"App: {st.session_state.app}, Access: {st.session_state.access[0]}"
+#                 )
+#         st.session_state.activity_logged = True
+
+
+# if user_app == 'main':
+#     # Initialize session state from query parameters
+#     query_params = st.query_params
+#     click_id = query_params.get("click_id", [None])
+#     session_id = query_params.get("session_id", [None])
+
+#     # Set session_id in session state
+#     st.session_state.session_id = session_id
+
+#     # Initialize logged_click_ids if not present
+#     if "logged_click_ids" not in st.session_state:
+#         st.session_state.logged_click_ids = set()
+
+#     # Log navigation if click_id is present and not already logged
+#     if click_id and click_id not in st.session_state.logged_click_ids:
+#         try:
+#             log_activity(
+#                 conn,
+#                 st.session_state.user_id,
+#                 st.session_state.username,
+#                 st.session_state.session_id,
+#                 "navigated to page",
+#                 f"Page: Team Dashboard"
+#             )
+#             st.session_state.logged_click_ids.add(click_id)
+#         except Exception as e:
+#             st.error(f"Error logging navigation: {str(e)}")
+
+
+# Initialize session state
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+if "activity_logged" not in st.session_state:
+    st.session_state.activity_logged = False
+
+# Determine session_id based on access method
+user_app = st.session_state.get("app", "operations")
+if user_app == "main":
+    query_params = st.query_params
+    session_id = query_params.get("session_id", [None])
+    click_id = query_params.get("click_id", [None])
+    if not session_id:
+        st.error("Session not initialized. Please access this page from the main dashboard.")
+        st.stop()
+    st.session_state.session_id = session_id
+else:
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    click_id = None
+
+# Ensure user_id and username are set
+if not all(key in st.session_state for key in ["user_id", "username"]):
+    st.error("Session not initialized. Please log in again.")
+    st.stop()
+
+# Log login for direct access (operations)
+if user_app == "operations" and not st.session_state.activity_logged:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "logged in",
+            f"App: {user_app}, Access: {st.session_state.get('access', ['direct'])[0]}"
+        )
+        st.session_state.activity_logged = True
+    except Exception as e:
+        st.error(f"Error logging login: {str(e)}")
+
+# Log page access if coming from main page and click_id is new
+if user_app == "main" and click_id and click_id not in st.session_state.logged_click_ids:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: team_dashboard"
+        )
+        st.session_state.logged_click_ids.add(click_id)
+    except Exception as e:
+        st.error(f"Error logging navigation: {str(e)}")
 
 def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
     conn = connect_db()
@@ -529,14 +620,14 @@ def edit_section_dialog(book_id, conn, section):
         }
     }
     
-    config = section_config.get(section, section_config["writing"])  # Default to writing if section invalid
+    config = section_config.get(section, section_config["writing"])
     display_name = config["display"]
 
     # Fetch book title and current book_pages
     book_details = fetch_book_details(book_id, conn)
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
-        current_book_pages = book_details.iloc[0].get('book_pages', 0)  # Fetch existing book_pages
+        current_book_pages = book_details.iloc[0].get('book_pages', 0)
         st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
     else:
         book_title = "Unknown Title"
@@ -709,6 +800,26 @@ def edit_section_dialog(book_id, conn, section):
                         params["id"] = int(book_id)
                         s.execute(text(query), params)
                         s.commit()
+                    
+                    # Log the form submission
+                    details = (
+                        f"Book ID: {book_id}, {display_name} Team Member: {worker or 'None'}, "
+                        f"Start: {start or 'None'}, End: {end or 'None'}"
+                    )
+                    if section in ["writing", "proofreading", "formatting"]:
+                        details += f", Pages: {book_pages}"
+                    try:
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            f"updated {section} details",
+                            details
+                        )
+                    except Exception as e:
+                        st.error(f"Error logging {display_name.lower()} details: {str(e)}")
+                    
                     st.success(f"✔️ Updated {display_name} details")
                     # Clear new worker input after saving
                     st.session_state[f"{section}_new_worker_{book_id}"] = ""

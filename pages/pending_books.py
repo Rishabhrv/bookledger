@@ -4,6 +4,8 @@ from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
 from auth import validate_token
+from constants import log_activity
+from constants import connect_db
 
 logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
@@ -346,18 +348,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+conn = connect_db()
 
-# --- Database Connection ---
-def connect_db():
+# Initialize session state from query parameters
+query_params = st.query_params
+click_id = query_params.get("click_id", [None])
+session_id = query_params.get("session_id", [None])
+
+# Set session_id in session state
+st.session_state.session_id = session_id
+
+# Initialize logged_click_ids if not present
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
     try:
-        @st.cache_resource
-        def get_connection():
-            return st.connection('mysql', type='sql')
-        conn = get_connection()
-        return conn
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Pending Work"
+        )
+        st.session_state.logged_click_ids.add(click_id)
     except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
+        st.error(f"Error logging navigation: {str(e)}")
 
 # Function to fetch book_author details for multiple book_ids with author details
 def fetch_all_book_authors(book_ids, conn):

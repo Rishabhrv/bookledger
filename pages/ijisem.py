@@ -5,6 +5,9 @@ from datetime import datetime
 from auth import validate_token
 import altair as alt
 from time import sleep
+from constants import log_activity
+from constants import connect_db
+import uuid
 
 ########################################################################################################################
 ##################################--------------- Page Config ----------------------------#############################
@@ -32,6 +35,8 @@ validate_token()
 user_role = st.session_state.get("role", None)
 user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
 
 if user_role != 'admin' and not (
@@ -186,7 +191,7 @@ st.markdown("""
 
 # Database connection
 @st.cache_resource
-def connect_db():
+def connect_db_ijisem():
     try:
         def get_connection():
             return st.connection('ijisem', type='sql')
@@ -196,7 +201,49 @@ def connect_db():
         st.error(f"Error connecting to MySQL: {e}")
         st.stop()
 
-conn = connect_db()
+conn_main = connect_db()
+conn = connect_db_ijisem()
+
+
+if user_app == 'ijisem':
+    if "activity_logged" not in st.session_state:
+        log_activity(
+                    conn_main,
+                    st.session_state.user_id,
+                    st.session_state.username,
+                    st.session_state.session_id,
+                    "logged in",
+                    f"App: {st.session_state.app}"
+                )
+        st.session_state.activity_logged = True
+
+if user_app == 'main':
+    # Initialize session state from query parameters
+    query_params = st.query_params
+    click_id = query_params.get("click_id", [None])
+    session_id = query_params.get("session_id", [None])
+
+    # Set session_id in session state
+    st.session_state.session_id = session_id
+
+    # Initialize logged_click_ids if not present
+    if "logged_click_ids" not in st.session_state:
+        st.session_state.logged_click_ids = set()
+
+    # Log navigation if click_id is present and not already logged
+    if click_id and click_id not in st.session_state.logged_click_ids:
+        try:
+            log_activity(
+                conn_main,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "navigated to page",
+                f"Page: IJISEM"
+            )
+            st.session_state.logged_click_ids.add(click_id)
+        except Exception as e:
+            st.error(f"Error logging navigation: {str(e)}")
 
 
 ########################################################################################################################
@@ -2084,7 +2131,7 @@ def main():
             st.cache_data.clear()
 
     # Connect to database
-    conn = connect_db()
+    conn = connect_db_ijisem()
     if conn is None:
         return  # Error already displayed in connect_db()
 

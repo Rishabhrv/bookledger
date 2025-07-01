@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 from auth import validate_token
+from constants import log_activity
+from constants import connect_db
 
 logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
@@ -43,14 +45,34 @@ st.markdown("""
         }
             """, unsafe_allow_html=True)
 
-# Database Connection
-@st.cache_resource
-def connect_db():
+conn = connect_db()
+
+# Initialize session state from query parameters
+query_params = st.query_params
+click_id = query_params.get("click_id", [None])
+session_id = query_params.get("session_id", [None])
+
+# Set session_id in session state
+st.session_state.session_id = session_id
+
+# Initialize logged_click_ids if not present
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
     try:
-        return st.connection('mysql', type='sql')
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Open Author Positions"
+        )
+        st.session_state.logged_click_ids.add(click_id)
     except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
+        st.error(f"Error logging navigation: {str(e)}")
 
 
 
