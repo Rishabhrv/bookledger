@@ -38,7 +38,7 @@ st.markdown("""
         }
         /* Ensure the first element has minimal spacing */
         .block-container {
-            padding-top: 28px !important;  /* Small padding for breathing room */
+            padding-top: 7px !important;  /* Small padding for breathing room */
         }
             """, unsafe_allow_html=True)
 
@@ -163,169 +163,166 @@ def get_action_emoji(action):
     return action_emojis.get(action.lower(), '⚙️')
 
 # Custom CSS for tree view, filter, and checklist card styling
-def apply_tree_style():
-    st.markdown("""
-    <style>
-        .tree-item {
-            padding: 6px;
-            font-size: 14px;
-            border-left: 2px solid #1f77b4;
-            margin-left: 20px;
-            margin-bottom: 6px;
-        }
-        .user-node {
-            font-size: 16px;
-            font-weight: bold;
-            color: #333;
-            margin-bottom: 8px;
-        }
-        .session-node {
-            font-size: 15px;
-            font-weight: bold;
-            color: #555;
-            margin-left: 15px;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-        }
-        .session-duration {
-            font-size: 12px;
-            color: #6c757d;
-            margin-left: 10px;
-            font-style: italic;
-        }
-        .timestamp {
-            color: #6c757d;
-            font-size: 12px;
-            min-width: 80px;
-            margin-right: 8px;
-            display: inline-block;
-        }
-        .action {
-            font-weight: bold;
-            color: #1f77b4;
-            margin-right: 8px;
-            min-width: 140px;
-            display: inline-block;
-        }
-        .checklist-action {
-            font-weight: bold;
-            color: #1f77b4;
-            margin-right: 8px;
-            min-width: 60px;
-            display: inline-block;
-        }
-        .details {
-            color: #333;
-            font-size: 13px;
-            word-break: break-word;
-            background-color: #f1f3f5;
-            padding: 4px 8px;
-            border-radius: 4px;
-            display: inline-block;
-            line-height: 1.4;
-            flex-grow: 1;
-        }
-        .details_checklist {
-            color: #333;
-            font-size: 13px;
-            word-break: break-word;
-            padding: 4px 8px;
-            border-radius: 4px;
-            display: flex;
-            flex-direction: column;
-            line-height: 1.4;
-            flex-grow: 1;
-        }
-        .column-border {
-            border-right: 1px solid #e0e0e0;
-            padding-right: 20px;
-        }
-        .checklist-card {
-            background-color: #ffffff;
-            border: 1px solid #e0e0e0;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .checklist-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-        .checklist-title {
-            font-size: 16px;
-            font-weight: bold;
-            color: #333;
-        }
-        .checklist-timestamp {
-            font-size: 12px;
-            color: #6c757d;
-        }
-        .checklist-info {
-            font-size: 14px;
-            color: #555;
-            margin-bottom: 12px;
-        }
-        .checklist-status {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .status-item {
-            font-size: 13px;
-            padding: 4px 8px;
-            border-radius: 12px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .status-completed {
-            background-color: #d4edda;
-            color: #155724;
-        }
-        .status-pending {
-            background-color: #fff3cd;
-            color: #856404;
-        }
-        .checklist-item {
-            padding: 6px;
-            font-size: 14px;
-            border-left: 2px solid #1f77b4;
-            margin-left: 20px;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-        }
-        .highlight-author {
-            font-weight: 501;
-            font-size: 14px;
-            color: #292929;
-        }
-        .highlight-update {
-            background-color: #47a65b;
-            color: #ffffff;
-            padding: 2px 8px;
-            border-radius: 16px;
-            font-size: 12px;
-            font-weight: 501;
-            display: inline-block; /* Changed to inline-block to fit text */
-            align-items: center;
-            justify-content: center;
-            margin-top: 3px;
-            gap: 4px;
-            line-height: 1.2;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-            white-space: nowrap; /* Prevents text wrapping */
-            max-width: fit-content; /* Ensures badge size fits content */
-        }
+
+st.markdown("""
+<style>
+    .tree-item {
+        padding: 6px;
+        font-size: 14px;
+        border-left: 2px solid #1f77b4;
+        margin-left: 20px;
+        margin-bottom: 6px;
+    }
+    .user-node {
+        font-size: 16px;
+        font-weight: bold;
+        color: #333;
+        margin-bottom: 8px;
+    }
+    .session-node {
+        font-size: 15px;
+        font-weight: bold;
+        color: #555;
+        margin-left: 15px;
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+    }
+    .session-duration {
+        font-size: 12px;
+        color: #6c757d;
+        margin-left: 10px;
+        font-style: italic;
+    }
+    .timestamp {
+        color: #6c757d;
+        font-size: 12px;
+        min-width: 80px;
+        margin-right: 8px;
+        display: inline-block;
+    }
+    .action {
+        font-weight: bold;
+        color: #1f77b4;
+        margin-right: 8px;
+        min-width: 140px;
+        display: inline-block;
+    }
+    .checklist-action {
+        font-weight: bold;
+        color: #1f77b4;
+        margin-right: 8px;
+        min-width: 60px;
+        display: inline-block;
+    }
+    .details {
+        color: #333;
+        font-size: 13px;
+        word-break: break-word;
+        background-color: #f1f3f5;
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: inline-block;
+        line-height: 1.4;
+        flex-grow: 1;
+    }
+    .details_checklist {
+        color: #333;
+        font-size: 13px;
+        word-break: break-word;
+        padding: 4px 8px;
+        border-radius: 4px;
+        display: flex;
+        flex-direction: column;
+        line-height: 1.4;
+        flex-grow: 1;
+    }
+    .column-border {
+        border-right: 1px solid #e0e0e0;
+        padding-right: 20px;
+    }
+    .checklist-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 16px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .checklist-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+    .checklist-title {
+        font-size: 16px;
+        font-weight: bold;
+        color: #333;
+    }
+    .checklist-timestamp {
+        font-size: 12px;
+        color: #6c757d;
+    }
+    .checklist-info {
+        font-size: 14px;
+        color: #555;
+        margin-bottom: 12px;
+    }
+    .checklist-status {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .status-item {
+        font-size: 13px;
+        padding: 4px 8px;
+        border-radius: 12px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .status-completed {
+        background-color: #d4edda;
+        color: #155724;
+    }
+    .status-pending {
+        background-color: #fff3cd;
+        color: #856404;
+    }
+    .checklist-item {
+        padding: 6px;
+        font-size: 14px;
+        border-left: 2px solid #1f77b4;
+        margin-left: 20px;
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+    }
+    .highlight-author {
+        font-weight: 501;
+        font-size: 14px;
+        color: #292929;
+    }
+    .highlight-update {
+        background-color: #47a65b;
+        color: #ffffff;
+        padding: 2px 8px;
+        border-radius: 16px;
+        font-size: 12px;
+        font-weight: 501;
+        display: inline-block; /* Changed to inline-block to fit text */
+        align-items: center;
+        justify-content: center;
+        margin-top: 3px;
+        gap: 4px;
+        line-height: 1.2;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        white-space: nowrap; /* Prevents text wrapping */
+        max-width: fit-content; /* Ensures badge size fits content */
+    }
         </style>
     """, unsafe_allow_html=True)
-
-# Apply custom CSS
-apply_tree_style()
 
 col1, col2 = st.columns([12, 1], vertical_alignment="bottom")
 

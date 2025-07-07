@@ -115,7 +115,8 @@ st.markdown("""
         font-weight: 500;
         text-align: center;
         min-width: 80px;
-    }
+        }
+            
     .badge-completed {
         background-color: #e6ffe6;
         color: #2e7d32;
@@ -136,15 +137,23 @@ st.markdown("""
         background-color: #EDE7F6;
         color: #4527A0;
     }
-            
     .badge-excess-plagiarism {
         background-color: #fff3e0;
         color: #e65100;
     }
-
     .badge-paid {
         background-color: #fff3e0;
         color: #ef6c00;
+    }
+    .badge-due {
+        background-color: #ffede5;
+        color: #d84315;
+
+        border-radius: 12px;
+        font-size: 0.85em;
+        font-weight: 500;
+        text-align: center;
+        min-width: 80px;
     }
     .small-pill {
         display: inline-block;
@@ -314,11 +323,46 @@ def fetch_author_names(paper_id, conn):
 def format_date(date):
     return date.strftime('%Y-%m-%d') if pd.notnull(date) else 'N/A'
 
-def format_payment(amount):
-    return f"₹{int(amount)}" if pd.notnull(amount) else 'Pending'
-
 def format_review(review_done):
     return 'Completed' if review_done else 'Pending'
+
+def format_payment(row, emi_data=None):
+    
+    # If row is a single value (e.g., payment_amount), treat it as such
+    if isinstance(row, (int, float)):
+        payment_amount = row
+        # Use emi_data if provided, otherwise assume no EMI payments
+        if emi_data is None:
+            emi_data = {"emi_1_amount": 0, "emi_2_amount": 0, "emi_3_amount": 0}
+    elif isinstance(row, (dict, pd.Series)):
+        # Convert to dict if row is a Series
+        row = row.to_dict() if isinstance(row, pd.Series) else row
+        payment_amount = row.get("payment_amount", 0)
+        emi_data = {
+            "emi_1_amount": row.get("emi_1_amount", 0),
+            "emi_2_amount": row.get("emi_2_amount", 0),
+            "emi_3_amount": row.get("emi_3_amount", 0)
+        }
+    else:
+        return "Invalid row format"
+
+    # Check if payment_amount is valid
+    if pd.notnull(payment_amount) and payment_amount > 0:
+        total_paid = sum(
+            amount for amount in [
+                emi_data.get("emi_1_amount", 0),
+                emi_data.get("emi_2_amount", 0),
+                emi_data.get("emi_3_amount", 0)
+            ] if pd.notnull(amount)
+        )
+        
+        if total_paid >= payment_amount:
+            return "No dues"
+        else:
+            remaining = payment_amount - total_paid
+            return f"₹{int(remaining)} Due"
+    return "Pending"
+
 
 def format_status(status, status_type):
     if status_type == "review":
@@ -337,10 +381,14 @@ def format_status(status, status_type):
         }
         badge_class = issue_mapping.get(status, "badge-pending")
     else:  # payment or unknown
-        badge_class = "badge-paid" if status.startswith("₹") else "badge-pending"
+        if status == "No dues":
+            badge_class = "badge-paid"
+        elif status == "Pending" or status == "Invalid row format":
+            badge_class = "badge-pending"
+        else:  # Due amount
+            badge_class = "badge-due"
 
     return f'<span class="badge {badge_class}">{status}</span>'
-
 
 ########################################################################################################################
 ##################################--------------- Add New Paper ----------------------------######################
@@ -351,7 +399,7 @@ def format_status(status, status_type):
 def add_paper_dialog(conn):
     with st.container(border=True):
         # Publication ID and Title in one row
-        col1, col2 = st.columns([1, 2])
+        col1, col2 = st.columns([0.7, 2])
         with col1:
             publication_id = st.text_input("Publication ID", value="", placeholder="Unique ID", key="publication_id")
         with col2:
@@ -2102,7 +2150,7 @@ def render_table(df, page, items_per_page, conn, applied_filters=False):
                     with col5:
                         st.markdown(f'<div class="data-row">{format_status(row["acceptance"], "acceptance")}</div>', unsafe_allow_html=True)
                     with col6:
-                        st.markdown(f'<div class="data-row">{format_status(format_payment(row["payment_amount"]), "payment")}</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="data-row">{format_status(format_payment(row), "payment")}</div>', unsafe_allow_html=True)
                     with col7:
                         btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1, 1, 1, 1], vertical_alignment="center", gap="small")
                         with btn_col1:
