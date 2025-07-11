@@ -976,11 +976,7 @@ def edit_paper_dialog(paper_id, conn):
 ##################################--------------- Edit Author Details ----------------------------######################
 ########################################################################################################################
 
-
-@st.dialog("Edit Author Details", width="large")
-def edit_author_dialog(paper_id, conn):
-    # --- Custom CSS for Compact and Modern Styling ---
-    st.markdown(
+st.markdown(
         """
         <style>
         .author-card { 
@@ -1020,6 +1016,8 @@ def edit_author_dialog(paper_id, conn):
         unsafe_allow_html=True
     )
 
+@st.dialog("Edit Author Details", width="large")
+def edit_author_dialog(paper_id, conn):
     # --- Fetch Paper Title and Publishing Type ---
     try:
         with conn.session as session:
@@ -1081,99 +1079,98 @@ def edit_author_dialog(paper_id, conn):
         with st.container():
             for author in authors:
                 with st.container():
-                    if author['author_position'] == 1:
-                        with st.expander(f"{author['name']} (ID: {author['author_id']})", expanded=True):
-                            st.markdown(
-                                f"""
-                                <div class="author-card">
-                                    <div class="author-grid">
-                                        <div><strong>Name:</strong> {author['name']}</div>
-                                        <div><strong>Email:</strong> {author['email']}</div>
-                                        <div><strong>Phone:</strong> {author['phone']}</div>
-                                        <div><strong>Position:</strong> {author['author_position'] or 'None'}</div>
-                                        <div style="grid-column: span 2;"><strong>Affiliation:</strong> {author['affiliation']}</div>
-                                    </div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                            with st.form(key=f"checklist_form_{author['author_id']}", border=False):
-                                checklist_values = {}
-                                
-                                # Prepare a list of checkbox labels and keys based on publishing type
-                                checklist_items = []
-
-                                if publishing_type == "Writing + Publishing":
-                                    checklist_items.append(("Written Paper Confirmation Received", 'written_paper_confirmation_received'))
-
-                                elif publishing_type == "Publishing Only":
-                                    checklist_items.append(("Paper Receiving Confirmation Sent", 'paper_receiving_confirmation_sent'))
-
-                                checklist_items += [
-                                    ("Paper Review Confirmation Sent", 'paper_review_confirmation_sent'),
-                                    ("Certificate Ready", 'certificate_ready'),
-                                    ("Certificate Sent", 'certificate_sent'),
-                                    ("Publishing Confirmation Sent", 'publishing_confirmation_sent')
-                                ]
-
-                                # Render checkboxes in rows of 2 columns
-                                for i in range(0, len(checklist_items), 2):
-                                    cols = st.columns(2, gap="small", vertical_alignment="top")
-                                    for j in range(2):
-                                        if i + j < len(checklist_items):
-                                            label, key = checklist_items[i + j]
-                                            db_value = author.get(key, False)
-                                            checklist_values[key] = cols[j].checkbox(
-                                                label, value=db_value, key=f"{key}_{author['author_id']}"
-                                            )
-
-                                # Submit Button
-                                if st.form_submit_button("Update", type="primary", use_container_width=False):
-                                    try:
-                                        with conn.session as session:
-                                            query = text("""
-                                                UPDATE paper_authors
-                                                SET written_paper_confirmation_received = :written_paper_confirmation_received,
-                                                    paper_receiving_confirmation_sent = :paper_receiving_confirmation_sent,
-                                                    paper_review_confirmation_sent = :paper_review_confirmation_sent,
-                                                    certificate_ready = :certificate_ready,
-                                                    certificate_sent = :certificate_sent,
-                                                    publishing_confirmation_sent = :publishing_confirmation_sent
-                                                WHERE paper_id = :paper_id AND author_id = :author_id
-                                            """)
-                                            session.execute(query, {
-                                                'written_paper_confirmation_received': checklist_values.get('written_paper_confirmation_received', False),
-                                                'paper_receiving_confirmation_sent': checklist_values.get('paper_receiving_confirmation_sent', False),
-                                                'paper_review_confirmation_sent': checklist_values.get('paper_review_confirmation_sent', False),
-                                                'certificate_ready': checklist_values.get('certificate_ready', False),
-                                                'certificate_sent': checklist_values.get('certificate_sent', False),
-                                                'publishing_confirmation_sent': checklist_values.get('publishing_confirmation_sent', False),
-                                                'paper_id': paper_id,
-                                                'author_id': author['author_id']
-                                            })
-                                            session.commit()
-                                        st.success("Checklist updated!", icon="✅")
-                                    except Exception as e:
-                                        st.error(f"Error updating checklist: {e}")
-
-                    else:
-                        st.markdown(
-                            f"""
-                            <div class="author-card">
-                                <strong style="font-size:14px;color:#2e7d32;">
-                                    {author['name']} (ID: {author['author_id']})
-                                </strong>
-                                <div class="author-grid">
-                                    <div><strong>Name:</strong> {author['name']}</div>
-                                    <div><strong>Email:</strong> {author['email']}</div>
-                                    <div><strong>Phone:</strong> {author['phone']}</div>
-                                    <div><strong>Position:</strong> {author['author_position'] or 'None'}</div>
-                                    <div style="grid-column: span 2;"><strong>Affiliation:</strong> {author['affiliation']}</div>
-                                </div>
+                    st.markdown(
+                        f"""
+                        <div class="author-card">
+                            <div class="author-grid">
+                                <div><strong>Name:</strong> {author['name']}</div>
+                                <div><strong>Email:</strong> {author['email']}</div>
+                                <div><strong>Phone:</strong> {author['phone']}</div>
+                                <div><strong>Position:</strong> {author['author_position'] or 'None'}</div>
+                                <div style="grid-column: span 2;"><strong>Affiliation:</strong> {author['affiliation']}</div>
                             </div>
-                            """,
-                            unsafe_allow_html=True
-                        )
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    # Add Remove Author button for all authors
+                    if st.button("🗑️ Remove", key=f"remove_{author['author_id']}", type="secondary"):
+                        try:
+                            with conn.session as session:
+                                query = text("""
+                                    DELETE FROM paper_authors
+                                    WHERE paper_id = :paper_id AND author_id = :author_id
+                                """)
+                                session.execute(query, {
+                                    'paper_id': paper_id,
+                                    'author_id': author['author_id']
+                                })
+                                session.commit()
+                            st.success(f"Author {author['name']} removed from the paper!", icon="✅")
+                            st.rerun()  # Refresh the dialog to reflect changes
+                        except Exception as e:
+                            st.error(f"Error removing author: {e}")
+
+                    # Checklist form only for primary author (author_position = 1)
+                    if author['author_position'] == 1:
+                        with st.form(key=f"checklist_form_{author['author_id']}", border=False):
+                            checklist_values = {}
+                            
+                            # Prepare a list of checkbox labels and keys based on publishing type
+                            checklist_items = []
+
+                            if publishing_type == "Writing + Publishing":
+                                checklist_items.append(("Written Paper Confirmation Received", 'written_paper_confirmation_received'))
+
+                            elif publishing_type == "Publishing Only":
+                                checklist_items.append(("Paper Receiving Confirmation Sent", 'paper_receiving_confirmation_sent'))
+
+                            checklist_items += [
+                                ("Paper Review Confirmation Sent", 'paper_review_confirmation_sent'),
+                                ("Certificate Ready", 'certificate_ready'),
+                                ("Certificate Sent", 'certificate_sent'),
+                                ("Publishing Confirmation Sent", 'publishing_confirmation_sent')
+                            ]
+
+                            # Render checkboxes in rows of 2 columns
+                            for i in range(0, len(checklist_items), 2):
+                                cols = st.columns(2, gap="small", vertical_alignment="top")
+                                for j in range(2):
+                                    if i + j < len(checklist_items):
+                                        label, key = checklist_items[i + j]
+                                        db_value = author.get(key, False)
+                                        checklist_values[key] = cols[j].checkbox(
+                                            label, value=db_value, key=f"{key}_{author['author_id']}"
+                                        )
+
+                            # Submit Button
+                            if st.form_submit_button("Update", type="primary", use_container_width=False):
+                                try:
+                                    with conn.session as session:
+                                        query = text("""
+                                            UPDATE paper_authors
+                                            SET written_paper_confirmation_received = :written_paper_confirmation_received,
+                                                paper_receiving_confirmation_sent = :paper_receiving_confirmation_sent,
+                                                paper_review_confirmation_sent = :paper_review_confirmation_sent,
+                                                certificate_ready = :certificate_ready,
+                                                certificate_sent = :certificate_sent,
+                                                publishing_confirmation_sent = :publishing_confirmation_sent
+                                            WHERE paper_id = :paper_id AND author_id = :author_id
+                                        """)
+                                        session.execute(query, {
+                                            'written_paper_confirmation_received': checklist_values.get('written_paper_confirmation_received', False),
+                                            'paper_receiving_confirmation_sent': checklist_values.get('paper_receiving_confirmation_sent', False),
+                                            'paper_review_confirmation_sent': checklist_values.get('paper_review_confirmation_sent', False),
+                                            'certificate_ready': checklist_values.get('certificate_ready', False),
+                                            'certificate_sent': checklist_values.get('certificate_sent', False),
+                                            'publishing_confirmation_sent': checklist_values.get('publishing_confirmation_sent', False),
+                                            'paper_id': paper_id,
+                                            'author_id': author['author_id']
+                                        })
+                                        session.commit()
+                                    st.success("Checklist updated!", icon="✅")
+                                except Exception as e:
+                                    st.error(f"Error updating checklist: {e}")
 
     # --- Helper Function: Check for Duplicate Author Position ---
     def is_author_position_duplicate(paper_id, author_position, exclude_author_id=None):

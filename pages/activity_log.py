@@ -42,128 +42,6 @@ st.markdown("""
         }
             """, unsafe_allow_html=True)
 
-st.cache_data.clear()
-
-# Connect to MySQL
-conn = connect_db()
-
-# Initialize session state from query parameters
-query_params = st.query_params
-click_id = query_params.get("click_id", [None])
-session_id = query_params.get("session_id", [None])
-
-# Set session_id in session state
-st.session_state.session_id = session_id
-
-# Initialize logged_click_ids if not present
-if "logged_click_ids" not in st.session_state:
-    st.session_state.logged_click_ids = set()
-
-# Log navigation if click_id is present and not already logged
-if click_id and click_id not in st.session_state.logged_click_ids:
-    try:
-        log_activity(
-            conn,
-            st.session_state.user_id,
-            st.session_state.username,
-            st.session_state.session_id,
-            "navigated to page",
-            f"Page: Activity Log"
-        )
-        st.session_state.logged_click_ids.add(click_id)
-    except Exception as e:
-        st.error(f"Error logging navigation: {str(e)}")
-
-
-# Fetch activity log data for a specific date, user, and action
-def get_activity_log(selected_date, selected_user=None, selected_action=None):
-    conn = connect_db()
-    query = """
-        SELECT timestamp, user_id, username, session_id, action, details 
-        FROM activity_log 
-        WHERE DATE(timestamp) = :selected_date
-    """
-    params = {"selected_date": selected_date}
-    if selected_user:
-        query += " AND username = :selected_user"
-        params["selected_user"] = selected_user
-    if selected_action:
-        query += " AND action = :selected_action"
-        params["selected_action"] = selected_action
-    query += " ORDER BY timestamp DESC"
-    
-    with conn.session as s:
-        result = s.execute(text(query), params=params)
-        df = pd.DataFrame(result.fetchall(), columns=["timestamp", "user_id", "username", "session_id", "action", "details"])
-        s.commit()
-    return df
-
-# Fetch checklist updates with book and author details
-def get_checklist_updates(selected_date):
-    conn = connect_db()
-    query = """
-        SELECT al.timestamp, al.details, b.book_id, b.title, a.author_id, a.name,
-               ba.welcome_mail_sent, ba.photo_recive, ba.id_proof_recive, ba.author_details_sent,
-               ba.cover_agreement_sent, ba.agreement_received, ba.digital_book_sent,
-               ba.digital_book_approved, ba.plagiarism_report
-        FROM activity_log al
-        JOIN book_authors ba ON al.details LIKE CONCAT('%Book ID: ', ba.book_id, '%') AND 
-                               al.details LIKE CONCAT('%Author ID: ', ba.author_id, '%')
-        JOIN books b ON ba.book_id = b.book_id
-        JOIN authors a ON ba.author_id = a.author_id
-        WHERE DATE(al.timestamp) = :selected_date
-        AND al.action = 'updated checklist'
-        ORDER BY al.timestamp DESC
-    """
-    params = {"selected_date": selected_date}
-    
-    with conn.session as s:
-        result = s.execute(text(query), params=params)
-        df = pd.DataFrame(result.fetchall(), columns=[
-            "timestamp", "details", "book_id", "title", "author_id", "name",
-            "welcome_mail_sent", "photo_recive", "id_proof_recive", "author_details_sent",
-            "cover_agreement_sent", "agreement_received", "digital_book_sent",
-            "digital_book_approved", "plagiarism_report"
-        ])
-        s.commit()
-    return df
-
-# Format timestamp for display
-def format_timestamp(ts):
-    if isinstance(ts, pd.Timestamp):
-        ts = ts.strftime('%Y-%m-%d %H:%M:%S')
-    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%I:%M %p')
-
-# Calculate session duration
-def calculate_session_duration(session_group):
-    timestamps = pd.to_datetime(session_group['timestamp'])
-    duration = timestamps.max() - timestamps.min()
-    total_seconds = int(duration.total_seconds())
-    hours, remainder = divmod(total_seconds, 3600)
-    minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-# Assign emojis based on action type
-def get_action_emoji(action):
-    action_emojis = {
-        'logged in': '🔐',
-        'navigated to page': '📄',
-        'changed author type': '✍️',
-        'updated writing details': '📝',
-        'updated author': '👤',
-        'opened dialog': '🖱️',
-        'added print edition': '📚',
-        'updated links': '🔗',
-        'updated sales': '💰',
-        'updated book details': '📖',
-        'cleaned old logs': '🧹',
-        'updated checklist': '✅'
-    }
-    return action_emojis.get(action.lower(), '⚙️')
-
-# Custom CSS for tree view, filter, and checklist card styling
-
 st.markdown("""
 <style>
     .tree-item {
@@ -324,6 +202,126 @@ st.markdown("""
         </style>
     """, unsafe_allow_html=True)
 
+st.cache_data.clear()
+
+# Connect to MySQL
+conn = connect_db()
+
+# Initialize session state from query parameters
+query_params = st.query_params
+click_id = query_params.get("click_id", [None])
+session_id = query_params.get("session_id", [None])
+
+# Set session_id in session state
+st.session_state.session_id = session_id
+
+# Initialize logged_click_ids if not present
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Activity Log"
+        )
+        st.session_state.logged_click_ids.add(click_id)
+    except Exception as e:
+        st.error(f"Error logging navigation: {str(e)}")
+
+
+# Fetch activity log data for a specific date, user, and action
+def get_activity_log(selected_date, selected_user=None, selected_action=None):
+    conn = connect_db()
+    query = """
+        SELECT timestamp, user_id, username, session_id, action, details 
+        FROM activity_log 
+        WHERE DATE(timestamp) = :selected_date
+    """
+    params = {"selected_date": selected_date}
+    if selected_user:
+        query += " AND username = :selected_user"
+        params["selected_user"] = selected_user
+    if selected_action:
+        query += " AND action = :selected_action"
+        params["selected_action"] = selected_action
+    query += " ORDER BY timestamp DESC"
+    
+    with conn.session as s:
+        result = s.execute(text(query), params=params)
+        df = pd.DataFrame(result.fetchall(), columns=["timestamp", "user_id", "username", "session_id", "action", "details"])
+        s.commit()
+    return df
+
+# Fetch checklist updates with book and author details
+def get_checklist_updates(selected_date):
+    conn = connect_db()
+    query = """
+        SELECT al.timestamp, al.details, b.book_id, b.title, a.author_id, a.name,
+               ba.welcome_mail_sent, ba.photo_recive, ba.id_proof_recive, ba.author_details_sent,
+               ba.cover_agreement_sent, ba.agreement_received, ba.digital_book_sent,
+               ba.digital_book_approved, ba.plagiarism_report
+        FROM activity_log al
+        JOIN book_authors ba ON al.details LIKE CONCAT('%Book ID: ', ba.book_id, '%') AND 
+                               al.details LIKE CONCAT('%Author ID: ', ba.author_id, '%')
+        JOIN books b ON ba.book_id = b.book_id
+        JOIN authors a ON ba.author_id = a.author_id
+        WHERE DATE(al.timestamp) = :selected_date
+        AND al.action = 'updated checklist'
+        ORDER BY al.timestamp DESC
+    """
+    params = {"selected_date": selected_date}
+    
+    with conn.session as s:
+        result = s.execute(text(query), params=params)
+        df = pd.DataFrame(result.fetchall(), columns=[
+            "timestamp", "details", "book_id", "title", "author_id", "name",
+            "welcome_mail_sent", "photo_recive", "id_proof_recive", "author_details_sent",
+            "cover_agreement_sent", "agreement_received", "digital_book_sent",
+            "digital_book_approved", "plagiarism_report"
+        ])
+        s.commit()
+    return df
+
+# Format timestamp for display
+def format_timestamp(ts):
+    if isinstance(ts, pd.Timestamp):
+        ts = ts.strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%I:%M %p')
+
+# Calculate session duration
+def calculate_session_duration(session_group):
+    timestamps = pd.to_datetime(session_group['timestamp'])
+    duration = timestamps.max() - timestamps.min()
+    total_seconds = int(duration.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+# Assign emojis based on action type
+def get_action_emoji(action):
+    action_emojis = {
+        'logged in': '🔐',
+        'navigated to page': '📄',
+        'changed author type': '✍️',
+        'updated writing details': '📝',
+        'updated author': '👤',
+        'opened dialog': '🖱️',
+        'added print edition': '📚',
+        'updated links': '🔗',
+        'updated sales': '💰',
+        'updated book details': '📖',
+        'cleaned old logs': '🧹',
+        'updated checklist': '✅'
+    }
+    return action_emojis.get(action.lower(), '⚙️')
+
 col1, col2 = st.columns([12, 1], vertical_alignment="bottom")
 
 with col1:
@@ -444,7 +442,7 @@ with col_checklist:
                         <div class="checklist-item">
                             <div class="timestamp">{formatted_time}</div>
                             <div class="details_checklist">
-                                <span class="highlight-author">Author ID {row['author_id']}: {row['name']}</span>
+                                <span class="highlight-author">{row['name']} : ID {row['author_id']}</span>
                                 <span class="highlight-update">{changed_field} → {changed_value}</span>
                             </div>
                         </div>
