@@ -472,7 +472,7 @@ try:
                                 <p>✅ <b>Book Done:</b> {highlight_boolean(book['Book Complete'])}</p>
                                 <p>📄 <b>Agreement Received:</b> {highlight_boolean(book['Agreement Received'])}</p>
                                 <p>📤 <b>Send Cover Page:</b> {highlight_boolean(book['Send Cover Page and Agreement'])}</p>
-                                <p>🖼️ <b>Digital Prof:</b> {highlight_boolean(book['Digital Prof'])}</p>
+                                <p>🖼️ <b>Digital Proof:</b> {highlight_boolean(book['Digital Prof'])}</p>
                             </div>
                             <div>
                                 <p>🔔 <b>Confirmation:</b> {highlight_boolean(book['Confirmation'])}</p>
@@ -545,11 +545,13 @@ try:
                                     <span style="color:rgb(236, 116, 35); font-weight: bold;">{author['Corresponding Author/Agent']}</span>
                                     </p>
                                     <p style="margin-bottom: 7px;"><b>Welcome Mail:</b> {highlight_boolean(author['Welcome Mail'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Photo:</b> {highlight_boolean(author['Photo'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Author Profile:</b> {highlight_boolean(author['Author Detail'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Author Photo:</b> {highlight_boolean(author['Photo'])}</p>
                                     <p style="margin-bottom: 7px;"><b>ID Proof:</b> {highlight_boolean(author['ID Proof'])}</p>
                                     <p style="margin-bottom: 7px;"><b>Send Cover Page:</b> {highlight_boolean(author['Send Cover Page'])}</p>
                                     <p style="margin-bottom: 7px;"><b>Agreement Received:</b> {highlight_boolean(author['Agreement Received'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Digital Profile:</b> {highlight_boolean(author['Digital Prof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Digital Proof:</b> {highlight_boolean(author['Digital Prof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Digital Proof:</b> {author['Digital Prof']}</p>
                                     <p style="margin-bottom: 7px;"><b>Confirmation:</b> {highlight_boolean(author['Confirmation'])}</p>
                                 </div>
                                 """,

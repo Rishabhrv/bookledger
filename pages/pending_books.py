@@ -424,16 +424,16 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
 
     checklist_sequence = [
         ("welcome_mail_sent", "Welcome Mail Pending"),
-        ("cover_agreement_sent", "Cover/Agreement Pending"),
         ("author_details_sent", "Waiting for Author Details"),
         ("photo_recive", "Waiting for Photo"),
-        ("id_proof_recive", "Waiting for ID Proof"),
-        ("agreement_received", "Waiting for Agreement"),
+        ("cover_agreement_sent", "Cover/Agreement Pending"),
         ("writing", "Writing Pending", "writing_start", "writing_end"),
         ("proofreading", "Proofreading Pending", "proofreading_start", "proofreading_end"),
         ("formatting", "Formatting Pending", "formatting_start", "formatting_end"),
         ("cover", "Cover Design Pending", "cover_start", "cover_end"),
         ("digital_book_sent", "Waiting for Digital Proof"),
+        ("id_proof_recive", "Waiting for ID Proof"),
+        ("agreement_received", "Waiting for Agreement"),
         ("printing_confirmation", "Waiting for Print Confirmation")
     ]
 
@@ -602,13 +602,13 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
     if not book_authors_df.empty:
         checklist_columns = [
-            'welcome_mail_sent', 'cover_agreement_sent', 'author_details_sent',
-            'photo_recive', 'id_proof_recive', 'agreement_received',
-            'digital_book_sent', 'printing_confirmation'
+            'welcome_mail_sent', 'author_details_sent', 'photo_recive', 'cover_agreement_sent'
+            , 'digital_book_sent','id_proof_recive', 'agreement_received',
+             'printing_confirmation'
         ]
         checklist_labels = [
-            'Welcome', 'Cover/Agr', 'Details', 'Photo', 'ID Proof',
-            'Agreement', 'Digital', 'Print Conf'
+            'Welcome', 'Details', 'Photo', 'Cover/Agr',  'Digital',  'ID Proof',
+            'Agreement', 'Print Conf'
         ]
         # Filter pending tasks dynamically
         pending_columns = []
@@ -706,9 +706,6 @@ book_ids = books_data['book_id'].tolist()
 authors_data = fetch_all_book_authors(book_ids, conn)
 printeditions_data = fetch_all_printeditions(book_ids, conn)
 
-import streamlit as st
-import pandas as pd
-from datetime import date, timedelta
 
 # Get all possible stuck reasons
 all_stuck_reasons = [
