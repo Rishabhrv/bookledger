@@ -1392,7 +1392,7 @@ def add_book_dialog(conn):
     def book_details_section(publisher):
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
-            col1, col2 = st.columns(2)
+            col1, col2 = st.columns([2,1])
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
             

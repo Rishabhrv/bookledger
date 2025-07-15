@@ -129,7 +129,7 @@ SELECT
     b.isbn AS `ISBN`,
     MAX(CASE WHEN ba.cover_agreement_sent = 1 THEN 'TRUE' ELSE 'FALSE' END) AS `Send Cover Page and Agreement`,
     MAX(CASE WHEN ba.agreement_received = 1 THEN 'TRUE' ELSE 'FALSE' END) AS `Agreement Received`,
-    MAX(CASE WHEN ba.digital_book_approved = 1 THEN 'TRUE' ELSE 'FALSE' END) AS `Digital Prof`,
+    MAX(CASE WHEN ba.digital_book_sent = 1 THEN 'TRUE' ELSE 'FALSE' END) AS `Digital Prof`,
     MAX(CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END) AS `Confirmation`,
     MAX(CASE WHEN rn = 1 THEN CASE WHEN ba.welcome_mail_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Welcome Mail / Confirmation 1`,
     MAX(CASE WHEN rn = 2 THEN CASE WHEN ba.welcome_mail_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Welcome Mail / Confirmation 2`,
@@ -157,10 +157,10 @@ SELECT
     MAX(CASE WHEN rn = 2 THEN CASE WHEN ba.agreement_received = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Agreement Received 2`,
     MAX(CASE WHEN rn = 3 THEN CASE WHEN ba.agreement_received = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Agreement Received 3`,
     MAX(CASE WHEN rn = 4 THEN CASE WHEN ba.agreement_received = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Agreement Received 4`,
-    MAX(CASE WHEN rn = 1 THEN CASE WHEN ba.digital_book_approved = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 1`,
-    MAX(CASE WHEN rn = 2 THEN CASE WHEN ba.digital_book_approved = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 2`,
-    MAX(CASE WHEN rn = 3 THEN CASE WHEN ba.digital_book_approved = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 3`,
-    MAX(CASE WHEN rn = 4 THEN CASE WHEN ba.digital_book_approved = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 4`,
+    MAX(CASE WHEN rn = 1 THEN CASE WHEN ba.digital_book_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 1`,
+    MAX(CASE WHEN rn = 2 THEN CASE WHEN ba.digital_book_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 2`,
+    MAX(CASE WHEN rn = 3 THEN CASE WHEN ba.digital_book_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 3`,
+    MAX(CASE WHEN rn = 4 THEN CASE WHEN ba.digital_book_sent = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Digital Prof 4`,
     MAX(CASE WHEN rn = 1 THEN CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Confirmation 1`,
     MAX(CASE WHEN rn = 2 THEN CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Confirmation 2`,
     MAX(CASE WHEN rn = 3 THEN CASE WHEN ba.printing_confirmation = 1 THEN 'TRUE' ELSE 'FALSE' END END) AS `Confirmation 3`,
@@ -468,14 +468,14 @@ try:
                                 <p>⌛ <b>Since Enrolled:</b> {book['Since Enrolled']}</p>
                             </div>
                             <div>
-                                <p>👥 <b>No of Authors:</b> {book['No of Author']}</p>
-                                <p>✅ <b>Book Done:</b> {highlight_boolean(book['Book Complete'])}</p>
+                                <p>👥 <b>No. of Authors:</b> {book['No of Author']}</p>
+                                <p>✅ <b>Book Writing Complete:</b> {highlight_boolean(book['Book Complete'])}</p>
+                                <p>📤 <b>Cover Page & Agreement Sent:</b> {highlight_boolean(book['Send Cover Page and Agreement'])}</p>
                                 <p>📄 <b>Agreement Received:</b> {highlight_boolean(book['Agreement Received'])}</p>
-                                <p>📤 <b>Send Cover Page:</b> {highlight_boolean(book['Send Cover Page and Agreement'])}</p>
-                                <p>🖼️ <b>Digital Proof:</b> {highlight_boolean(book['Digital Prof'])}</p>
+                                <p>🖼️ <b>Digital Proof Sent:</b> {highlight_boolean(book['Digital Prof'])}</p>
                             </div>
                             <div>
-                                <p>🔔 <b>Confirmation:</b> {highlight_boolean(book['Confirmation'])}</p>
+                                <p>🔔 <b>Print Confirmation:</b> {highlight_boolean(book['Confirmation'])}</p>
                                 <p>🖨️ <b>Ready to Print:</b> {highlight_boolean(book['Ready to Print'])}</p>
                                 <p>📦 <b>Print:</b> {highlight_boolean(book['Print'])}</p>
                                 <p>🚚 <b>Deliver:</b> {highlight_boolean(book['Deliver'])}</p>
@@ -544,15 +544,14 @@ try:
                                     <p style="margin-bottom: 7px;"><b>Corresponding Author:</b> 
                                     <span style="color:rgb(236, 116, 35); font-weight: bold;">{author['Corresponding Author/Agent']}</span>
                                     </p>
-                                    <p style="margin-bottom: 7px;"><b>Welcome Mail:</b> {highlight_boolean(author['Welcome Mail'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Author Profile:</b> {highlight_boolean(author['Author Detail'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Author Photo:</b> {highlight_boolean(author['Photo'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>ID Proof:</b> {highlight_boolean(author['ID Proof'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Send Cover Page:</b> {highlight_boolean(author['Send Cover Page'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Welcome Mail Sent:</b> {highlight_boolean(author['Welcome Mail'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Author Profile Received:</b> {highlight_boolean(author['Author Detail'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Author Photo Received:</b> {highlight_boolean(author['Photo'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>ID Proof Received:</b> {highlight_boolean(author['ID Proof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Cover Page & Agreement Sent:</b> {highlight_boolean(author['Send Cover Page'])}</p>
                                     <p style="margin-bottom: 7px;"><b>Agreement Received:</b> {highlight_boolean(author['Agreement Received'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Digital Proof:</b> {highlight_boolean(author['Digital Prof'])}</p>
-                                    <p style="margin-bottom: 7px;"><b>Digital Proof:</b> {author['Digital Prof']}</p>
-                                    <p style="margin-bottom: 7px;"><b>Confirmation:</b> {highlight_boolean(author['Confirmation'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Digital Proof Sent:</b> {highlight_boolean(author['Digital Prof'])}</p>
+                                    <p style="margin-bottom: 7px;"><b>Print Confirmation:</b> {highlight_boolean(author['Confirmation'])}</p>
                                 </div>
                                 """,
                                 unsafe_allow_html=True,
