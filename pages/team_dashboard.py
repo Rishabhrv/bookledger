@@ -558,6 +558,24 @@ def render_month_selector(books_df):
 
 from datetime import datetime, timedelta
 
+def format_duration(duration):
+    """Convert a timedelta to a human-readable string like '8 Hours' or '1 Day 2 Hours'."""
+    total_seconds = int(duration.total_seconds())
+    if total_seconds < 0:
+        return "Invalid duration"
+    
+    days = total_seconds // (24 * 3600)
+    hours = (total_seconds % (24 * 3600)) // 3600
+    
+    if days > 0 and hours > 0:
+        return f"{days} Day{'s' if days != 1 else ''} {hours} Hour{'s' if hours != 1 else ''}"
+    elif days > 0:
+        return f"{days} Day{'s' if days != 1 else ''}"
+    elif hours > 0:
+        return f"{hours} Hour{'s' if hours != 1 else ''}"
+    else:
+        return "Less than an hour"
+
 def render_worker_completion_graph(books_df, selected_month, section):
     # Convert selected_month to year and month for filtering
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
@@ -566,59 +584,119 @@ def render_worker_completion_graph(books_df, selected_month, section):
     # Filter books where {section}_by and {section}_end are not null, and {section}_end is in the selected month
     end_col = f'{section.capitalize()} End'
     by_col = f'{section.capitalize()} By'
+    start_col = f'{section.capitalize()} Start'
     completed_books = books_df[
         books_df[by_col].notnull() &
         books_df[end_col].notnull() &
         (books_df[end_col].dt.to_period('M') == target_period)
     ]
 
-    # Group by worker and count books
-    worker_counts = completed_books.groupby(by_col).size().reset_index(name='Book Count')
-    if worker_counts.empty:
+    if completed_books.empty:
         st.warning(f"No books assigned and completed in {selected_month} for {section.capitalize()}.")
         return
 
-    # Sort by book count (descending) for better visualization
-    worker_counts = worker_counts.sort_values('Book Count', ascending=False)
+    # Get unique workers for dropdown, add 'All' as default
+    workers = ['All'] + sorted(completed_books[by_col].unique().tolist())
+    
+    # Create two columns for graph and table
+    col1, col2 = st.columns([1.3, 1], gap="medium", vertical_alignment="center")
 
-    # Determine max book count for x-axis ticks
-    max_count = int(worker_counts['Book Count'].max())
-    tick_values = list(range(max_count + 1))
+    with col1:
+        selected_worker = st.selectbox(
+            "",
+            workers,
+            index=0,  # Default to 'All'
+            key=f"{section}_worker_select",
+            label_visibility="collapsed"
+        )
 
-    # Create Altair horizontal bar chart
-    bar = alt.Chart(worker_counts).mark_bar(size=40).encode(
-        x=alt.X('Book Count:Q', title='Number of Books Completed', axis=alt.Axis(values=tick_values, grid=True, gridOpacity=0.3)),
-        y=alt.Y(f'{by_col}:N', title='Team Member', sort='-x'),
-        color=alt.Color(f'{by_col}:N', scale=alt.Scale(scheme='darkgreen'), legend=None),
-        tooltip=[f'{by_col}:N', 'Book Count:Q']
-    )
+        # Filter data based on selected worker
+        if selected_worker != 'All':
+            completed_books = completed_books[completed_books[by_col] == selected_worker]
+        
+        if completed_books.empty:
+            st.warning(f"No books completed by {selected_worker} in {selected_month} for {section.capitalize()}.")
+            return
 
-    # Add text labels at the end of the bars
-    text = bar.mark_text(
-        align='left',
-        baseline='middle',
-        dx=4,  # Slight offset from bar end
-        color='black',
-        fontSize=12
-    ).encode(
-        text='Book Count:Q'
-    )
+        # Create table for book details using st.dataframe
+        st.write(f"##### {section.capitalize()} Completed in {selected_month} by {selected_worker}")
+        section_columns = [f'{section.capitalize()} By', f'{section.capitalize()} Start', f'{section.capitalize()} End']
+        display_columns = ['Title'] + section_columns if 'Title' in books_df.columns else section_columns
+        
+        # Calculate time taken and split dates/times
+        completed_books = completed_books.copy()  # Avoid modifying original dataframe
+        completed_books['Time Taken'] = completed_books[end_col] - completed_books[start_col]
+        completed_books['Time Taken'] = completed_books['Time Taken'].apply(format_duration)
+        
+        # Split Start and End into Date and Time with AM/PM format
+        completed_books['Start Date'] = completed_books[start_col].dt.strftime('%Y-%m-%d')
+        completed_books['Start Time'] = completed_books[start_col].dt.strftime('%I:%M %p')
+        completed_books['End Date'] = completed_books[end_col].dt.strftime('%Y-%m-%d')
+        completed_books['End Time'] = completed_books[end_col].dt.strftime('%I:%M %p')
+        
+        # Reorder columns to include Time Taken and split date/time
+        display_columns = ['Title', 'Date', f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken'] if 'Title' in books_df.columns else [f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken']
+        
+        st.dataframe(
+            completed_books[display_columns].rename(columns={
+                f'{section.capitalize()} By': 'Team Member'
+            }),
+            hide_index=True,
+            use_container_width=True
+        )
 
-    # Combine bar and text
-    chart = (bar + text).properties(
-        title="",
-        width='container',
-        height=alt.Step(70)  # Dynamic height
-    ).configure_title(
-        fontSize=16,
-        anchor='start',
-        offset=10
-    ).configure_axis(
-        labelFontSize=14
-    )
+    with col2:
+        # Group by worker for the bar chart
+        worker_counts = completed_books.groupby(by_col).size().reset_index(name='Book Count')
+        if selected_worker != 'All':
+            worker_counts = worker_counts[worker_counts[by_col] == selected_worker]
+        
+        if worker_counts.empty:
+            st.warning(f"No books completed by {selected_worker} in {selected_month} for {section.capitalize()}.")
+            return
 
-    # Display chart
-    st.altair_chart(chart, use_container_width=True)
+        worker_counts = worker_counts.sort_values('Book Count', ascending=False)
+
+        # Create Altair horizontal bar chart
+        max_count = int(worker_counts['Book Count'].max())
+        tick_values = list(range(max_count + 1))
+
+        bar = alt.Chart(worker_counts).mark_bar(size=31).encode(
+            x=alt.X('Book Count:Q', title='Number of Books Completed', axis=alt.Axis(values=tick_values, grid=True, gridOpacity=0.3)),
+            y=alt.Y(f'{by_col}:N', title='Team Member', sort='-x'),
+            color=alt.Color(f'{by_col}:N', scale=alt.Scale(scheme='darkgreen'), legend=None),
+            tooltip=[f'{by_col}:N', 'Book Count:Q']
+        )
+
+        # Add text labels at the end of the bars
+        text = bar.mark_text(
+            align='left',
+            baseline='middle',
+            dx=4,
+            color='black',
+            fontSize=10
+        ).encode(
+            text='Book Count:Q'
+        )
+
+        # Combine bar and text
+        chart = (bar + text).properties(
+            title="",
+            width='container',
+            height=300
+        ).configure_title(
+            fontSize=10,
+            anchor='start',
+            offset=10
+        ).configure_axis(
+            labelFontSize=14
+        )
+
+        # Display chart
+        st.write(f"##### {section.capitalize()} Completed in {selected_month} by {selected_worker}")
+        st.altair_chart(chart, use_container_width=True)
+
+    
 
 def render_metrics(books_df, selected_month, section, user_role):
     # Convert selected_month (e.g., "April 2025") to date range
@@ -672,7 +750,7 @@ def render_metrics(books_df, selected_month, section, user_role):
     
     # Render worker completion graph for non-Cover sections in an expander using full books_df
     if section != "cover":
-        with st.expander(f"Show Completion Graph {section.capitalize()}, {selected_month}"):
+        with st.expander(f"Show Completion Graph and Table for {section.capitalize()}, {selected_month}"):
             render_worker_completion_graph(books_df, selected_month, section)
     
     return filtered_books_metrics
