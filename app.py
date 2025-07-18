@@ -402,19 +402,73 @@ def has_open_author_position(conn, book_id):
     return book_id in df['book_id'].values
 
 
-# Function to fetch book_author details for multiple book_ids
-def fetch_all_book_authors(book_ids, conn):
+# # Function to fetch book_author details for multiple book_ids
+# @st.cache_data
+# def fetch_all_book_authors(book_ids, _conn):
+#     if not book_ids:  # Handle empty book_ids
+#         return pd.DataFrame()
+#     query = """
+#     SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
+#            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
+#            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
+#            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
+#            ba.digital_book_sent, 
+#            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
+#            ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
+#            ba.emi1_date, ba.emi2_date, ba.emi3_date,
+#            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
+#            ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
+#            ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+#     FROM book_authors ba
+#     JOIN authors a ON ba.author_id = a.author_id
+#     WHERE ba.book_id IN :book_ids
+#     """
+#     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+
+# @st.cache_data
+# def fetch_all_printeditions(book_ids, _conn):
+#     if not book_ids:  # Handle empty book_ids
+#         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
+    
+#     # SQL query to fetch print editions
+#     query = """
+#     SELECT book_id, print_id, status
+#     FROM printeditions
+#     WHERE book_id IN :book_ids
+#     """
+    
+#     try:
+#         # Execute query using Streamlit's MySQL connection
+#         printeditions_df = conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+#         return printeditions_df
+#     except Exception as e:
+#         print(f"Error fetching print editions: {e}")
+#         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
+
+
+@st.cache_data
+def fetch_all_book_authors(book_ids, _conn):
     if not book_ids:  # Handle empty book_ids
-        return pd.DataFrame()
+        return pd.DataFrame(columns=[
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
+            'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
+            'photo_recive', 'id_proof_recive', 'author_details_sent',
+            'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
+            'printing_confirmation', 'delivery_address', 'delivery_charge',
+            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
+            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
+            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
+            'emi2_transaction_id', 'emi3_transaction_id'
+        ])
     query = """
     SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
-           ba.digital_book_sent, 
-           ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
-           ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
-           ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.digital_book_sent, ba.printing_confirmation, ba.delivery_address, 
+           ba.delivery_charge, ba.number_of_books, ba.total_amount, ba.emi1, 
+           ba.emi2, ba.emi3, ba.emi1_date, ba.emi2_date, ba.emi3_date,
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
            ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
            ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
@@ -422,27 +476,79 @@ def fetch_all_book_authors(book_ids, conn):
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id IN :book_ids
     """
-    return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+    try:
+        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+    except Exception as e:
+        st.error(f"Error fetching book authors: {e}")
+        return pd.DataFrame(columns=[
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
+            'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
+            'photo_recive', 'id_proof_recive', 'author_details_sent',
+            'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
+            'printing_confirmation', 'delivery_address', 'delivery_charge',
+            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
+            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
+            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
+            'emi2_transaction_id', 'emi3_transaction_id'
+        ])
 
-
-def fetch_all_printeditions(book_ids, conn):
+@st.cache_data
+def fetch_all_printeditions(book_ids, _conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
-    
-    # SQL query to fetch print editions
     query = """
     SELECT book_id, print_id, status
     FROM printeditions
     WHERE book_id IN :book_ids
     """
-    
     try:
-        # Execute query using Streamlit's MySQL connection
-        printeditions_df = conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-        return printeditions_df
+        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
     except Exception as e:
-        print(f"Error fetching print editions: {e}")
+        st.error(f"Error fetching print editions: {e}")
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
+
+@st.cache_data
+def fetch_all_author_names(book_ids, _conn):
+    """Fetch author names for multiple book_ids, formatted with Material Icons, returning a dictionary."""
+    if not book_ids:  # Handle empty book_ids
+        return {}
+    try:
+        with _conn.session as session:
+            query = text("""
+                SELECT pa.book_id, a.name
+                FROM authors a
+                JOIN book_authors pa ON a.author_id = pa.author_id
+                WHERE pa.book_id IN :book_ids
+                ORDER BY pa.book_id, pa.author_position IS NULL, pa.author_position ASC
+            """)
+            results = session.execute(query, {'book_ids': tuple(book_ids)}).fetchall()
+            # Group by book_id and format names with Material Icons
+            author_dict = {}
+            current_book_id = None
+            current_authors = []
+            for row in results:
+                book_id, name = row.book_id, row.name
+                if book_id != current_book_id:
+                    if current_book_id is not None:
+                        author_dict[current_book_id] = ", ".join(
+                            f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
+                            for name in current_authors
+                        ) if current_authors else "No authors"
+                    current_book_id = book_id
+                    current_authors = [name]
+                else:
+                    current_authors.append(name)
+            # Handle the last group
+            if current_book_id is not None:
+                author_dict[current_book_id] = ", ".join(
+                    f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
+                    for name in current_authors
+                ) if current_authors else "No authors"
+            return author_dict
+    except Exception as e:
+        st.error(f"Error fetching author names: {e}")
+        return {book_id: f"Database error: {str(e)}" for book_id in book_ids}
 
 
 def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
@@ -582,31 +688,32 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         f"</div>"
     )
 
-def fetch_author_names(book_id, conn):
-    """Fetch author names for a paper, formatted with Material Icons."""
-    # Validate conn
-    if not hasattr(conn, 'session'):
-        return "Database error: Invalid connection"
+# @st.cache_data
+# def fetch_author_names(book_id, _conn):
+#     """Fetch author names for a paper, formatted with Material Icons."""
+#     # Validate conn
+#     if not hasattr(conn, 'session'):
+#         return "Database error: Invalid connection"
     
-    try:
-        with conn.session as session:
-            query = text("""
-                SELECT a.name
-                FROM authors a
-                JOIN book_authors pa ON a.author_id = pa.author_id
-                WHERE pa.book_id = :book_id
-                ORDER BY pa.author_position IS NULL, pa.author_position ASC
-            """)
-            results = session.execute(query, {'book_id': book_id}).fetchall()
-            author_names = [result.name for result in results]
-            if author_names:
-                return ", ".join(
-                    f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
-                    for name in author_names
-                )
-            return "No authors"
-    except Exception as e:
-        return f"Database error: {str(e)}"
+#     try:
+#         with conn.session as session:
+#             query = text("""
+#                 SELECT a.name
+#                 FROM authors a
+#                 JOIN book_authors pa ON a.author_id = pa.author_id
+#                 WHERE pa.book_id = :book_id
+#                 ORDER BY pa.author_position IS NULL, pa.author_position ASC
+#             """)
+#             results = session.execute(query, {'book_id': book_id}).fetchall()
+#             author_names = [result.name for result in results]
+#             if author_names:
+#                 return ", ".join(
+#                     f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
+#                     for name in author_names
+#                 )
+#             return "No authors"
+#     except Exception as e:
+#         return f"Database error: {str(e)}"
     
 
 def send_email(subject, body, attachment_data, filename):
@@ -6001,7 +6108,6 @@ start_idx = (st.session_state.current_page - 1) * page_size
 end_idx = min(start_idx + page_size, total_books)
 paginated_books = filtered_books.iloc[start_idx:end_idx]
 
-
 # Display the table
 column_size = [0.5, 3.8, 1, 0.95, 1.2, 2]
 render_start = time.time()
@@ -6016,6 +6122,7 @@ with st.container(border=False):
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
+        author_names_dict = fetch_all_author_names(book_ids, conn)
 
         # Preprocess DataFrames to group by book_id
         authors_grouped = {book_id: group for book_id, group in authors_df.groupby('book_id')}
@@ -6031,7 +6138,7 @@ with st.container(border=False):
 
             for _, row in monthly_books.iterrows():
                 st.markdown('<div class="data-row">', unsafe_allow_html=True)
-                authors_display = fetch_author_names(row['book_id'], conn)
+                authors_display = author_names_dict.get(row['book_id'], "No authors")
                 col1, col2, col3, col4, col5, col6 = st.columns(column_size, vertical_alignment="center")
 
                 with col1:
@@ -6041,9 +6148,11 @@ with st.container(border=False):
                     author_badge = get_author_badge(row.get('author_type', 'Multiple'), author_count)
                     publish_badge = get_publish_badge(row.get('is_publish_only', 0))
                     publisher_badge = get_publisher_badge(row.get('publisher', ''))
-                    title_with_badges = f"{row['title']} {author_badge}{publish_badge}{publisher_badge}"
-                    st.markdown(title_with_badges, unsafe_allow_html=True)
-                    st.markdown(f'<div class="author-names">{authors_display}</div>', unsafe_allow_html=True)
+                    html = f"""
+                        {row['title']} {author_badge}{publish_badge}{publisher_badge}
+                        <div class="author-names">{authors_display}</div>
+                        """
+                    st.markdown(html, unsafe_allow_html=True)
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:

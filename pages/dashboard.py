@@ -930,170 +930,170 @@ def render_full_page():
     ######################------------- 40 days data-------------#########################
     ######################################################################################
 
-    import datetime
-    forty_five_days_ago = pd.Timestamp(today - datetime.timedelta(days=40))  # Convert to pandas Timestamp
+    # import datetime
+    # forty_five_days_ago = pd.Timestamp(today - datetime.timedelta(days=40))  # Convert to pandas Timestamp
 
 
-    fortifiveday_pending_data = operations_sheet_data_preprocess[operations_sheet_data_preprocess['Date'].dt.year >= 2024]
+    # fortifiveday_pending_data = operations_sheet_data_preprocess[operations_sheet_data_preprocess['Date'].dt.year >= 2024]
 
-    # Filter the DataFrame
-    fortifiveday = fortifiveday_pending_data[
-        fortifiveday_pending_data['Date'] <= forty_five_days_ago
-    ]
+    # # Filter the DataFrame
+    # fortifiveday = fortifiveday_pending_data[
+    #     fortifiveday_pending_data['Date'] <= forty_five_days_ago
+    # ]
 
-    # Further filter the DataFrame based on the 'Deliver' column
-    fortifiveday_status = fortifiveday[fortifiveday['Deliver'] == 'FALSE']
+    # # Further filter the DataFrame based on the 'Deliver' column
+    # fortifiveday_status = fortifiveday[fortifiveday['Deliver'] == 'FALSE']
 
-    fortifiveday_status_months = list(fortifiveday_status['Month'].unique())
-    fortifiveday_status_months.append("Total") 
+    # fortifiveday_status_months = list(fortifiveday_status['Month'].unique())
+    # fortifiveday_status_months.append("Total") 
 
-    col1, col2 = st.columns([2.5, 1], vertical_alignment="bottom", gap ="small")
+    # col1, col2 = st.columns([2.5, 1], vertical_alignment="bottom", gap ="small")
 
-    with col1:
-        # Display the last 45 days data section with count, emoji, and title
-        st.markdown(
-            f"<h5>📅 {fortifiveday_status['Book ID'].nunique()} Books on hold older than 40 days"
-            f"<span class='status-badge-red'>Status: On Hold</span></h5>", 
-            unsafe_allow_html=True
-        )
+    # with col1:
+    #     # Display the last 45 days data section with count, emoji, and title
+    #     st.markdown(
+    #         f"<h5>📅 {fortifiveday_status['Book ID'].nunique()} Books on hold older than 40 days"
+    #         f"<span class='status-badge-red'>Status: On Hold</span></h5>", 
+    #         unsafe_allow_html=True
+    #     )
 
-    fortifiveday_status_selected_month = st.pills("2024", fortifiveday_status_months, selection_mode="single", 
-                                default =fortifiveday_status_months[-1],label_visibility ='collapsed')
+    # fortifiveday_status_selected_month = st.pills("2024", fortifiveday_status_months, selection_mode="single", 
+    #                             default =fortifiveday_status_months[-1],label_visibility ='collapsed')
 
-    # Filter based on the selected month, or show all data if "All" is selected
-    if fortifiveday_status_selected_month == "Total":
-        fortifiveday_status_by_month = fortifiveday_status
-    else:
-        fortifiveday_status_by_month = fortifiveday_status[fortifiveday_status['Month'] == fortifiveday_status_selected_month]
+    # # Filter based on the selected month, or show all data if "All" is selected
+    # if fortifiveday_status_selected_month == "Total":
+    #     fortifiveday_status_by_month = fortifiveday_status
+    # else:
+    #     fortifiveday_status_by_month = fortifiveday_status[fortifiveday_status['Month'] == fortifiveday_status_selected_month]
 
-    # Define the columns in processing order and their readable names
-    status_columns = {
-        'Writing Complete': 'Writing Incomplete',
-        'Proofreading Complete': 'Proofreading Incomplete',
-        'Formating Complete': 'Formatting Incomplete',
-        'Send Cover Page and Agreement': 'Cover/Agreement Pending',
-        'Agreement Received': 'Agreement Pending',
-        'Digital Prof': 'Digital Proof Pending',
-        'Confirmation': 'Confirmation Pending',
-    }
+    # # Define the columns in processing order and their readable names
+    # status_columns = {
+    #     'Writing Complete': 'Writing Incomplete',
+    #     'Proofreading Complete': 'Proofreading Incomplete',
+    #     'Formating Complete': 'Formatting Incomplete',
+    #     'Send Cover Page and Agreement': 'Cover/Agreement Pending',
+    #     'Agreement Received': 'Agreement Pending',
+    #     'Digital Prof': 'Digital Proof Pending',
+    #     'Confirmation': 'Confirmation Pending',
+    # }
 
-    # Function to find the first stage where the book is stuck
-    def find_stuck_stage(row):
-        for col, stage in status_columns.items():
-            if row[col] == "FALSE":  # Check if column value is the string "FALSE"
-                return stage
-        return 'Not Dispatched'  # Shouldn't occur, as we filtered by Deliver == FALSE
+    # # Function to find the first stage where the book is stuck
+    # def find_stuck_stage(row):
+    #     for col, stage in status_columns.items():
+    #         if row[col] == "FALSE":  # Check if column value is the string "FALSE"
+    #             return stage
+    #     return 'Not Dispatched'  # Shouldn't occur, as we filtered by Deliver == FALSE
 
-    # Apply the function to create a 'Stuck Stage' column
-    fortifiveday_status_by_month['Reason For Hold'] = fortifiveday_status_by_month.apply(find_stuck_stage, axis=1)
+    # # Apply the function to create a 'Stuck Stage' column
+    # fortifiveday_status_by_month['Reason For Hold'] = fortifiveday_status_by_month.apply(find_stuck_stage, axis=1)
 
-    fortifiveday_status_by_month = fortifiveday_status_by_month[['Book ID', 'Book Title','Date','Since Enrolled',
-                                            'Reason For Hold','No of Author','Publishing Consultant 1','Writing End Date',
-                                            'Proofreading End Date',
-                                            'Formating End Date','Send Cover Page and Agreement', 'Agreement Received',
-                                                'Digital Prof','Confirmation', 'Ready to Print','Print']].fillna("Pending")
+    # fortifiveday_status_by_month = fortifiveday_status_by_month[['Book ID', 'Book Title','Date','Since Enrolled',
+    #                                         'Reason For Hold','No of Author','Publishing Consultant 1','Writing End Date',
+    #                                         'Proofreading End Date',
+    #                                         'Formating End Date','Send Cover Page and Agreement', 'Agreement Received',
+    #                                             'Digital Prof','Confirmation', 'Ready to Print','Print']].fillna("Pending")
 
-    date_columns = [col for col in fortifiveday_status_by_month.columns if 'Date' in col]
-    for col in date_columns:
-        fortifiveday_status_by_month[col] = pd.to_datetime(fortifiveday_status_by_month[col], errors='coerce')
-        fortifiveday_status_by_month[col] = fortifiveday_status_by_month[col].dt.strftime('%d %B %Y')
+    # date_columns = [col for col in fortifiveday_status_by_month.columns if 'Date' in col]
+    # for col in date_columns:
+    #     fortifiveday_status_by_month[col] = pd.to_datetime(fortifiveday_status_by_month[col], errors='coerce')
+    #     fortifiveday_status_by_month[col] = fortifiveday_status_by_month[col].dt.strftime('%d %B %Y')
 
-    # Prepare the reason counts data
-    reason_counts = fortifiveday_status_by_month['Reason For Hold'].value_counts().reset_index()
-    reason_counts.columns = ['Reason For Hold', 'Count']
+    # # Prepare the reason counts data
+    # reason_counts = fortifiveday_status_by_month['Reason For Hold'].value_counts().reset_index()
+    # reason_counts.columns = ['Reason For Hold', 'Count']
 
-    def number_to_color(number):
-        if 40 <= number <= 45:
-            return 'background-color: #FFA500; color: black'  # Light green
-        else:
-            return 'background-color: #FF6347; color: white' 
+    # def number_to_color(number):
+    #     if 40 <= number <= 45:
+    #         return 'background-color: #FFA500; color: black'  # Light green
+    #     else:
+    #         return 'background-color: #FF6347; color: white' 
         
-    def reason_to_color(reason, color_map):
-        color = color_map.get(reason, 'background-color: #FFFFFF; color: black')  # Default white background
-        return f'{color}; color: black'
+    # def reason_to_color(reason, color_map):
+    #     color = color_map.get(reason, 'background-color: #FFFFFF; color: black')  # Default white background
+    #     return f'{color}; color: black'
 
-    # Get unique reasons
-    unique_reasons = fortifiveday_status_by_month['Reason For Hold'].unique()
-    unique_publishing_consultants = fortifiveday_status_by_month['Publishing Consultant 1'].unique()
+    # # Get unique reasons
+    # unique_reasons = fortifiveday_status_by_month['Reason For Hold'].unique()
+    # unique_publishing_consultants = fortifiveday_status_by_month['Publishing Consultant 1'].unique()
 
-    # Generate a color palette using Streamlit's theme
-    color_palette_reason = sns.color_palette("Set2", len(unique_reasons)).as_hex()
-    color_palette_consultant = sns.color_palette("Set3", len(unique_publishing_consultants)).as_hex()
+    # # Generate a color palette using Streamlit's theme
+    # color_palette_reason = sns.color_palette("Set2", len(unique_reasons)).as_hex()
+    # color_palette_consultant = sns.color_palette("Set3", len(unique_publishing_consultants)).as_hex()
 
-    # Create a mapping from reason to color
-    color_map_reason = {reason: f'background-color: {color}' for reason, 
-    color in zip(unique_reasons, color_palette_reason)}
-    color_map_consultant = {reason: f'background-color: {color}' for reason, 
-    color in zip(unique_publishing_consultants, color_palette_consultant)}
+    # # Create a mapping from reason to color
+    # color_map_reason = {reason: f'background-color: {color}' for reason, 
+    # color in zip(unique_reasons, color_palette_reason)}
+    # color_map_consultant = {reason: f'background-color: {color}' for reason, 
+    # color in zip(unique_publishing_consultants, color_palette_consultant)}
 
-    # Apply color to 'Since Enrolled' column
-    styled_df = fortifiveday_status_by_month.style.applymap(
-    number_to_color,
-        subset=['Since Enrolled']
-    )
+    # # Apply color to 'Since Enrolled' column
+    # styled_df = fortifiveday_status_by_month.style.applymap(
+    # number_to_color,
+    #     subset=['Since Enrolled']
+    # )
 
-    styled_df = styled_df.applymap(
-        lambda x: reason_to_color(x, color_map_reason),
-        subset=['Reason For Hold']
-    )
+    # styled_df = styled_df.applymap(
+    #     lambda x: reason_to_color(x, color_map_reason),
+    #     subset=['Reason For Hold']
+    # )
 
-    styled_df = styled_df.applymap(
-        lambda x: reason_to_color(x, color_map_consultant),
-        subset=['Publishing Consultant 1']
-    )
+    # styled_df = styled_df.applymap(
+    #     lambda x: reason_to_color(x, color_map_consultant),
+    #     subset=['Publishing Consultant 1']
+    # )
 
-    # Create a pie chart with Plotly
-    pie_chart = px.pie(
-        reason_counts,
-        names='Reason For Hold',
-        values='Count',
-        title="Reason For Hold - Distribution",
-        hole = 0.45,
-        color_discrete_sequence=px.colors.sequential.Turbo # Custom color scheme
-    )
+    # # Create a pie chart with Plotly
+    # pie_chart = px.pie(
+    #     reason_counts,
+    #     names='Reason For Hold',
+    #     values='Count',
+    #     title="Reason For Hold - Distribution",
+    #     hole = 0.45,
+    #     color_discrete_sequence=px.colors.sequential.Turbo # Custom color scheme
+    # )
 
-    # Customize the layout (optional)
-    pie_chart.update_traces(textinfo='label+value', insidetextorientation='radial')
-    pie_chart.update_layout(title_x=0.3, showlegend=False)
+    # # Customize the layout (optional)
+    # pie_chart.update_traces(textinfo='label+value', insidetextorientation='radial')
+    # pie_chart.update_layout(title_x=0.3, showlegend=False)
 
-    # Use columns to display DataFrame and chart side by side
-    col1, col2 = st.columns([1.5, 1])
+    # # Use columns to display DataFrame and chart side by side
+    # col1, col2 = st.columns([1.5, 1])
 
 
-    # Display DataFrame in the first column
-    with col1:
-        st.markdown(f"##### 📋 {fortifiveday_status_by_month['Book ID'].nunique()} Books on hold in {fortifiveday_status_selected_month}")
-        st.dataframe(styled_df, use_container_width=True, hide_index=True,column_config = {
-            "Send Cover Page and Agreement": st.column_config.CheckboxColumn(
-                "Send Cover Page and Agreement",
-                default=False,
-            ),
-            "Agreement Received": st.column_config.CheckboxColumn(
-                "Agreement Received",
-                default=False,
-            ),
-            "Digital Prof": st.column_config.CheckboxColumn(
-                "Digital Prof",
-                default=False,
-            ),
-            "Confirmation": st.column_config.CheckboxColumn(
-                "Confirmation",
-                default=False,
-            ),
-            "Ready to Print": st.column_config.CheckboxColumn(
-                "Ready to Print",
-                default=False,
-            ),
-            "Print": st.column_config.CheckboxColumn(
-                "Print",
-                default=False,
-            )
-        })
+    # # Display DataFrame in the first column
+    # with col1:
+    #     st.markdown(f"##### 📋 {fortifiveday_status_by_month['Book ID'].nunique()} Books on hold in {fortifiveday_status_selected_month}")
+    #     st.dataframe(styled_df, use_container_width=True, hide_index=True,column_config = {
+    #         "Send Cover Page and Agreement": st.column_config.CheckboxColumn(
+    #             "Send Cover Page and Agreement",
+    #             default=False,
+    #         ),
+    #         "Agreement Received": st.column_config.CheckboxColumn(
+    #             "Agreement Received",
+    #             default=False,
+    #         ),
+    #         "Digital Prof": st.column_config.CheckboxColumn(
+    #             "Digital Prof",
+    #             default=False,
+    #         ),
+    #         "Confirmation": st.column_config.CheckboxColumn(
+    #             "Confirmation",
+    #             default=False,
+    #         ),
+    #         "Ready to Print": st.column_config.CheckboxColumn(
+    #             "Ready to Print",
+    #             default=False,
+    #         ),
+    #         "Print": st.column_config.CheckboxColumn(
+    #             "Print",
+    #             default=False,
+    #         )
+    #     })
 
-    # Display the pie chart in the second column
-    with col2:
-        st.markdown("##### 📊 Pie Chart")
-        st.plotly_chart(pie_chart, use_container_width=True)
+    # # Display the pie chart in the second column
+    # with col2:
+    #     st.markdown("##### 📊 Pie Chart")
+    #     st.plotly_chart(pie_chart, use_container_width=True)
 
 
     ###################################################################################################################

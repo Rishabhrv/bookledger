@@ -9,3 +9,4 @@ toolbarMode = "minimal"
 runOnSave = true
 enableCORS = false
 enableXsrfProtection = false
+headless = true
