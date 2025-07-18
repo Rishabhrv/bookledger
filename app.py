@@ -499,7 +499,7 @@ def fetch_all_printeditions(book_ids, _conn):
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
     query = """
     SELECT book_id, print_id, status
-    FROM Printeditions
+    FROM PrintEditions
     WHERE book_id IN :book_ids
     """
     try:
