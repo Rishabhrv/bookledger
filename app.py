@@ -499,7 +499,7 @@ def fetch_all_printeditions(book_ids, _conn):
         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
     query = """
     SELECT book_id, print_id, status
-    FROM printeditions
+    FROM Printeditions
     WHERE book_id IN :book_ids
     """
     try:
@@ -4702,7 +4702,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
     # Define tabs for Printing and Inventory
     tab1, tab2 = st.tabs(["📚 Printing", "📦 Inventory"])
-
 
     st.markdown("""
         <style>
