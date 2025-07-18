@@ -232,7 +232,8 @@ def get_reprint_eligible_books(conn):
     query = """
         SELECT 
             b.book_id, 
-            b.title, 
+            b.title,
+            b.date,
             b.isbn,
             'Reprint' AS print_type,
             COALESCE(pe.book_size, '6x9') AS book_size,
@@ -434,7 +435,6 @@ def create_batch_dialog():
             'book_size': book['book_size'],
             'binding': book['binding'],
             'print_color': 'Black & White',  # Default for first prints
-            'print_cost': book['print_cost'],  # Use queried print_cost
             'print_type': book['print_type'],
             'book_pages': book['book_pages'],
             'print_id': book['print_id']  # Include print_id
@@ -447,7 +447,6 @@ def create_batch_dialog():
             'book_size': book['book_size'] if book['book_size'] else '6x9',
             'binding': book['binding'] if book['binding'] else 'Paperback',
             'print_color': book['print_color'] if book['print_color'] else 'Black & White',
-            'print_cost': book['print_cost'] if book['print_cost'] else 0.00,
             'print_type': book['print_type'],
             'book_pages': book['book_pages'],
             'print_id': book['print_id']  # Include print_id
@@ -462,7 +461,7 @@ def create_batch_dialog():
     selected_books = [book for book in all_books if f"{book['title']} ({book['print_type']})" in selected_titles]
     
     # Validate required fields for each selected book
-    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_cost', 'print_id']
+    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_id']
     invalid_books = []
     for book in selected_books:
         missing_fields = [field for field in required_fields if not book.get(field)]
@@ -549,7 +548,7 @@ def view_batch_books_dialog(batch_id, batch_name):
         total_books = len(batch_books['book_id'].unique())
         st.markdown(f"**Total Books:** {total_books}")
         
-        st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'print_cost', 'edition_number', 'book_pages']],
+        st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'edition_number', 'book_pages']],
                      hide_index=True, column_config={
                          'book_id': st.column_config.TextColumn("Book ID"),
                          'title': st.column_config.TextColumn("Title"),
@@ -557,7 +556,6 @@ def view_batch_books_dialog(batch_id, batch_name):
                          'book_size': st.column_config.TextColumn("Book Size"),
                          'binding': st.column_config.TextColumn("Binding"),
                          'print_color': st.column_config.TextColumn("Print Color"),
-                         'print_cost': st.column_config.NumberColumn("Print Cost"),
                          'edition_number': st.column_config.NumberColumn("Edition Number"),
                          'book_pages': st.column_config.NumberColumn("Number of Pages")
                      })
@@ -592,7 +590,7 @@ def print_management_page():
                 if st.button(":material/add: New Batch", type="secondary"):
                     create_batch_dialog()
             if not first_print_books.empty:    
-                ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+                ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8]
                 
                 with st.container(border=True):
                     cols = st.columns(ready_to_print_column)
@@ -603,18 +601,16 @@ def print_management_page():
                     cols[4].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
                     cols[5].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
                     cols[6].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
-                    cols[7].markdown('<div class="table-header">Print Cost</div>', unsafe_allow_html=True)
 
                     for _, book in first_print_books.iterrows():
                         cols = st.columns(ready_to_print_column)
-                        cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
+                        cols[0].write(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                         cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
                         cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%Y-%m-%d") if book["date"] else ""}</div>', unsafe_allow_html=True)
                         cols[3].markdown(f'<div class="table-row">{book["num_copies"]}</div>', unsafe_allow_html=True)
                         cols[4].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
                         cols[5].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
                         cols[6].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
-                        cols[7].markdown(f'<div class="table-row">₹{book["print_cost"]:.2f}</div>', unsafe_allow_html=True)
             else:
                 st.info("No books are ready for first print.")
         
@@ -632,19 +628,19 @@ def print_management_page():
                     cols = st.columns(ready_to_reprint_column)
                     cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
                     cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
-                    cols[2].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
-                    cols[3].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
-                    cols[4].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
-                    cols[5].markdown('<div class="table-header">Print Cost</div>', unsafe_allow_html=True)
+                    cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+                    cols[3].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
+                    cols[4].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
+                    cols[5].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
                     
                     for _, book in reprint_eligible_books.iterrows():
                         cols = st.columns(ready_to_reprint_column)
                         cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                         cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
-                        cols[2].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
-                        cols[3].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
-                        cols[4].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
-                        cols[5].markdown(f'<div class="table-row">₹{book["print_cost"]:.2f}</div>', unsafe_allow_html=True)
+                        cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%Y-%m-%d") if book["date"] else ""}</div>', unsafe_allow_html=True)
+                        cols[3].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
+                        cols[4].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
+                        cols[5].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
             else:
                 st.info("No books are eligible for reprint.")
         
@@ -686,7 +682,6 @@ def print_management_page():
                                     'Book Pages': 'White 70 GSM',
                                     'Cover Page': '300 GSM Glossy',
                                     'Binding': 'Perfect Binding',
-                                    'Print Cost': batch_books['print_cost']
                                 })
                                 
                                 # Convert to Excel
@@ -706,7 +701,7 @@ def print_management_page():
                             
                             # Books table
                             if not batch_books.empty:
-                                running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2, 1]
+                                running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2]
                                 with st.container(border=True):
                                     cols = st.columns(running_batches_column)
                                     cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
@@ -717,7 +712,6 @@ def print_management_page():
                                     cols[5].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
                                     cols[6].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
                                     cols[7].markdown('<div class="table-header">Print Color</div>', unsafe_allow_html=True)
-                                    cols[8].markdown('<div class="table-header">Print Cost</div>', unsafe_allow_html=True)
 
                                     for _, book in batch_books.iterrows():
                                         cols = st.columns(running_batches_column)
@@ -729,7 +723,7 @@ def print_management_page():
                                         cols[5].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
                                         cols[6].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
                                         cols[7].markdown(f'<div class="table-row">{book["print_color"]}</div>', unsafe_allow_html=True)
-                                        cols[8].markdown(f'<div class="table-row">₹{book["print_cost"]:.2f}</div>', unsafe_allow_html=True)
+                                        
                             else:
                                 st.info("No books found in this batch.")
             else:

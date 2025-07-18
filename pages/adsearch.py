@@ -245,11 +245,21 @@ try:
             st.error("Something went wrong while retrieving author details.")
             return []
 
-    # Initialize session state for the search inputs
-    if "previous_search_column" not in st.session_state:
-        st.session_state["previous_search_column"] = ""
+    # Initialize session state for search inputs
+    if "search_column" not in st.session_state:
+        st.session_state["search_column"] = "Book ID"
     if "search_query" not in st.session_state:
         st.session_state["search_query"] = ""
+
+    # Callback to update session state when search column changes
+    def update_search_column():
+        if st.session_state["search_column"] != st.session_state.get("previous_search_column", ""):
+            st.session_state["search_query"] = ""  # Reset query when column changes
+            st.session_state["previous_search_column"] = st.session_state["search_column"]
+
+    # Callback to update session state when search query changes
+    def update_search_query():
+        st.session_state["search_query"] = st.session_state.get("search_query_select", st.session_state["search_query"])
 
     col1, col2 = st.columns([8, 1], vertical_alignment="bottom")
 
@@ -269,14 +279,10 @@ try:
         search_column = st.selectbox(
             "🗃️ Select Column to Search:", 
             ['Book ID', 'Book Title', 'Author Name', 'Corresponding Author', 'ISBN', 'Author Email', 'Author Phone'],
-            key="search_column"
+            index=['Book ID', 'Book Title', 'Author Name', 'Corresponding Author', 'ISBN', 'Author Email', 'Author Phone'].index(st.session_state["search_column"]),
+            key="search_column",
+            on_change=update_search_column
         )
-
-    # Check if the selected column has changed
-    if search_column != st.session_state["previous_search_column"]:
-        # Reset the search query if the column changes
-        st.session_state["search_query"] = ""
-        st.session_state["previous_search_column"] = search_column
 
     # Function to get unique values for select box
     def get_unique_values(column_prefix, num_authors=4):
@@ -312,20 +318,21 @@ try:
                 "🔍 Select a value:",
                 options=options,
                 index=options.index(st.session_state["search_query"]) if st.session_state["search_query"] in options else 0,
-                key="search_query_select"
+                key="search_query_select",
+                on_change=update_search_query
             )
-            st.session_state["search_query"] = search_query
         else:
             # Use text input for Book ID
             search_query = st.text_input(
                 "🔍 Enter your search term:", 
                 value=st.session_state["search_query"],
-                key="search_query_text"
+                key="search_query_text",
+                on_change=update_search_query
             )
-            st.session_state["search_query"] = search_query
 
     # Filter results
     filtered_data = pd.DataFrame()
+
     try:
         if search_query:
             if search_column == "Author Name":
@@ -443,7 +450,7 @@ try:
                             margin-bottom: 20px;
                             font-weight: 600;
                             text-align: center;">
-                            📖 {book['Book Title']}
+                            📖 {book['Book Title']} ({book['Book ID']})
                             <span style="
                                 background-color: {status_color};
                                 color: white;

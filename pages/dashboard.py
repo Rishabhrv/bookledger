@@ -956,9 +956,6 @@ def render_full_page():
             f"<span class='status-badge-red'>Status: On Hold</span></h5>", 
             unsafe_allow_html=True
         )
-    with col2:
-        if st.button(":material/open_in_new: Go to Pending Work Page for Detailed Info", key="pending_button", type="secondary", use_container_width=True):
-            st.switch_page('pages/pending_books.py')
 
     fortifiveday_status_selected_month = st.pills("2024", fortifiveday_status_months, selection_mode="single", 
                                 default =fortifiveday_status_months[-1],label_visibility ='collapsed')

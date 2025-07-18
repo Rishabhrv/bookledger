@@ -458,7 +458,7 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         "border: 1px solid #e2e8f0; "
         "box-shadow: 0 2px 4px rgba(0,0,0,0.06); "
         "line-height: 1.5; "
-        "gap: 4px; "
+        "gap: 4.page; "
         "min-width: 120px; "
         "width: 10px; "
         "transition: all 0.2s;"
@@ -469,7 +469,7 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         ("writing", "In Writing", "Writing Complete", "#6b7280", "#dbeafe"),  # Blue shades
         ("proofreading", "In Proofreading", "Proofreading Complete", "#6b7280", "#ede9fe"),  # Purple shades
         ("formatting", "In Formatting", "Formatting Complete", "#6b7280", "#fef3c7"),  # Amber shades
-        ("cover", "In Cover Design", "Operations Done", "#6b7280", "#ccfbf1")  # Teal shades
+        ("cover", "In Cover Design", "Cover Complete", "#6b7280", "#ccfbf1")  # Teal shades
     ]
 
     checklist_sequence = [
@@ -498,7 +498,7 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         if latest_print['status'] == "Received":
             return (
                 f"<div style='{pill_style}'>"
-                f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Dispatch ✓</span>"
+                f"<span style='color: #15803d; font-size:obligatory.5px; fontWeight: 600; display: block;'>Ready For Dispatch ✓</span>"
                 f"</div>"
             )
         elif latest_print['status'] == "In Printing":
@@ -512,18 +512,34 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
     operations_status = "Not Started"
     operations_color = "#6b7280"
     operations_checkmark = ""
-    for stage, in_progress, complete, color, _ in operations_sequence:
-        start_field = f"{stage}_start"
+    
+    # Check if all operations are complete
+    all_complete = True
+    for stage, _, _, _, _ in operations_sequence:
         end_field = f"{stage}_end"
-        if row.get(start_field) is not None and pd.notnull(row.get(start_field)):
-            if row.get(end_field) is None or pd.isnull(row.get(end_field)):
-                operations_status = in_progress
-                operations_color = color
-            else:
-                operations_status = complete
-                operations_color = "#6b7280"
-                operations_checkmark = " ✓"
+        if row.get(end_field) is None or pd.isnull(row.get(end_field)):
+            all_complete = False
             break
+    
+    if all_complete:
+        operations_status = "Operations Done"
+        operations_color = "#15803d"
+        operations_checkmark = " ✓"
+    else:
+        # Find the first in-progress or completed operation
+        for stage, in_progress, complete, color, _ in operations_sequence:
+            start_field = f"{stage}_start"
+            end_field = f"{stage}_end"
+            if row.get(start_field) is not None and pd.notnull(row.get(start_field)):
+                if row.get(end_field) is None or pd.isnull(row.get(end_field)):
+                    operations_status = in_progress
+                    operations_color = color
+                    break
+                else:
+                    operations_status = complete
+                    operations_color = "#6b7280"
+                    operations_checkmark = " ✓"
+                    break
 
     # Check author checklist
     checklist_status = "No Authors"
@@ -548,8 +564,7 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
 
     # Check if ready for print
     if (checklist_status == "Checklist Complete" and
-            row.get('formatting_end') is not None and pd.notnull(row.get('formatting_end')) and
-            row.get('cover_end') is not None and pd.notnull(row.get('cover_end'))):
+            all_complete):
         return (
             f"<div style='{pill_style}'>"
             f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Print ✓</span>"
@@ -4594,7 +4609,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
         .print-run-table-header,
         .print-run-table-row {
             display: grid;
-            grid-template-columns: 0.5fr 0.6fr 0.6fr 1fr 1fr 0.8fr 0.8fr 1.5fr 1fr;
+            grid-template-columns: 0.5fr 0.6fr 1.2fr 1.2fr 0.6fr 0.6fr 1.5fr 0.8fr;
             padding: 4px 6px;
             align-items: center;
             box-sizing: border-box;
@@ -4736,7 +4751,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
             SELECT 
                 pe.print_id, 
                 pe.copies_planned, 
-                pe.print_cost, 
                 pe.print_color, 
                 pe.binding, 
                 pe.book_size, 
@@ -4766,7 +4780,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     <div class="print-run-table-header">
                         <div>ID</div>
                         <div>Copies</div>
-                        <div>Cost</div>
                         <div>Color</div>
                         <div>Binding</div>
                         <div>Size</div>
@@ -4792,7 +4805,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                         <div class="print-run-table-row">
                             <div>{row['print_id']}</div>
                             <div>{int(row['copies_planned'])}</div>
-                            <div>{row['print_cost'] or 'N/A'}</div>
                             <div>{row['print_color']}</div>
                             <div>{row['binding']}</div>
                             <div>{row['book_size']}</div>
@@ -4820,7 +4832,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     
                     with st.container():
                         # Compact layout: Use a single row with 5 columns
-                        col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
+                        col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
                         with col1:
                             edit_num_copies = st.number_input(
                                 "Copies",
@@ -4828,13 +4840,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                 step=1,
                                 value=int(edit_row['copies_planned']),
                                 key=f"edit_num_copies_{book_id}_{selected_print_id}",
-                                label_visibility="visible"
-                            )
-                        with col2:
-                            edit_print_cost = st.text_input(
-                                "Cost",
-                                value=str(edit_row['print_cost'] or ""),
-                                key=f"edit_print_cost_{book_id}_{selected_print_id}",
                                 label_visibility="visible"
                             )
                         with col3:
@@ -4883,12 +4888,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                     if edit_num_copies <= 0:
                                         st.error("Copies must be greater than 0.")
                                         return
-                                    if edit_print_cost:
-                                        try:
-                                            float(edit_print_cost)
-                                        except ValueError:
-                                            st.error("Print cost must be a valid number or empty.")
-                                            return
                                     if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
                                         st.error("Number of Color Pages must be greater than 0 for Full Color.")
                                         return
@@ -4897,8 +4896,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                     changes = []
                                     if edit_num_copies != int(edit_row['copies_planned']):
                                         changes.append(f"Copies Planned changed from '{int(edit_row['copies_planned'])}' to '{edit_num_copies}'")
-                                    if (edit_print_cost and float(edit_print_cost) != edit_row['print_cost']) or (not edit_print_cost and edit_row['print_cost'] is not None):
-                                        changes.append(f"Print Cost changed from '{edit_row['print_cost'] or 'None'}' to '{edit_print_cost or 'None'}'")
                                     if edit_print_color != edit_row['print_color']:
                                         changes.append(f"Print Color changed from '{edit_row['print_color']}' to '{edit_print_color}'")
                                     if edit_binding != edit_row['binding']:
@@ -4912,8 +4909,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                         session.execute(
                                             text("""
                                                 UPDATE PrintEditions 
-                                                SET copies_planned = :copies_planned, 
-                                                    print_cost = :print_cost, 
+                                                SET copies_planned = :copies_planned,
                                                     print_color = :print_color, 
                                                     binding = :binding, 
                                                     book_size = :book_size,
@@ -4923,7 +4919,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                             {
                                                 "print_id": selected_print_id,
                                                 "copies_planned": edit_num_copies,
-                                                "print_cost": float(edit_print_cost) if edit_print_cost else None,
                                                 "print_color": edit_print_color,
                                                 "binding": edit_binding,
                                                 "book_size": edit_book_size,
@@ -4951,7 +4946,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
             with st.expander("Add New Print Edition", expanded=False):
                 with st.container():
                     # Compact layout: Use a single row with 5 columns
-                    col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
+                    col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
                     with col1:
                         new_num_copies = st.number_input(
                             label="Copies",
@@ -4959,12 +4954,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                             step=1,
                             value=0,
                             key=f"new_num_copies_{book_id}",
-                            label_visibility="visible"
-                        )
-                    with col2:
-                        print_cost = st.text_input(
-                            "Cost",
-                            key=f"print_cost_{book_id}",
                             label_visibility="visible"
                         )
                     with col3:
@@ -5008,12 +4997,6 @@ def edit_inventory_delivery_dialog(book_id, conn):
                             time.sleep(1)
                             try:
                                 if new_num_copies > 0:
-                                    if print_cost:
-                                        try:
-                                            float(print_cost)
-                                        except ValueError:
-                                            st.error("Print cost must be a valid number or empty.")
-                                            return
                                     if print_color == "Full Color" and (color_pages is None or color_pages <= 0):
                                         st.error("Number of Color Pages must be greater than 0 for Full Color.")
                                         return
@@ -5030,15 +5013,14 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                         session.execute(
                                             text("""
                                                 INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
-                                                    print_cost, print_color, binding, book_size, status, color_pages)
+                                                     print_color, binding, book_size, status, color_pages)
                                                 VALUES (:book_id, :edition_number, :copies_planned, 
-                                                    :print_cost, :print_color, :binding, :book_size, 'Pending', :color_pages)
+                                                   :print_color, :binding, :book_size, 'Pending', :color_pages)
                                             """),
                                             {
                                                 "book_id": book_id,
                                                 "edition_number": edition_number,
                                                 "copies_planned": new_num_copies,
-                                                "print_cost": float(print_cost) if print_cost else None,
                                                 "print_color": print_color,
                                                 "binding": binding,
                                                 "book_size": book_size,
@@ -5055,7 +5037,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                             st.session_state.username,
                                             st.session_state.session_id,
                                             "added print edition",
-                                            f"Book ID: {book_id}, Print ID: {print_id}, Edition Number: {edition_number}, Copies Planned: {new_num_copies}, Print Cost: {print_cost or 'None'}, Print Color: {print_color}, Binding: {binding}, Book Size: {book_size}, Color Pages: {color_pages if print_color == 'Full Color' else 'None'}, Status: Pending"
+                                            f"Book ID: {book_id}, Print ID: {print_id}, Edition Number: {edition_number}, Copies Planned: {new_num_copies}, Print Color: {print_color}, Binding: {binding}, Book Size: {book_size}, Color Pages: {color_pages if print_color == 'Full Color' else 'None'}, Status: Pending"
                                         )
                                     st.success("✔️ Added New Print Edition")
                                     st.cache_data.clear()

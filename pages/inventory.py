@@ -179,7 +179,7 @@ st.markdown("""
         .print-run-table-header,
         .print-run-table-row {
             display: grid;
-            grid-template-columns: 0.5fr 0.6fr 0.6fr 1fr 1fr 0.8fr 0.8fr 1.5fr 1fr;
+            grid-template-columns: 0.5fr 0.6fr 1.5fr 1.2fr 0.8fr 0.8fr 1.3fr 1fr;
             padding: 4px 6px;
             align-items: center;
             box-sizing: border-box;
@@ -343,7 +343,6 @@ def update_book_details(book_id, current_data):
             SELECT 
                 pe.print_id, 
                 pe.copies_planned, 
-                pe.print_cost, 
                 pe.print_color, 
                 pe.binding, 
                 pe.book_size, 
@@ -367,7 +366,7 @@ def update_book_details(book_id, current_data):
             with conn.session as session:
                 print_editions_data = session.execute(text(print_editions_query), {"book_id": book_id}).fetchall()
                 print_editions_df = pd.DataFrame(print_editions_data, columns=[
-                    'print_id', 'copies_planned', 'print_cost', 'print_color', 'binding', 
+                    'print_id', 'copies_planned','print_color', 'binding', 
                     'book_size', 'edition_number', 'status', 'color_pages', 'batch_id', 'batch_name'
                 ])
         except Exception as e:
@@ -380,7 +379,6 @@ def update_book_details(book_id, current_data):
                 <div class="print-run-table-header">
                     <div>ID</div>
                     <div>Copies</div>
-                    <div>Cost</div>
                     <div>Color</div>
                     <div>Binding</div>
                     <div>Size</div>
@@ -402,7 +400,6 @@ def update_book_details(book_id, current_data):
                     <div class="print-run-table-row">
                         <div>{row['print_id']}</div>
                         <div>{int(row['copies_planned'])}</div>
-                        <div>{row['print_cost'] or 'N/A'}</div>
                         <div>{row['print_color']}</div>
                         <div>{row['binding']}</div>
                         <div>{row['book_size']}</div>
@@ -418,16 +415,14 @@ def update_book_details(book_id, current_data):
         with st.expander("Add New Print Edition", expanded=False):
             # Add new PrintEdition
             st.markdown("#### Add New Print Edition")
-            col1, col2, col3, col4, col5 = st.columns([1, 0.6, 1.2, 1.2, 0.7])
+            col1, col2, col3, col4 = st.columns([0.5, 1, 1.2, 0.7])
             with col1:
                 new_num_copies = st.number_input("Copies", min_value=0, step=1, value=0, key=f"new_num_copies_{book_id}")
             with col2:
-                print_cost = st.text_input("Cost", key=f"print_cost_{book_id}")
-            with col3:
                 print_color = st.selectbox("Color", options=["Black & White", "Full Color"], key=f"print_color_{book_id}")
-            with col4:
+            with col3:
                 binding = st.selectbox("Binding", options=["Paperback", "Hardcover"], key=f"binding_{book_id}")
-            with col5:
+            with col4:
                 book_size = st.selectbox("Size", options=["6x9", "8.5x11"], key=f"book_size_{book_id}")
             
             # Conditional input for color pages
@@ -468,18 +463,11 @@ def update_book_details(book_id, current_data):
                     if google_link != current_links['google_link']:
                         links_changes.append("Google Link changed")
 
-                # Validate inputs for print edition
-                if new_num_copies > 0:
-                    if print_cost:
-                        try:
-                            float(print_cost)
-                        except ValueError:
-                            st.error("Print cost must be a valid number or empty.")
-                            return
-                    if print_color == "Full Color" and (new_color_pages is None or new_color_pages <= 0):
-                        st.error("Number of Color Pages must be greater than 0 for Full Color.")
-                        return
-                    print_edition_added = True
+
+                if print_color == "Full Color" and (new_color_pages is None or new_color_pages <= 0):
+                    st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                    return
+                print_edition_added = True
 
                 with conn.session as session:
                     if print_status != 0:
@@ -567,15 +555,14 @@ def update_book_details(book_id, current_data):
                         session.execute(
                             text("""
                                 INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
-                                    print_cost, print_color, binding, book_size, status, color_pages)
+                                    print_color, binding, book_size, status, color_pages)
                                 VALUES (:book_id, :edition_number, :copies_planned, 
-                                    :print_cost, :print_color, :binding, :book_size, 'Pending', :color_pages)
+                                    :print_color, :binding, :book_size, 'Pending', :color_pages)
                             """),
                             {
                                 "book_id": book_id,
                                 "edition_number": edition_number,
                                 "copies_planned": new_num_copies,
-                                "print_cost": float(print_cost) if print_cost else None,
                                 "print_color": print_color,
                                 "binding": binding,
                                 "book_size": book_size,
@@ -601,7 +588,7 @@ def update_book_details(book_id, current_data):
                 # Clear cache and refresh data
                 st.cache_data.clear()
                 st.success("Details and Print Edition (if added) Saved Successfully!")
-                time.sleep(2)
+                time.sleep(1)
                 st.rerun()
 
             except Exception as e:
