@@ -352,8 +352,8 @@ conn = connect_db()
 
 # Initialize session state from query parameters
 query_params = st.query_params
-click_id = query_params.get("click_id", [None])
-session_id = query_params.get("session_id", [None])
+click_id = query_params.get("click_id", [None])[0]  # Extract first element, default to None
+session_id = query_params.get("session_id", [None])[0]  # Extract first element, default to None
 
 # Set session_id in session state
 st.session_state.session_id = session_id
@@ -362,8 +362,8 @@ st.session_state.session_id = session_id
 if "logged_click_ids" not in st.session_state:
     st.session_state.logged_click_ids = set()
 
-# Log navigation if click_id is present and not already logged
-if click_id and click_id not in st.session_state.logged_click_ids:
+# Log navigation if click_id is present, not None, and not already logged
+if click_id and click_id != "None" and click_id not in st.session_state.logged_click_ids:
     try:
         log_activity(
             conn,
@@ -422,6 +422,7 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
     book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
 
+    # Define the checklist sequence
     checklist_sequence = [
         ("welcome_mail_sent", "Welcome Mail Pending"),
         ("author_details_sent", "Waiting for Author Details"),
@@ -436,6 +437,11 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
         ("agreement_received", "Waiting for Agreement"),
         ("printing_confirmation", "Waiting for Print Confirmation")
     ]
+
+    # Exclude "writing" step if is_publish_only is 1
+    is_publish_only = book_row.get('is_publish_only', 0) == 1
+    if is_publish_only:
+        checklist_sequence = [item for item in checklist_sequence if item[0] != "writing"]
 
     if not book_printeditions_df.empty:
         latest_print = book_printeditions_df.sort_values(by='print_id', ascending=False).iloc[0]
@@ -602,12 +608,12 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
     if not book_authors_df.empty:
         checklist_columns = [
-            'welcome_mail_sent', 'author_details_sent', 'photo_recive', 'cover_agreement_sent'
-            , 'digital_book_sent','id_proof_recive', 'agreement_received',
-             'printing_confirmation'
+            'welcome_mail_sent', 'author_details_sent', 'photo_recive', 'cover_agreement_sent',
+            'digital_book_sent', 'id_proof_recive', 'agreement_received',
+            'printing_confirmation'
         ]
         checklist_labels = [
-            'Welcome', 'Details', 'Photo', 'Cover/Agr',  'Digital',  'ID Proof',
+            'Welcome', 'Details', 'Photo', 'Cover/Agr', 'Digital', 'ID Proof',
             'Agreement', 'Print Conf'
         ]
         # Filter pending tasks dynamically
@@ -649,16 +655,22 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             ('Formatting', 'formatting_start', 'formatting_end'),
             ('Cover Design', 'cover_start', 'cover_end')
         ]
+        # Check if book is publish-only
+        is_publish_only = book_row.get('is_publish_only', 0) == 1
+        
         table_html = "<table class='compact-table'><tr><th>Operation</th><th>Status</th></tr>"
         for op_name, start_field, end_field in operations:
-            start = book_row[start_field]
-            end = book_row[end_field]
-            if pd.notnull(start) and pd.notnull(end):
-                status = '✅ Done'
-            elif pd.notnull(start):
-                status = '⏳ Active'
+            if op_name == 'Writing' and is_publish_only:
+                status = '📖 Publish Only'
             else:
-                status = '❌ Pending'
+                start = book_row[start_field]
+                end = book_row[end_field]
+                if pd.notnull(start) and pd.notnull(end):
+                    status = '✅ Done'
+                elif pd.notnull(start):
+                    status = '⏳ Active'
+                else:
+                    status = '❌ Pending'
             table_html += f"<tr><td>{op_name}</td><td>{status}</td></tr>"
         table_html += "</table>"
         st.markdown(table_html, unsafe_allow_html=True)
@@ -695,7 +707,7 @@ conn = connect_db()
 # Fetch books from the database where deliver = 0
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
-       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type
+       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type, is_publish_only
 FROM books
 WHERE deliver = 0
 """

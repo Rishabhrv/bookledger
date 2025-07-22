@@ -98,7 +98,6 @@ token = st.session_state.token
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
-
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
 UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
@@ -564,9 +563,9 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         "border: 1px solid #e2e8f0; "
         "box-shadow: 0 2px 4px rgba(0,0,0,0.06); "
         "line-height: 1.5; "
-        "gap: 4.page; "
+        "gap: 4px; "
         "min-width: 120px; "
-        "width: 10px; "
+        "width: fit-content; "
         "transition: all 0.2s;"
     )
 
@@ -604,7 +603,7 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         if latest_print['status'] == "Received":
             return (
                 f"<div style='{pill_style}'>"
-                f"<span style='color: #15803d; font-size:obligatory.5px; fontWeight: 600; display: block;'>Ready For Dispatch ✓</span>"
+                f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Dispatch ✓</span>"
                 f"</div>"
             )
         elif latest_print['status'] == "In Printing":
@@ -619,9 +618,14 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
     operations_color = "#6b7280"
     operations_checkmark = ""
     
-    # Check if all operations are complete
+    # Check if book is publish-only
+    is_publish_only = row.get('is_publish_only', 0) == 1
+    
+    # Check if all operations are complete, excluding writing if publish-only
     all_complete = True
     for stage, _, _, _, _ in operations_sequence:
+        if stage == "writing" and is_publish_only:
+            continue  # Skip writing for publish-only books
         end_field = f"{stage}_end"
         if row.get(end_field) is None or pd.isnull(row.get(end_field)):
             all_complete = False
@@ -632,8 +636,13 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         operations_color = "#15803d"
         operations_checkmark = " ✓"
     else:
-        # Find the first in-progress or completed operation
+        # Find the first in-progress or completed operation, handling publish-only
         for stage, in_progress, complete, color, _ in operations_sequence:
+            if stage == "writing" and is_publish_only:
+                operations_status = "Not Started"
+                operations_color = "#4b5563"  # Neutral gray for Publish Only
+                operations_checkmark = ""
+                break
             start_field = f"{stage}_start"
             end_field = f"{stage}_end"
             if row.get(start_field) is not None and pd.notnull(row.get(start_field)):
@@ -6261,4 +6270,3 @@ with st.container(border=False):
 total_time = time.time() - start_time
 st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
 st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
-st.write(f"**Total Authentication Time:** {total_chek_time:.2f} seconds")
