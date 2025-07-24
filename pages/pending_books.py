@@ -152,6 +152,30 @@ st.markdown("""
     min-width: 190px;
     white-space: nowrap;
 }
+            
+.stuck-reason-isbn-not-applied {
+    background-color: #E6ECEF;
+    color: #374957;
+    padding: 6px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    display: inline-block;
+    text-align: center;
+    min-width: 190px;
+    white-space: nowrap;
+}
+            
+.stuck-reason-isbn-not-received {
+    background-color: #D9E6FF;
+    color: #2B579A;
+    padding: 6px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    display: inline-block;
+    text-align: center;
+    min-width: 190px;
+    white-space: nowrap;
+}
 .stuck-reason-cover-agreement-pending {
     background-color: #F0E1FF;
     color: #5C2D91;
@@ -427,6 +451,8 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
         ("welcome_mail_sent", "Welcome Mail Pending"),
         ("author_details_sent", "Waiting for Author Details"),
         ("photo_recive", "Waiting for Photo"),
+        ("apply_isbn_not_applied", "ISBN Not Applied"),
+        ("isbn_not_received", "ISBN Not Received"),
         ("cover_agreement_sent", "Cover/Agreement Pending"),
         ("writing", "Writing Pending", "writing_start", "writing_end"),
         ("proofreading", "Proofreading Pending", "proofreading_start", "proofreading_end"),
@@ -443,6 +469,7 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
     if is_publish_only:
         checklist_sequence = [item for item in checklist_sequence if item[0] != "writing"]
 
+    # Check print editions status
     if not book_printeditions_df.empty:
         latest_print = book_printeditions_df.sort_values(by='print_id', ascending=False).iloc[0]
         if latest_print['status'] == "In Printing":
@@ -450,6 +477,7 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
         elif latest_print['status'] == "Received":
             return "Not Dispatched Yet"
 
+    # Check author checklist and operations
     if not book_authors_df.empty:
         for field, label, *date_fields in checklist_sequence:
             if len(date_fields) == 2:  # Operations with start/end dates
@@ -460,16 +488,177 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
                 else:
                     return label
             else:  # Checklist items
-                if not book_authors_df[field].all():
-                    return label
+                if field == "apply_isbn_not_applied":
+                    if book_row.get('apply_isbn', 0) == 0:
+                        return label
+                elif field == "isbn_not_received":
+                    if book_row.get('apply_isbn', 0) == 1 and (book_row.get('isbn') is None or pd.isnull(book_row.get('isbn'))):
+                        return label
+                else:
+                    if not book_authors_df[field].all():
+                        return label
 
+    # Check if ready for print
     if (not book_authors_df.empty and 
-        all(book_authors_df[field].all() for field, _, *date_fields in checklist_sequence if len(date_fields) == 0) and
+        all(book_authors_df[field].all() for field, _, *date_fields in checklist_sequence if len(date_fields) == 0 and field not in ["apply_isbn_not_applied", "isbn_not_received"]) and
         all(book_row[end_field] is not None and pd.notnull(book_row[end_field]) 
             for _, _, *date_fields in checklist_sequence if len(date_fields) == 2)):
         return "Waiting for Print"
 
     return "Not Started"
+
+@st.dialog("Publishing Process Flow", width="large")
+def show_stuck_reason_sequence(is_publish_only=False):
+    # Data definitions remain the same
+    author_checklist_items = [
+        ("welcome_mail_sent", "Welcome Mail", "📧"),
+        ("author_details_sent", "Author Details", "📝"),
+        ("photo_recive", "Photo", "📸"),
+        ("apply_isbn_not_applied", "ISBN Not Applied", "🔢"),
+        ("isbn_not_received", "ISBN Not Received", "🔢"),
+        ("cover_agreement_sent", "Cover/Agreement", "📜"),
+    ]
+
+    operations_items = [
+        ("writing", "Writing", "✍️"),
+        ("proofreading", "Proofreading", "🛠️"),
+        ("formatting", "Formatting", "🛠️"),
+        ("cover", "Cover Design", "🛠️"),
+    ]
+    if is_publish_only:
+        operations_items = [item for item in operations_items if item[0] != "writing"]
+
+    final_steps_items = [
+        ("digital_book_sent", "Digital Proof", "📄"),
+        ("id_proof_recive", "ID Proof", "🆔"),
+        ("agreement_received", "Agreement", "📜"),
+        ("printing_confirmation", "Print Confirmation", "🖨️"),
+        ("waiting_for_print", "Waiting for Print", "⏳"),
+        ("in_printing", "In Printing", "🖨️"),
+        ("not_dispatched", "Not Dispatched Yet", "🚚")
+    ]
+
+    groups = [
+        {"name": "✅ Author Checklist", "items": author_checklist_items, "color": "#3b82f6"},
+        {"name": "✏️ Operations", "items": operations_items, "color": "#10b981"},
+        {"name": "✔️ Final Steps", "items": final_steps_items, "color": "#f59e0b"}
+    ]
+
+    # --- REVISED CSS FOR A VERTICAL LAYOUT ---
+    tree_html = """
+    <style>
+        .flow-container {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 10px;
+            border-radius: 8px;
+            /* --- KEY CHANGE: Stacks groups vertically --- */
+            display: flex;
+            flex-direction: column;
+            align-items: center; /* Center groups horizontally */
+            gap: 1px;           /* Space between groups/connectors */
+        }
+        .flow-group {
+            border: 1px solid #e2e8f0;
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            width: 98%; /* Use most of the container's width */
+            max-width: 700px;
+        }
+        .group-header {
+            font-weight: 600;
+            font-size: 12px;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        .group-items {
+            display: flex;
+            flex-wrap: wrap;         /* Allows nodes within a group to wrap */
+            justify-content: center;
+            align-items: center;
+            gap: 8px 4px;            /* Vertical and horizontal gap for items */
+        }
+        .flow-node {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+            padding: 5px 8px;
+            width: 110px;
+            font-size: 11.5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            min-height: 32px;
+            text-align: center;
+        }
+        .connector {
+            color: #94a3b8;
+            font-weight: bold;
+            text-align: center;
+        }
+        .h-connector { /* Horizontal connector for inside groups */
+            font-size: 16px;
+        }
+        .v-connector { /* Vertical connector for between groups */
+            font-size: 20px;
+            line-height: 1;
+        }
+        .note {
+            font-style: italic;
+            font-size: 10px;
+            color: #64748b;
+            text-align: center;
+            margin-top: 8px;
+            width: 100%;
+        }
+    </style>
+    <div class='flow-container'>
+    """
+
+    # --- REVISED HTML GENERATION FOR VERTICAL FLOW ---
+    total_groups = len(groups)
+    for i, group in enumerate(groups):
+        # Create a container for the group
+        tree_html += "<div class='flow-group'>"
+        tree_html += f"<div class='group-header' style='background: {group['color']}'>{group['name']}</div>"
+
+        # Create a flex container for the nodes to allow wrapping
+        tree_html += "<div class='group-items'>"
+        total_items = len(group['items'])
+        for j, (field, label, icon) in enumerate(group["items"]):
+            tree_html += f"<div class='flow-node'>{icon} {label}</div>"
+            if j < total_items - 1:
+                tree_html += "<div class='connector h-connector'>&rarr;</div>"
+        tree_html += "</div></div>"
+
+        # Add a vertical connector between groups
+        if i < total_groups - 1:
+            tree_html += "<div class='connector v-connector'>&darr;</div>"
+
+    # if is_publish_only:
+    #     tree_html += "<div class='note'>📖 Publish-only books skip the Writing step.</div>"
+    # tree_html += "</div>"
+
+    # st.markdown(
+    #     "<p style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; color: #4b5563; font-size: 12 px; text-align: center;'>"
+    #     "This flowchart shows the order of steps in the publishing process.</p>",
+    #     unsafe_allow_html=True
+    # )
+    col1, col2 = st.columns([0.11, 1])
+    with col2:
+        st.caption('This is the order in which stuck reasons are evaluated for books in the publishing process.')
+
+    st.markdown(tree_html, unsafe_allow_html=True)
+    st.markdown(
+        "<p style='font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, sans-serif; color: #4b5563; font-size: 12 px; text-align: center;'>"
+        "</p>",
+        unsafe_allow_html=True
+    )
 
 
 #@st.dialog("Book Stuck Reason Summary", width="large")
@@ -556,6 +745,8 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
 
     # Display the pie chart in the right column
     with col_chart:
+        if st.button(":material/auto_awesome_motion: Show Stuck Reason Sequence", help="This is the order in which stuck reasons are evaluated for books in the publishing proces", type="tertiary"):
+            show_stuck_reason_sequence(is_publish_only=False)
         #st.markdown("<h4 class='section-title'>Stuck Reason Distribution</h4>", unsafe_allow_html=True)
         if not reason_summary.empty:
             # Create a pie chart with Plotly
@@ -707,7 +898,8 @@ conn = connect_db()
 # Fetch books from the database where deliver = 0
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
-       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type, is_publish_only
+       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type, is_publish_only,
+         apply_isbn, isbn
 FROM books
 WHERE deliver = 0
 """
@@ -717,16 +909,6 @@ books_data = conn.query(query, show_spinner=False)
 book_ids = books_data['book_id'].tolist()
 authors_data = fetch_all_book_authors(book_ids, conn)
 printeditions_data = fetch_all_printeditions(book_ids, conn)
-
-
-# Get all possible stuck reasons
-all_stuck_reasons = [
-    "Welcome Mail Pending", "Cover/Agreement Pending", "Waiting for Author Details",
-    "Waiting for Photo", "Waiting for ID Proof", "Waiting for Agreement",
-    "Waiting for Digital Proof", "Waiting for Print Confirmation", "Writing Pending",
-    "Proofreading Pending", "Formatting Pending", "Cover Design Pending",
-    "In Printing", "Not Dispatched Yet", "Waiting for Print", "Not Started"
-]
 
 # Get all possible publishers
 all_publishers = books_data['publisher'].unique().tolist()
@@ -748,6 +930,8 @@ if 'selected_operations_reasons' not in st.session_state:
     st.session_state.selected_operations_reasons = []
 if 'selected_afterwork_reasons' not in st.session_state:
     st.session_state.selected_afterwork_reasons = []
+if 'selected_isbn_reasons' not in st.session_state:
+    st.session_state.selected_isbn_reasons = []
 if 'sort_by' not in st.session_state:
     st.session_state.sort_by = "Book ID"
 if 'sort_order' not in st.session_state:
@@ -758,7 +942,7 @@ query_params = st.query_params
 if "reset" in query_params and query_params["reset"] == "true":
     # Clear query params first
     st.query_params.clear()
-    # Use a form or callback to reset widget states instead of direct modification
+    # Use a form or callback to reset widget states
     st.session_state.reset_trigger = True
 
 # Check for reset trigger and reset values
@@ -770,9 +954,19 @@ if 'reset_trigger' in st.session_state and st.session_state.reset_trigger:
     st.session_state.selected_checklist_reasons = []
     st.session_state.selected_operations_reasons = []
     st.session_state.selected_afterwork_reasons = []
+    st.session_state.selected_isbn_reasons = []
     st.session_state.sort_by = "Book ID"
     st.session_state.sort_order = "Ascending"
     st.session_state.reset_trigger = False  # Reset the trigger
+
+# Sync selected_reasons with all filter categories
+def sync_selected_reasons():
+    st.session_state.selected_reasons = (
+        st.session_state.selected_checklist_reasons +
+        st.session_state.selected_operations_reasons +
+        st.session_state.selected_afterwork_reasons +
+        st.session_state.selected_isbn_reasons
+    )
 
 # Apply Filters and Sorting
 filtered_data = books_data.copy()
@@ -847,48 +1041,55 @@ with st.container():
                 st.number_input("Show books older than (days)", min_value=0, value=st.session_state.days_filter, step=1, key="days_filter")
             st.write("###### 📚 Filter by Publisher")
             st.pills("Filter by Publisher",
-                     all_publishers,
-                     key="selected_publishers",
-                     selection_mode="multi",
-                     label_visibility="collapsed")
+                    all_publishers,
+                    key="selected_publishers",
+                    selection_mode="multi",
+                    label_visibility="collapsed")
+            st.write("###### 📖 Filter by ISBN Status")
+            st.pills("ok",
+                    ["ISBN Not Applied", "ISBN Not Received"],
+                    key="selected_isbn_reasons",
+                    selection_mode="multi",
+                    label_visibility="collapsed",
+                    on_change=sync_selected_reasons)
             st.write("###### ✍️ Filter by Author Checklist")
             st.pills("ok",
-                     ["Welcome Mail Pending", "Cover/Agreement Pending", "Waiting for Author Details", 
-                      "Waiting for Photo", "Waiting for ID Proof", "Waiting for Agreement",
-                      "Waiting for Digital Proof", "Waiting for Print Confirmation"],
-                     key="selected_checklist_reasons",
-                     selection_mode="multi",
-                     label_visibility="collapsed",
-                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_checklist_reasons) if 'selected_checklist_reasons' in st.session_state else None)
+                    ["Welcome Mail Pending", "Waiting for Author Details", "Waiting for Photo",
+                    "Cover/Agreement Pending", "Waiting for Digital Proof", "Waiting for ID Proof",
+                    "Waiting for Agreement", "Waiting for Print Confirmation"],
+                    key="selected_checklist_reasons",
+                    selection_mode="multi",
+                    label_visibility="collapsed",
+                    on_change=sync_selected_reasons)
             st.write("###### 🛠️ Filter by Operations")
             st.pills("ok",
-                     ["Writing Pending", "Proofreading Pending", "Formatting Pending", 
-                      "Cover Design Pending"],
-                     key="selected_operations_reasons",
-                     selection_mode="multi",
-                     label_visibility="collapsed",
-                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_operations_reasons) if 'selected_operations_reasons' in st.session_state else None)
+                    ["Writing Pending", "Proofreading Pending", "Formatting Pending",
+                    "Cover Design Pending"],
+                    key="selected_operations_reasons",
+                    selection_mode="multi",
+                    label_visibility="collapsed",
+                    on_change=sync_selected_reasons)
             st.write("###### 🕓 Filter by After Work")
             st.pills("ok",
-                     ["Waiting for Print", "In Printing", "Not Dispatched Yet"],
-                     key="selected_afterwork_reasons",
-                     selection_mode="multi",
-                     label_visibility="collapsed",
-                     on_change=lambda: st.session_state.selected_reasons.extend(st.session_state.selected_afterwork_reasons) if 'selected_afterwork_reasons' in st.session_state else None)
+                    ["Waiting for Print", "In Printing", "Not Dispatched Yet"],
+                    key="selected_afterwork_reasons",
+                    selection_mode="multi",
+                    label_visibility="collapsed",
+                    on_change=sync_selected_reasons)
             st.write("###### 🧮 Sort by")
-            st.pills("ok", 
-                     ["Book ID", "Date", "Since Enrolled", "Stuck Reason"],
-                     key="sort_by", label_visibility="collapsed")
+            st.pills("ok",
+                    ["Book ID", "Date", "Since Enrolled", "Stuck Reason"],
+                    key="sort_by", label_visibility="collapsed")
             st.write("###### 🔁 Sort Order")
-            st.radio("ok", ["Ascending", "Descending"], 
-                     index=0 if st.session_state.sort_order == "Ascending" else 1, 
-                     horizontal=True, key="sort_order", label_visibility="collapsed")
+            st.radio("ok", ["Ascending", "Descending"],
+                    index=0 if st.session_state.sort_order == "Ascending" else 1,
+                    horizontal=True, key="sort_order", label_visibility="collapsed")
             with txtcol3:
                 if st.button(":material/restart_alt: Reset Filters", use_container_width=True, type="secondary"):
                     st.query_params["reset"] = "true"
                     st.rerun()
 
-with st.expander("⚠️ Pending Books Summary (Click to Open)", expanded=False):
+with st.expander("⚠️ Pending Books Summary", expanded=False):
     if not filtered_data.empty:
         show_stuck_reason_summary(filtered_data, authors_data, printeditions_data)
     else:
@@ -944,7 +1145,7 @@ with st.container():
                 cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
                 cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
                 with cols[6]:
-                    if st.button(":material/visibility:", key=f"action_{book['book_id']}"):
+                    if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
                         show_book_details(book_id, book, authors_data, printeditions_data)
     else:
         st.info("No Pending Books Found")
