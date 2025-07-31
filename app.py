@@ -4584,7 +4584,7 @@ def check_ready_to_print(book_id, conn):
     query = """
     SELECT CASE 
         WHEN (
-            b.writing_complete = 1 
+            (b.is_publish_only = 1 OR b.writing_complete = 1)
             AND b.proofreading_complete = 1 
             AND b.formatting_complete = 1 
             AND b.cover_page_complete = 1
@@ -4614,13 +4614,14 @@ def check_ready_to_print(book_id, conn):
 
 # Function to get detailed print status (missing conditions)
 def get_print_status(book_id, conn):
-    # Query book conditions
+    # Query book conditions including is_publish_only
     book_query = """
     SELECT 
         writing_complete,
         proofreading_complete,
         formatting_complete,
-        cover_page_complete
+        cover_page_complete,
+        is_publish_only
     FROM books
     WHERE book_id = :book_id
     """
@@ -4648,7 +4649,7 @@ def get_print_status(book_id, conn):
         "book": [],
         "authors": []
     }
-    if book_result['writing_complete'] != 1:
+    if book_result['is_publish_only'] != 1 and book_result['writing_complete'] != 1:
         status["book"].append("Writing")
     if book_result['proofreading_complete'] != 1:
         status["book"].append("Proofreading")
