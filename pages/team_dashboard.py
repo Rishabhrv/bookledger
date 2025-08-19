@@ -336,6 +336,15 @@ st.markdown("""
         margin-left: 5px;
     }
             
+    .thesis-to-book-badge {
+        background-color: #e0f7fa;
+        color: #00695c;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        margin-left: 5px;
+    }
+            
     .dialog-header {
             font-size: 20px;
             color: #4CAF50;
@@ -406,20 +415,20 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 "syllabus_path AS 'Syllabus Path'"
             ],
             "extra": [],
-            "publish_filter": "AND is_publish_only = 0"
+            "publish_filter": "AND is_publish_only = 0 AND is_thesis_to_book = 0"
         },
         "proofreading": {
             "base": [
                 "proofreading_by AS 'Proofreading By'", 
                 "proofreading_start AS 'Proofreading Start'", 
                 "proofreading_end AS 'Proofreading End'",
-                "is_publish_only AS 'is_publish_only'"
+                "is_publish_only AS 'is_publish_only'",
+                "is_thesis_to_book AS 'is_thesis_to_book'",
             ],
             "extra": [
                 "writing_end AS 'Writing End'", 
                 "writing_by AS 'Writing By'",
                 "book_pages AS 'Number of Book Pages'"
-              
             ],
             "publish_filter": ""
         },
@@ -462,13 +471,14 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 b.date AS 'Date',
                 {columns_str},
                 b.is_publish_only AS 'Is Publish Only',
+                b.is_thesis_to_book AS 'Is Thesis to Book',
                 GROUP_CONCAT(CONCAT(a.name, ' (Pos: ', ba.author_position, ', Photo: ', ba.photo_recive, ', Sent: ', ba.author_details_sent, ')') SEPARATOR ', ') AS 'Author Details'
             FROM books b
             LEFT JOIN book_authors ba ON b.book_id = ba.book_id
             LEFT JOIN authors a ON ba.author_id = a.author_id
             WHERE b.date >= '{cutoff_date_str}'
             {publish_filter}
-            GROUP BY b.book_id, b.title, b.date, b.cover_by, b.cover_start, b.cover_end, b.apply_isbn, b.isbn, b.is_publish_only
+            GROUP BY b.book_id, b.title, b.date, b.cover_by, b.cover_start, b.cover_end, b.apply_isbn, b.isbn, b.is_publish_only, b.is_thesis_to_book
             ORDER BY b.date DESC
         """
     else:
@@ -478,7 +488,8 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 title AS 'Title',
                 date AS 'Date',
                 {columns_str},
-                is_publish_only AS 'Is Publish Only'
+                is_publish_only AS 'Is Publish Only',
+                is_thesis_to_book AS 'Is Thesis to Book'
             FROM books 
             WHERE date >= '{cutoff_date_str}'
             {publish_filter}
@@ -1430,8 +1441,11 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             col_idx += 1
             with col_configs[col_idx]:
                 title_text = row['Title']
-                if role == "proofreader" and pd.notnull(row.get('is_publish_only')) and row['is_publish_only'] == 1:
-                    title_text += ' <span class="pill publish-only-badge">Publish only</span>'
+                if role == "proofreader":
+                    if pd.notnull(row.get('is_publish_only')) and row['is_publish_only'] == 1:
+                        title_text += ' <span class="pill publish-only-badge">Publish only</span>'
+                    elif pd.notnull(row.get('is_thesis_to_book')) and row['is_thesis_to_book'] == 1:
+                        title_text += ' <span class="pill thesis-to-book-badge">Thesis to Book</span>'
                 st.markdown(title_text, unsafe_allow_html=True)
             col_idx += 1
             with col_configs[col_idx]:
@@ -1761,6 +1775,7 @@ for section, config in sections.items():
             pending_books = books_df[
                 (books_df['Writing Start'].isnull()) &
                 (books_df['Is Publish Only'] != 1) &
+                (books_df['Is Thesis to Book'] != 1) &
                 (~books_df['Book ID'].isin(ongoing_correction_ids))
             ]
             completed_books = books_df[
@@ -1773,7 +1788,9 @@ for section, config in sections.items():
                 (books_df['Book ID'].isin(ongoing_correction_ids))
             ]
             pending_books = books_df[
-                ((books_df['Writing End'].notnull()) | (books_df['Is Publish Only'] == 1)) &
+                ((books_df['Writing End'].notnull()) | 
+                 (books_df['Is Publish Only'] == 1) | 
+                 (books_df['Is Thesis to Book'] == 1)) &
                 (books_df['Proofreading Start'].isnull()) &
                 (~books_df['Book ID'].isin(ongoing_correction_ids))
             ]

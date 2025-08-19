@@ -266,7 +266,7 @@ if not st.session_state.cleanup_done:
 
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
-"is_publish_only, publisher, author_type, writing_start, writing_end, " \
+"is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
 "proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end FROM books"
 books = conn.query(query,show_spinner = False)
 
@@ -301,7 +301,7 @@ elif user_role != "admin":
 
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , num_copies, syllabus_path, print_status,is_publish_only, publisher
+    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -618,14 +618,15 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
     operations_color = "#6b7280"
     operations_checkmark = ""
     
-    # Check if book is publish-only
+    # Check if book is publish-only or thesis-to-book
     is_publish_only = row.get('is_publish_only', 0) == 1
+    is_thesis_to_book = row.get('is_thesis_to_book', 0) == 1
     
-    # Check if all operations are complete, excluding writing if publish-only
+    # Check if all operations are complete, excluding writing if publish-only or thesis-to-book
     all_complete = True
     for stage, _, _, _, _ in operations_sequence:
-        if stage == "writing" and is_publish_only:
-            continue  # Skip writing for publish-only books
+        if stage == "writing" and (is_publish_only or is_thesis_to_book):
+            continue  # Skip writing for publish-only or thesis-to-book
         end_field = f"{stage}_end"
         if row.get(end_field) is None or pd.isnull(row.get(end_field)):
             all_complete = False
@@ -636,11 +637,11 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
         operations_color = "#15803d"
         operations_checkmark = " ✓"
     else:
-        # Find the first in-progress or completed operation, handling publish-only
+        # Find the first in-progress or completed operation, handling publish-only and thesis-to-book
         for stage, in_progress, complete, color, _ in operations_sequence:
-            if stage == "writing" and is_publish_only:
+            if stage == "writing" and (is_publish_only or is_thesis_to_book):
                 operations_status = "Not Started"
-                operations_color = "#4b5563"  # Neutral gray for Publish Only
+                operations_color = "#4b5563"  # Neutral gray for Publish Only or Thesis to Book
                 operations_checkmark = ""
                 break
             start_field = f"{stage}_start"
@@ -1522,48 +1523,52 @@ def add_book_dialog(conn):
     def book_details_section(publisher):
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
-            col1, col2 = st.columns([2,1])
+            col1, col2 = st.columns([2, 0.6])
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
-            
+
             toggles_enabled = publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
 
-            col3, col4 = st.columns([4,2], vertical_alignment="bottom")
+            col3, col4 = st.columns([3, 2], vertical_alignment="bottom")
 
             with col3:
+                # Radio buttons for author type
                 author_type = st.radio(
                     "Author Type",
                     ["Multiple", "Single", "Double", "Triple"],
-                    key="author_type_select",
+                    key="author_type_radio",
                     horizontal=True,
-                    help="Select the number of authors for the book. 'Multiple' allows up to 4 authors.",
                     disabled=not toggles_enabled
                 )
+
             with col4:
-                is_publish_only = st.toggle(
-                    "Publish Only?",
-                    value=False,
-                    key="publish_only_toggle",
-                    help="Enable this to mark the book as publish only.",
+                # Segmented buttons for book mode (only 2 options)
+                book_mode = st.segmented_control(
+                    "Book Type",
+                    options=["Publish Only", "Thesis to Book"],
+                    key="book_mode_segment",
                     disabled=not toggles_enabled
                 )
-            
+
             if not toggles_enabled:
-                st.warning("Author Type and Publish Only options are disabled for AG Kids and NEET/JEE publishers.")
-            
+                st.warning("Author Type and Book Mode options are disabled for AG Kids and NEET/JEE publishers.")
+
             return {
                 "title": book_title,
                 "date": book_date,
                 "author_type": author_type if toggles_enabled else "Multiple",
-                "is_publish_only": is_publish_only if toggles_enabled else False,
+                "is_publish_only": (book_mode == "Publish Only") if (book_mode and toggles_enabled) else False,
+                "is_thesis_to_book": (book_mode == "Thesis to Book") if (book_mode and toggles_enabled) else False,
                 "publisher": publisher
             }
 
-    def syllabus_upload_section(is_publish_only, toggles_enabled):
+
+
+    def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled):
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
             syllabus_file = None
-            if not is_publish_only and toggles_enabled:
+            if not is_publish_only and not is_thesis_to_book and toggles_enabled:
                 syllabus_file = st.file_uploader(
                     "Upload Book Syllabus",
                     type=["pdf", "docx", "jpg", "jpeg", "png"],
@@ -1573,6 +1578,8 @@ def add_book_dialog(conn):
             else:
                 if is_publish_only:
                     st.info("Syllabus upload is disabled for Publish Only books.")
+                if is_thesis_to_book:
+                    st.info("Syllabus upload is disabled for Thesis to Book conversions.")
                 if not toggles_enabled:
                     st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
             return syllabus_file
@@ -1748,7 +1755,7 @@ def add_book_dialog(conn):
         publisher = publisher_section()
         book_data = book_details_section(publisher)
         author_data = author_details_section(conn, book_data["author_type"], publisher)
-        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
+        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], book_data["is_thesis_to_book"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         book_data["syllabus_file"] = syllabus_file
 
     # --- Save, Clear, and Cancel Buttons ---
@@ -1764,7 +1771,7 @@ def add_book_dialog(conn):
                         try:
                             # Handle syllabus file upload
                             syllabus_path = None
-                            if book_data["syllabus_file"] and not book_data["is_publish_only"]:
+                            if book_data["syllabus_file"] and not book_data["is_publish_only"] and not book_data["is_thesis_to_book"]:
                                 file_extension = os.path.splitext(book_data["syllabus_file"].name)[1]
                                 unique_filename = f"syllabus_{book_data['title'].replace(' ', '_')}_{int(time.time())}{file_extension}"
                                 syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
@@ -1781,13 +1788,14 @@ def add_book_dialog(conn):
                             
                             # Insert book
                             s.execute(text("""
-                                INSERT INTO books (title, date, author_type, is_publish_only, publisher, syllabus_path)
-                                VALUES (:title, :date, :author_type, :is_publish_only, :publisher, :syllabus_path)
+                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path)
+                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path)
                             """), params={
                                 "title": book_data["title"],
                                 "date": book_data["date"],
                                 "author_type": book_data["author_type"],
                                 "is_publish_only": book_data["is_publish_only"],
+                                "is_thesis_to_book": book_data["is_thesis_to_book"],
                                 "publisher": book_data["publisher"],
                                 "syllabus_path": syllabus_path
                             })
@@ -1827,7 +1835,7 @@ def add_book_dialog(conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added book",
-                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}"
+                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}"
                             )
 
                             st.success("Book and Authors Saved Successfully!", icon="✔️")
@@ -1855,7 +1863,6 @@ def add_book_dialog(conn):
 ###################################################################################################################################
 
 from datetime import datetime
-
 @st.dialog("Manage ISBN and Book Title", width="large")
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     # Fetch current book details
@@ -1868,6 +1875,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     current_title = book_details.iloc[0]['title']
     current_date = book_details.iloc[0]['date']
     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
+    current_is_thesis_to_book = book_details.iloc[0].get('is_thesis_to_book', 0) == 1
     current_publisher = book_details.iloc[0].get('publisher', '')
     current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
 
@@ -1892,6 +1900,12 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     if f"receive_isbn_{book_id}_prev" not in st.session_state:
         st.session_state[f"receive_isbn_{book_id}_prev"] = bool(pd.notna(current_isbn))
 
+    # Initialize session state for toggles
+    if f"is_publish_only_{book_id}" not in st.session_state:
+        st.session_state[f"is_publish_only_{book_id}"] = current_is_publish_only
+    if f"is_thesis_to_book_{book_id}" not in st.session_state:
+        st.session_state[f"is_thesis_to_book_{book_id}"] = current_is_thesis_to_book
+
     # Main container
     with st.container():
         st.markdown(f"### {book_id} - {current_title}{publisher_badge}", unsafe_allow_html=True)
@@ -1915,13 +1929,40 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     key=f"date_{book_id}",
                     help="Select the book date"
                 )
-            new_is_publish_only = st.toggle(
-                "Publish Only?",
-                value=current_is_publish_only,
-                key=f"is_publish_only_{book_id}",
-                help="Enable this to mark the book as publish only (disables writing operations)"
-            )
+            toggles_enabled = current_publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
+            col3, col4 = st.columns([1, 3])
+            with col3:
+                # Callback to handle Publish Only toggle
+                def on_publish_only_change():
+                    if st.session_state[f"is_publish_only_{book_id}"]:
+                        st.session_state[f"is_thesis_to_book_{book_id}"] = False
+
+                new_is_publish_only = st.toggle(
+                    "Publish Only?",
+                    value=st.session_state[f"is_publish_only_{book_id}"],
+                    key=f"is_publish_only_{book_id}",
+                    help="Enable this to mark the book as publish only (disables writing operations)",
+                    disabled=not toggles_enabled,
+                    on_change=on_publish_only_change
+                )
+            with col4:
+                # Callback to handle Thesis to Book toggle
+                def on_thesis_to_book_change():
+                    if st.session_state[f"is_thesis_to_book_{book_id}"]:
+                        st.session_state[f"is_publish_only_{book_id}"] = False
+
+                new_is_thesis_to_book = st.toggle(
+                    "Thesis to Book?",
+                    value=st.session_state[f"is_thesis_to_book_{book_id}"],
+                    key=f"is_thesis_to_book_{book_id}",
+                    help="Enable this to mark the book as a thesis-to-book conversion",
+                    disabled=not toggles_enabled,
+                    on_change=on_thesis_to_book_change
+                )
+            if not toggles_enabled:
+                st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
             st.markdown('</div>', unsafe_allow_html=True)
+
         
         st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
         with st.expander("Authors", expanded=False):
@@ -2021,6 +2062,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                             changes.append(f"Updated date from '{current_date}' to '{new_date}'")
                         if new_is_publish_only != current_is_publish_only:
                             changes.append(f"Updated is_publish_only to '{new_is_publish_only}'")
+                        if new_is_thesis_to_book != current_is_thesis_to_book:
+                            changes.append(f"Updated is_thesis_to_book to '{new_is_thesis_to_book}'")
                         if apply_isbn != bool(current_apply_isbn):
                             changes.append(f"Updated ISBN Applied to '{apply_isbn}'")
                         if receive_isbn != bool(pd.notna(current_isbn)):
@@ -2040,7 +2083,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         isbn_receive_date = :isbn_receive_date, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only
+                                        is_publish_only = :is_publish_only,
+                                        is_thesis_to_book = :is_thesis_to_book
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2050,6 +2094,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                     "book_id": book_id
                                 }
                             )
@@ -2062,7 +2107,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         isbn_receive_date = NULL, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only
+                                        is_publish_only = :is_publish_only,
+                                        is_thesis_to_book = :is_thesis_to_book
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2070,6 +2116,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                     "book_id": book_id
                                 }
                             )
@@ -2082,7 +2129,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         isbn_receive_date = NULL, 
                                         title = :title, 
                                         date = :date,
-                                        is_publish_only = :is_publish_only
+                                        is_publish_only = :is_publish_only,
+                                        is_thesis_to_book = :is_thesis_to_book
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2090,6 +2138,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "title": new_title, 
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
+                                    "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                     "book_id": book_id
                                 }
                             )
@@ -3983,13 +4032,15 @@ def fetch_unique_names(column):
 
 @st.dialog("Edit Operation Details", width='large')
 def edit_operation_dialog(book_id, conn):
-    # Fetch book details for title, is_publish_only, and syllabus_path
+    # Fetch book details for title, is_publish_only, is_thesis_to_book, and syllabus_path
     book_details = fetch_book_details(book_id, conn)
     is_publish_only = False
+    is_thesis_to_book = False
     current_syllabus_path = None
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
         is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
+        is_thesis_to_book = book_details.iloc[0].get('is_thesis_to_book', 0) == 1
         current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)
         col1, col2 = st.columns([6, 1])
         with col1:
@@ -4124,8 +4175,8 @@ def edit_operation_dialog(book_id, conn):
 
     # Writing Tab
     with tab1:
-        if is_publish_only:
-            st.warning("Writing section is disabled because this book is in 'Publish Only' mode.")
+        if is_publish_only or is_thesis_to_book:
+            st.warning("Writing section is disabled because this book is in 'Publish Only' or 'Thesis to Book' mode.")
         
         # Form for input collection
         with st.form(key=f"writing_form_{book_id}", border=False):
@@ -4136,10 +4187,10 @@ def edit_operation_dialog(book_id, conn):
                 index=(writing_options.index(st.session_state[f"writing_by_{book_id}"]) 
                        if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
                 key=f"writing_select_{book_id}",
-                disabled=is_publish_only
+                disabled=is_publish_only or is_thesis_to_book
             )
             new_writer = ""
-            if selected_writer == "Add New..." and not is_publish_only:
+            if selected_writer == "Add New..." and not (is_publish_only or is_thesis_to_book):
                 new_writer = st.text_input(
                     "New Writer Name",
                     key=f"writing_new_input_{book_id}",
@@ -4147,7 +4198,7 @@ def edit_operation_dialog(book_id, conn):
                 )
                 if new_writer:
                     st.session_state[f"writing_by_{book_id}"] = new_writer
-            elif selected_writer != "Select Writer" and not is_publish_only:
+            elif selected_writer != "Select Writer" and not (is_publish_only or is_thesis_to_book):
                 st.session_state[f"writing_by_{book_id}"] = selected_writer
 
             writing_by = st.session_state[f"writing_by_{book_id}"] if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] != "Select Writer" else ""
@@ -4158,26 +4209,26 @@ def edit_operation_dialog(book_id, conn):
                     "Start Date",
                     value=current_data.get('writing_start'),
                     key=f"writing_start_date_{book_id}",
-                    disabled=is_publish_only
+                    disabled=is_publish_only or is_thesis_to_book
                 )
                 writing_start_time = st.time_input(
                     "Start Time",
                     value=current_data.get('writing_start'),
                     key=f"writing_start_time_{book_id}",
-                    disabled=is_publish_only
+                    disabled=is_publish_only or is_thesis_to_book
                 )
             with col2:
                 writing_end_date = st.date_input(
                     "End Date",
                     value=current_data.get('writing_end'),
                     key=f"writing_end_date_{book_id}",
-                    disabled=is_publish_only
+                    disabled=is_publish_only or is_thesis_to_book
                 )
                 writing_end_time = st.time_input(
                     "End Time",
                     value=current_data.get('writing_end'),
                     key=f"writing_end_time_{book_id}",
-                    disabled=is_publish_only
+                    disabled=is_publish_only or is_thesis_to_book
                 )
 
             book_pages = st.number_input(
@@ -4186,7 +4237,7 @@ def edit_operation_dialog(book_id, conn):
                 value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
                 step=1,
                 key=f"book_pages_writing_{book_id}",
-                disabled=is_publish_only
+                disabled=is_publish_only or is_thesis_to_book
             )
 
             # Book Syllabus Section
@@ -4195,7 +4246,7 @@ def edit_operation_dialog(book_id, conn):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 # Syllabus uploader
                 syllabus_file = None
-                if not is_publish_only:
+                if not (is_publish_only or is_thesis_to_book):
                     syllabus_file = st.file_uploader(
                         "Upload New Syllabus",
                         type=["pdf", "docx", "jpg", "jpeg", "png"],
@@ -4205,17 +4256,17 @@ def edit_operation_dialog(book_id, conn):
                     if syllabus_file and current_syllabus_path:
                         st.warning("Uploading a new syllabus will replace the existing one.")
                 else:
-                    st.info("Syllabus upload is disabled for Publish Only books.")
+                    st.info("Syllabus upload is disabled for Publish Only or Thesis to Book.")
                 st.markdown('</div>', unsafe_allow_html=True)
 
             # Form submit button
-            if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only):
+            if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only or is_thesis_to_book):
                 with st.spinner("Saving Writing details..."):
                     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
                     # Handle syllabus file upload
                     new_syllabus_path = current_syllabus_path
-                    if syllabus_file and not is_publish_only:
+                    if syllabus_file and not (is_publish_only or is_thesis_to_book):
                         file_extension = os.path.splitext(syllabus_file.name)[1]
                         unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
                         new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
@@ -4584,7 +4635,7 @@ def check_ready_to_print(book_id, conn):
     query = """
     SELECT CASE 
         WHEN (
-            (b.is_publish_only = 1 OR b.writing_complete = 1)
+            (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1)
             AND b.proofreading_complete = 1 
             AND b.formatting_complete = 1 
             AND b.cover_page_complete = 1
@@ -4614,14 +4665,15 @@ def check_ready_to_print(book_id, conn):
 
 # Function to get detailed print status (missing conditions)
 def get_print_status(book_id, conn):
-    # Query book conditions including is_publish_only
+    # Query book conditions including is_publish_only and is_thesis_to_book
     book_query = """
     SELECT 
         writing_complete,
         proofreading_complete,
         formatting_complete,
         cover_page_complete,
-        is_publish_only
+        is_publish_only,
+        is_thesis_to_book
     FROM books
     WHERE book_id = :book_id
     """
@@ -4649,7 +4701,7 @@ def get_print_status(book_id, conn):
         "book": [],
         "authors": []
     }
-    if book_result['is_publish_only'] != 1 and book_result['writing_complete'] != 1:
+    if book_result['is_publish_only'] != 1 and book_result['is_thesis_to_book'] != 1 and book_result['writing_complete'] != 1:
         status["book"].append("Writing")
     if book_result['proofreading_complete'] != 1:
         status["book"].append("Proofreading")
@@ -5690,273 +5742,297 @@ with srcol1:
 
 
 with srcol3:
+
     # Popover for filtering
-
     with st.popover("Filter by Date, Status, Publisher & Author Type", use_container_width=True):
-            # Extract unique publishers, years, and author types from the dataset
-            unique_publishers = sorted(books['publisher'].dropna().unique())
-            unique_years = sorted(books['date'].dt.year.unique())
-            unique_author_types = sorted(books['author_type'].dropna().unique())
+        # Extract unique publishers, years, and author types from the dataset
+        unique_publishers = sorted(books['publisher'].dropna().unique())
+        unique_years = sorted(books['date'].dt.year.unique())
+        unique_author_types = sorted(books['author_type'].dropna().unique())
 
-            # Use session state to manage filter values
-            if 'year_filter' not in st.session_state:
+        # Use session state to manage filter values
+        if 'year_filter' not in st.session_state:
+            st.session_state.year_filter = None
+        if 'month_filter' not in st.session_state:
+            st.session_state.month_filter = None
+        if 'start_date_filter' not in st.session_state:
+            st.session_state.start_date_filter = None
+        if 'end_date_filter' not in st.session_state:
+            st.session_state.end_date_filter = None
+        if 'status_filter' not in st.session_state:
+            st.session_state.status_filter = None
+        if 'publisher_filter' not in st.session_state:
+            st.session_state.publisher_filter = None
+        if 'isbn_filter' not in st.session_state:
+            st.session_state.isbn_filter = None
+        if 'author_type_filter' not in st.session_state:
+            st.session_state.author_type_filter = None
+        if 'multiple_open_positions_filter' not in st.session_state:
+            st.session_state.multiple_open_positions_filter = None
+        if 'publish_only_filter' not in st.session_state:
+            st.session_state.publish_only_filter = None
+        if 'thesis_to_book_filter' not in st.session_state:
+            st.session_state.thesis_to_book_filter = None
+        if 'clear_filters_trigger' not in st.session_state:
+            st.session_state.clear_filters_trigger = 0
+
+        # Reset button at the top
+        if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", use_container_width=True, type="secondary"):
+            st.session_state.year_filter = None
+            st.session_state.month_filter = None
+            st.session_state.start_date_filter = None
+            st.session_state.end_date_filter = None
+            st.session_state.status_filter = None
+            st.session_state.publisher_filter = None
+            st.session_state.isbn_filter = None
+            st.session_state.author_type_filter = None
+            st.session_state.multiple_open_positions_filter = None
+            st.session_state.publish_only_filter = None
+            st.session_state.thesis_to_book_filter = None
+            st.session_state.clear_filters_trigger += 1
+            st.rerun()
+
+        # Tabs for filter categories
+        tabs = st.tabs(["Status", "Publisher", "Author", "Date"])
+
+        with tabs[3]:
+            # Date Filters Expander
+            year_options = [str(year) for year in unique_years]
+            selected_year = st.pills(
+                "Year:",
+                options=year_options,
+                key=f"year_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            if selected_year:
+                st.session_state.year_filter = int(selected_year)
+            elif selected_year is None and "year_pills_callback" not in st.session_state:
                 st.session_state.year_filter = None
-            if 'month_filter' not in st.session_state:
-                st.session_state.month_filter = None
-            if 'start_date_filter' not in st.session_state:
-                st.session_state.start_date_filter = None
-            if 'end_date_filter' not in st.session_state:
-                st.session_state.end_date_filter = None
-            if 'status_filter' not in st.session_state:
-                st.session_state.status_filter = None
-            if 'publisher_filter' not in st.session_state:
-                st.session_state.publisher_filter = None
-            if 'isbn_filter' not in st.session_state:
-                st.session_state.isbn_filter = None
-            if 'author_type_filter' not in st.session_state:
-                st.session_state.author_type_filter = None
-            if 'multiple_open_positions_filter' not in st.session_state:
-                st.session_state.multiple_open_positions_filter = None
-            if 'publish_only_filter' not in st.session_state:
-                st.session_state.publish_only_filter = None
-            if 'clear_filters_trigger' not in st.session_state:
-                st.session_state.clear_filters_trigger = 0
 
-            # Reset button at the top
-            if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", use_container_width=True, type="secondary"):
-                st.session_state.year_filter = None
-                st.session_state.month_filter = None
-                st.session_state.start_date_filter = None
-                st.session_state.end_date_filter = None
-                st.session_state.status_filter = None
-                st.session_state.publisher_filter = None
-                st.session_state.isbn_filter = None
-                st.session_state.author_type_filter = None
-                st.session_state.multiple_open_positions_filter = None
-                st.session_state.publish_only_filter = None
-                st.session_state.clear_filters_trigger += 1
-                st.rerun()
-
-            # Tabs for filter categories
-            tabs = st.tabs(["Status", "Publisher", "Author", "Date"])
-
-            with tabs[3]:
-                # Date Filters Expander
-                year_options = [str(year) for year in unique_years]
-                selected_year = st.pills(
-                    "Year:",
-                    options=year_options,
-                    key=f"year_pills_{st.session_state.clear_filters_trigger}",
+            # Month filter
+            if st.session_state.year_filter:
+                year_books = books[books['date'].dt.year == st.session_state.year_filter]
+                unique_months = sorted(year_books['date'].dt.month.unique())
+                month_names = {
+                    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
+                    5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
+                    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
+                }
+                month_options = [month_names[month] for month in unique_months]
+                selected_month = st.pills(
+                    "Month",
+                    options=month_options,
+                    key=f"month_pills_{st.session_state.clear_filters_trigger}",
                     label_visibility='visible'
                 )
-                if selected_year:
-                    st.session_state.year_filter = int(selected_year)
-                elif selected_year is None and "year_pills_callback" not in st.session_state:
-                    st.session_state.year_filter = None
+                if selected_month:
+                    st.session_state.month_filter = next(
+                        (num for num, name in month_names.items() if name == selected_month),
+                        None
+                    )
+                elif selected_month is None and "month_pills_callback" not in st.session_state:
+                    st.session_state.month_filter = None
+            else:
+                st.session_state.month_filter = None
 
-                # Month filter
-                if st.session_state.year_filter:
-                    year_books = books[books['date'].dt.year == st.session_state.year_filter]
-                    unique_months = sorted(year_books['date'].dt.month.unique())
-                    month_names = {
-                        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
-                        5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
-                        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
-                    }
-                    month_options = [month_names[month] for month in unique_months]
-                    selected_month = st.pills(
-                        "Month",
-                        options=month_options,
-                        key=f"month_pills_{st.session_state.clear_filters_trigger}",
+            st.caption('Filter by Range:')
+            # Date range filter
+            min_date = books['date'].min().date()
+            max_date = books['date'].max().date()
+            start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
+            end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
+            st.session_state.start_date_filter = st.date_input(
+                "Start Date",
+                value=st.session_state.start_date_filter,
+                min_value=min_date,
+                max_value=max_date,
+                key=start_date_key,
+                label_visibility="visible"
+            )
+            st.session_state.end_date_filter = st.date_input(
+                "End Date",
+                value=st.session_state.end_date_filter,
+                min_value=min_date,
+                max_value=max_date,
+                key=end_date_key,
+                label_visibility="visible"
+            )
+            if st.session_state.start_date_filter and st.session_state.end_date_filter:
+                if st.session_state.start_date_filter > st.session_state.end_date_filter:
+                    st.error("Start Date must be before End Date.")
+                    st.session_state.start_date_filter = None
+                    st.session_state.end_date_filter = None
+
+        # Publisher Filters Expander
+        with tabs[1]:
+            publisher_options = unique_publishers
+            selected_publisher = st.pills(
+                "Publisher:",
+                options=publisher_options,
+                key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            if selected_publisher:
+                st.session_state.publisher_filter = selected_publisher
+            elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
+                st.session_state.publisher_filter = None
+
+        # Status Filters Expander
+        with tabs[0]:
+            # Status filter
+            status_options = ["Delivered", "On Going"]
+            if user_role == "admin":
+                status_options.append("Pending Payment")
+            selected_status = st.pills(
+                "Status:",
+                options=status_options,
+                key=f"status_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.status_filter = selected_status
+
+            # ISBN filter
+            isbn_options = ["Not Applied", "Not Received"]
+            selected_isbn = st.pills(
+                "ISBN Status:",
+                options=isbn_options,
+                key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.isbn_filter = selected_isbn
+
+            # Book Type filters
+            with st.container():
+                #st.write("####### Book Type:")
+                col1, col2, col3 = st.columns([1,1,0.9],gap="small")
+                with col1:
+                    # Publish Only filter
+                    publish_only_options = ["Publish Only"]
+                    selected_publish_only = st.pills(
+                        "Book Type:",
+                        options=publish_only_options,
+                        key=f"publish_only_pills_{st.session_state.clear_filters_trigger}",
                         label_visibility='visible'
                     )
-                    if selected_month:
-                        st.session_state.month_filter = next(
-                            (num for num, name in month_names.items() if name == selected_month),
-                            None
-                        )
-                    elif selected_month is None and "month_pills_callback" not in st.session_state:
-                        st.session_state.month_filter = None
-                else:
-                    st.session_state.month_filter = None
+                    st.session_state.publish_only_filter = selected_publish_only
+                with col2:
+                    # Thesis to Book filter
+                    thesis_to_book_options = ["Thesis to Book"]
+                    selected_thesis_to_book = st.pills(
+                        "Thesis Type:",
+                        options=thesis_to_book_options,
+                        key=f"thesis_to_book_pills_{st.session_state.clear_filters_trigger}",
+                        label_visibility='hidden'
+                    )
+                    st.session_state.thesis_to_book_filter = selected_thesis_to_book
 
-                st.caption('Filter by Range:')
-                # Date range filter
-                min_date = books['date'].min().date()
-                max_date = books['date'].max().date()
-                start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
-                end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
-                st.session_state.start_date_filter = st.date_input(
-                    "Start Date",
-                    value=st.session_state.start_date_filter,
-                    min_value=min_date,
-                    max_value=max_date,
-                    key=start_date_key,
-                    label_visibility="visible"
-                )
-                st.session_state.end_date_filter = st.date_input(
-                    "End Date",
-                    value=st.session_state.end_date_filter,
-                    min_value=min_date,
-                    max_value=max_date,
-                    key=end_date_key,
-                    label_visibility="visible"
-                )
-                if st.session_state.start_date_filter and st.session_state.end_date_filter:
-                    if st.session_state.start_date_filter > st.session_state.end_date_filter:
-                        st.error("Start Date must be before End Date.")
-                        st.session_state.start_date_filter = None
-                        st.session_state.end_date_filter = None
+        # Author Filters Expander
+        with tabs[2]:
+            # Author type filter
+            author_type_options = ["Single", "Double", "Triple", "Multiple"]
+            selected_author_type = st.pills(
+                "Author Type:",
+                options=author_type_options,
+                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.author_type_filter = selected_author_type
 
-            # Publisher Filters Expander
-            with tabs[1]:
-                publisher_options = unique_publishers
-                selected_publisher = st.pills(
-                    "Publisher:",
-                    options=publisher_options,
-                    key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                if selected_publisher:
-                    st.session_state.publisher_filter = selected_publisher
-                elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
-                    st.session_state.publisher_filter = None
+            # Multiple with open positions filter
+            multiple_open_positions_options = ["Open Positions"]
+            selected_multiple_open_positions = st.pills(
+                "Multiple Authors:",
+                options=multiple_open_positions_options,
+                key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
 
-                # Publish Only filter
-                publish_only_options = ["Publish Only"]
-                selected_publish_only = st.pills(
-                    "Publish Type:",
-                    options=publish_only_options,
-                    key=f"publish_only_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                st.session_state.publish_only_filter = selected_publish_only
+        # Collect applied filters after all selections
+        applied_filters = []
+        if st.session_state.publisher_filter:
+            applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
+        if st.session_state.month_filter:
+            applied_filters.append(f"Month={month_names.get(st.session_state.month_filter)}")
+        if st.session_state.year_filter:
+            applied_filters.append(f"Year={st.session_state.year_filter}")
+        if st.session_state.start_date_filter:
+            applied_filters.append(f"Start Date={st.session_state.start_date_filter}")
+        if st.session_state.end_date_filter:
+            applied_filters.append(f"End Date={st.session_state.end_date_filter}")
+        if st.session_state.status_filter:
+            applied_filters.append(f"Status={st.session_state.status_filter}")
+        if st.session_state.isbn_filter:
+            applied_filters.append(f"ISBN={st.session_state.isbn_filter}")
+        if st.session_state.author_type_filter:
+            applied_filters.append(f"Author Type={st.session_state.author_type_filter}")
+        if st.session_state.multiple_open_positions_filter:
+            applied_filters.append(f"Author Status={st.session_state.multiple_open_positions_filter}")
+        if st.session_state.publish_only_filter:
+            applied_filters.append(f"Publish Type={st.session_state.publish_only_filter}")
+        if st.session_state.thesis_to_book_filter:
+            applied_filters.append(f"Thesis Type={st.session_state.thesis_to_book_filter}")
 
-            # Status Filters Expander
-            with tabs[0]:
-                # Status filter
-                status_options = ["Delivered", "On Going"]
-                if user_role == "admin":
-                    status_options.append("Pending Payment")
-                selected_status = st.pills(
-                    "Status:",
-                    options=status_options,
-                    key=f"status_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                st.session_state.status_filter = selected_status
-
-                # ISBN filter
-                isbn_options = ["Not Applied", "Not Received"]
-                selected_isbn = st.pills(
-                    "ISBN Status:",
-                    options=isbn_options,
-                    key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                st.session_state.isbn_filter = selected_isbn
-
-            # Author Filters Expander
-            with tabs[2]:
-                # Author type filter
-                author_type_options = ["Single", "Double", "Triple", "Multiple"]
-                selected_author_type = st.pills(
-                    "Author Type:",
-                    options=author_type_options,
-                    key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                st.session_state.author_type_filter = selected_author_type
-
-                # Multiple with open positions filter
-                multiple_open_positions_options = ["Open Positions"]
-                selected_multiple_open_positions = st.pills(
-                    "Multiple Authors:",
-                    options=multiple_open_positions_options,
-                    key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
-                )
-                st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
-
-            # Collect applied filters after all selections
-            applied_filters = []
+        # Apply filters only if there are any
+        if applied_filters:
+            # Apply publisher filter
             if st.session_state.publisher_filter:
-                applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
-            if st.session_state.month_filter:
-                applied_filters.append(f"Month={month_names.get(st.session_state.month_filter)}")
-            if st.session_state.year_filter:
-                applied_filters.append(f"Year={st.session_state.year_filter}")
-            if st.session_state.start_date_filter:
-                applied_filters.append(f"Start Date={st.session_state.start_date_filter}")
-            if st.session_state.end_date_filter:
-                applied_filters.append(f"End Date={st.session_state.end_date_filter}")
-            if st.session_state.status_filter:
-                applied_filters.append(f"Status={st.session_state.status_filter}")
-            if st.session_state.isbn_filter:
-                applied_filters.append(f"ISBN={st.session_state.isbn_filter}")
-            if st.session_state.author_type_filter:
-                applied_filters.append(f"Author Type={st.session_state.author_type_filter}")
-            if st.session_state.multiple_open_positions_filter:
-                applied_filters.append(f"Author Status={st.session_state.multiple_open_positions_filter}")
+                filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
+
+            # Apply publish only filter
             if st.session_state.publish_only_filter:
-                applied_filters.append(f"Publish Type={st.session_state.publish_only_filter}")
+                filtered_books = filtered_books[filtered_books['is_publish_only'] == 1]
 
-            # Apply filters only if there are any
-            if applied_filters:
-                # Apply publisher filter
-                if st.session_state.publisher_filter:
-                    filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
+            # Apply thesis to book filter
+            if st.session_state.thesis_to_book_filter:
+                filtered_books = filtered_books[filtered_books['is_thesis_to_book'] == 1]
 
-                # Apply publish only filter
-                if st.session_state.publish_only_filter:
-                    filtered_books = filtered_books[filtered_books['is_publish_only'] == 1]
+            # Apply date filters
+            filtered_books = filter_books_by_date(
+                filtered_books,
+                None,
+                st.session_state.month_filter,
+                st.session_state.year_filter,
+                st.session_state.start_date_filter,
+                st.session_state.end_date_filter
+            )
 
-                # Apply date filters
-                filtered_books = filter_books_by_date(
-                    filtered_books,
-                    None,
-                    st.session_state.month_filter,
-                    st.session_state.year_filter,
-                    st.session_state.start_date_filter,
-                    st.session_state.end_date_filter
-                )
+            # Apply ISBN filter
+            if st.session_state.isbn_filter:
+                if st.session_state.isbn_filter == "Not Applied":
+                    filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 0)]
+                elif st.session_state.isbn_filter == "Not Received":
+                    filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 1)]
 
-                # Apply ISBN filter
-                if st.session_state.isbn_filter:
-                    if st.session_state.isbn_filter == "Not Applied":
-                        filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 0)]
-                    elif st.session_state.isbn_filter == "Not Received":
-                        filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 1)]
+            # Apply status filter
+            if st.session_state.status_filter:
+                if st.session_state.status_filter == "Pending Payment":
+                    pending_payment_query = """
+                        SELECT DISTINCT book_id
+                        FROM book_authors
+                        WHERE total_amount > 0 
+                        AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
+                    """
+                    pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
+                    matching_book_ids = pending_book_ids['book_id'].tolist()
+                    filtered_books = filtered_books[filtered_books['book_id'].isin(matching_book_ids)]
+                else:
+                    status_mapping = {"Delivered": 1, "On Going": 0}
+                    selected_status_value = status_mapping[st.session_state.status_filter]
+                    filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
 
-                # Apply status filter
-                if st.session_state.status_filter:
-                    if st.session_state.status_filter == "Pending Payment":
-                        pending_payment_query = """
-                            SELECT DISTINCT book_id
-                            FROM book_authors
-                            WHERE total_amount > 0 
-                            AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
-                        """
-                        pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
-                        matching_book_ids = pending_book_ids['book_id'].tolist()
-                        filtered_books = filtered_books[filtered_books['book_id'].isin(matching_book_ids)]
-                    else:
-                        status_mapping = {"Delivered": 1, "On Going": 0}
-                        selected_status_value = status_mapping[st.session_state.status_filter]
-                        filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
+            # Apply author type filter
+            if st.session_state.author_type_filter:
+                filtered_books = filtered_books[filtered_books['author_type'] == st.session_state.author_type_filter]
 
-                # Apply author type filter
-                if st.session_state.author_type_filter:
-                    filtered_books = filtered_books[filtered_books['author_type'] == st.session_state.author_type_filter]
+            # Apply multiple with open positions filter
+            if st.session_state.multiple_open_positions_filter:
+                filtered_books = filtered_books[
+                    (filtered_books['author_type'] == 'Multiple') &
+                    (filtered_books['book_id'].map(author_count_dict) < 4)
+                ]
 
-                # Apply multiple with open positions filter
-                if st.session_state.multiple_open_positions_filter:
-                    filtered_books = filtered_books[
-                        (filtered_books['author_type'] == 'Multiple') &
-                        (filtered_books['book_id'].map(author_count_dict) < 4)
-                    ]
-
-                st.success(f"Applied Filters: {', '.join(applied_filters)}")
+            st.success(f"Applied Filters: {', '.join(applied_filters)}")
 
 
 with srcol4:
@@ -6049,12 +6125,12 @@ PUBLISHER_STYLES = {
     "NEET/JEE": {"color": "#ffffff", "background": "#0288d1"}
 }
 
-# # Author type-specific styles
+# Author type-specific styles
 AUTHOR_TYPE_STYLES = {
-    "Single": {"color": "#15803d", "background": "#ecfdf5"},  # Teal with light teal background
-    "Double": {"color": "#15803d", "background": "#ecfdf5"},  # Purple with light purple background
-    "Triple": {"color": "#15803d", "background": "#ecfdf5"},  # Amber with light amber background
-    "Multiple": {"color": "#15803d", "background": "#ecfdf5"}  # Red with light red background
+    "Single": {"color": "#15803d", "background": "#e5fff3"},  # Teal with light teal background
+    "Double": {"color": "#15803d", "background": "#e5fff3"},  # Purple with light purple background
+    "Triple": {"color": "#15803d", "background": "#e5fff3"},  # Amber with light amber background
+    "Multiple": {"color": "#15803d", "background": "#e5fff3"}  # Red with light red background
 }
 
 # AUTHOR_TYPE_STYLES = {
@@ -6083,6 +6159,12 @@ def get_publish_badge(is_publish_only):
     """Generate publish-only badge if applicable."""
     if is_publish_only == 1:
         return generate_badge("Publish Only", "#c2410c", "#fff7ed")
+    return ""
+
+def get_thesis_to_book_badge(is_thesis_to_book):
+    """Generate publish-only badge if applicable."""
+    if is_thesis_to_book == 1:
+        return generate_badge("Thesis To Book", "#c2410c", "#fff7ed")
     return ""
 
 def get_publisher_badge(publisher):
@@ -6156,10 +6238,11 @@ with st.container(border=False):
                     author_count = author_count_dict.get(row['book_id'], 0)
                     author_badge = get_author_badge(row.get('author_type', 'Multiple'), author_count)
                     publish_badge = get_publish_badge(row.get('is_publish_only', 0))
+                    thesis_to_book_badge = get_thesis_to_book_badge(row.get('is_thesis_to_book', 0))
                     publisher_badge = get_publisher_badge(row.get('publisher', ''))
                     html = f"""
-                        {row['title']} {author_badge}{publish_badge}{publisher_badge}
-                        <div class="author-names">{authors_display}</div>
+                        {row['title']} {publish_badge}{thesis_to_book_badge}{publisher_badge}
+                        <div class="author-names">{authors_display}{author_badge}</div>
                         """
                     st.markdown(html, unsafe_allow_html=True)
                 with col3:

@@ -464,9 +464,10 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
         ("printing_confirmation", "Waiting for Print Confirmation")
     ]
 
-    # Exclude "writing" step if is_publish_only is 1
+    # Exclude "writing" step if is_publish_only or is_thesis_to_book is 1
     is_publish_only = book_row.get('is_publish_only', 0) == 1
-    if is_publish_only:
+    is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
+    if is_publish_only or is_thesis_to_book:
         checklist_sequence = [item for item in checklist_sequence if item[0] != "writing"]
 
     # Check print editions status
@@ -735,18 +736,23 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 export_df.to_excel(writer, sheet_name='Stuck_Reason_Details', index=False)
             excel_data = output.getvalue()
-            st.download_button(
-                label=":material/download: Export Data to Excel",
-                data=excel_data,
-                file_name=f"stuck_reason_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="tertiary"
-            )
+
+            col1, col2 = st.columns([1, 2], gap="small")
+            with col1:
+                st.download_button(
+                    label=":material/download: Export Data to Excel",
+                    data=excel_data,
+                    file_name=f"stuck_reason_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="tertiary",
+                    help="Export the detailed stuck reason data to an Excel file."
+                )
+            with col2:
+                if st.button(":material/auto_awesome_motion: Show Stuck Reason Sequence", help="This is the order in which stuck reasons are evaluated for books in the publishing proces", type="tertiary"):
+                    show_stuck_reason_sequence(is_publish_only=False)
 
     # Display the pie chart in the right column
     with col_chart:
-        if st.button(":material/auto_awesome_motion: Show Stuck Reason Sequence", help="This is the order in which stuck reasons are evaluated for books in the publishing proces", type="tertiary"):
-            show_stuck_reason_sequence(is_publish_only=False)
         #st.markdown("<h4 class='section-title'>Stuck Reason Distribution</h4>", unsafe_allow_html=True)
         if not reason_summary.empty:
             # Create a pie chart with Plotly
@@ -846,13 +852,14 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             ('Formatting', 'formatting_start', 'formatting_end'),
             ('Cover Design', 'cover_start', 'cover_end')
         ]
-        # Check if book is publish-only
+        # Check if book is publish-only or thesis-to-book
         is_publish_only = book_row.get('is_publish_only', 0) == 1
+        is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
         
         table_html = "<table class='compact-table'><tr><th>Operation</th><th>Status</th></tr>"
         for op_name, start_field, end_field in operations:
-            if op_name == 'Writing' and is_publish_only:
-                status = '📖 Publish Only'
+            if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
+                status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
             else:
                 start = book_row[start_field]
                 end = book_row[end_field]
@@ -898,7 +905,7 @@ conn = connect_db()
 # Fetch books from the database where deliver = 0
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
-       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, author_type, is_publish_only,
+       proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, is_thesis_to_book ,author_type, is_publish_only,
          apply_isbn, isbn
 FROM books
 WHERE deliver = 0
