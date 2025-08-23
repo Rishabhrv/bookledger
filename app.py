@@ -965,7 +965,7 @@ def export_data():
 ###################################################################################################################################
 
 
-@st.dialog("Manage Users", width="large", dismissible = True)
+@st.dialog("Manage Users", width="large")
 def manage_users(conn):
     # Check if user is admin
     if st.session_state.get("role", None) != "admin":
