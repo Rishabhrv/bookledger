@@ -5812,7 +5812,6 @@ c1,c2, c3 = st.columns([10,30,3], vertical_alignment="bottom")
 
 with c1:
     st.markdown("## 📚 AGPH Books")
-    st.caption(streamlit_version := st.__version__)
     
 with c2:
     st.caption(f":material/account_circle: Welcome! {user_name} ({user_role})")
