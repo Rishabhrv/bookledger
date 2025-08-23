@@ -707,9 +707,12 @@ def render_worker_completion_graph(books_df, selected_month, section):
         st.write(f"##### {section.capitalize()} Completed in {selected_month} by {selected_worker}")
         st.altair_chart(chart, use_container_width=True)
 
-    
 
 def render_metrics(books_df, selected_month, section, user_role):
+    # Configurable number of columns for writing section metrics
+    METRIC_COLUMNS = 7  # Change this to experiment with layout (e.g., 6, 8)
+
+
     # Convert selected_month (e.g., "April 2025") to date range
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
     month_start = selected_month_dt.replace(day=1).date()
@@ -746,19 +749,88 @@ def render_metrics(books_df, selected_month, section, user_role):
             st.cache_data.clear()
 
     # Go Back Button - Same Access as Pills
-    if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team Dashboard" in user_access):
+    if user_role == "admin" or (user_role == "user" and user_app == "main" and "Team Dashboard" in user_access):
         with col3:
             if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
                 st.switch_page('app.py')
 
-    col1, col2, col3 = st.columns(3, border=True)
-    with col1:
-        st.metric(f"Books in {selected_month}", total_books)
-    with col2:
-        st.metric(f"{section.capitalize()} Done in {selected_month}", completed_books)
-    with col3:
-        st.metric(f"Pending in {selected_month}", pending_books)
-    
+    # Metrics rendering
+    if section == "writing":
+        # Previous month total books
+        prev_month_dt = selected_month_dt - timedelta(days=31)
+        prev_month_start = prev_month_dt.replace(day=1).date()
+        prev_month_end = (prev_month_dt.replace(day=1) + timedelta(days=31)).replace(day=1).date() - timedelta(days=1)
+        prev_total_books = len(books_df[(books_df['Date'] >= prev_month_start) & (books_df['Date'] <= prev_month_end)])
+
+        # Worker-specific metrics
+        target_period = pd.Timestamp(selected_month_dt).to_period('M')
+        prev_period = pd.Timestamp(prev_month_dt).to_period('M')
+
+        # Filter completed books for current month
+        completed_current = books_df[
+            books_df['Writing By'].notnull() &
+            books_df['Writing End'].notnull() &
+            (books_df['Writing End'] != '0000-00-00 00:00:00') &
+            (books_df['Writing End'].dt.to_period('M') == target_period)
+        ]
+        current_worker_counts = completed_current.groupby('Writing By').size().reset_index(name='Book Count')
+
+        # Filter completed books for previous month
+        completed_prev = books_df[
+            books_df['Writing By'].notnull() &
+            books_df['Writing End'].notnull() &
+            (books_df['Writing End'] != '0000-00-00 00:00:00') &
+            (books_df['Writing End'].dt.to_period('M') == prev_period)
+        ]
+        prev_worker_counts = completed_prev.groupby('Writing By').size().reset_index(name='Prev Book Count')
+
+        # Merge counts, fill missing values with 0
+        worker_counts = current_worker_counts.merge(prev_worker_counts, on='Writing By', how='outer').fillna(0)
+        worker_counts['Book Count'] = worker_counts['Book Count'].astype(int)
+        worker_counts['Prev Book Count'] = worker_counts['Prev Book Count'].astype(int)
+        worker_num = len(worker_counts['Writing By']) + 1 
+        
+        with st.container(border=True):
+            # Create list of all metrics
+            metrics = [
+                {"label": f"Books in {selected_month}", "value": total_books, "delta": f"{prev_total_books} Last Month"},
+            ]
+            for _, row in worker_counts.iterrows():
+                metrics.append({
+                    "label": row['Writing By'],
+                    "value": row['Book Count'],
+                    "delta": f"{row['Prev Book Count']} Last Month"
+                })
+
+            # Render metrics in a grid
+            cols = st.columns(worker_num)
+            for idx, metric in enumerate(metrics):
+                col_idx = idx % worker_num
+                if col_idx == 0 and idx > 0:
+                    cols = st.columns(worker_num)  # Start a new row
+                with cols[col_idx]:
+                    # Extract numeric delta value for comparison (remove " (Prev Month)" and convert to int)
+                    try:
+                        delta_value = int(metric["delta"].split(" ")[0])
+                        delta_color = "inverse" if delta_value <= 3 else "normal"  # Red for <= 3, Green for > 3
+                    except ValueError:
+                        delta_color = "normal"  # Default to normal if delta isn't numeric
+                    st.metric(
+                        label=metric["label"],
+                        value=metric["value"],
+                        delta= metric["delta"],
+                        delta_color=delta_color
+                    )
+    else:
+        # Original layout for non-writing sections
+        col1, col2, col3 = st.columns(3, border=True)
+        with col1:
+            st.metric(f"Books in {selected_month}", total_books)
+        with col2:
+            st.metric(f"{section.capitalize()} Done in {selected_month}", completed_books)
+        with col3:
+            st.metric(f"Pending in {selected_month}", pending_books)
+
     # Render worker completion graph for non-Cover sections in an expander using full books_df
     if section != "cover":
         with st.expander(f"Show Completion Graph and Table for {section.capitalize()}, {selected_month}"):
@@ -800,7 +872,7 @@ def get_worker_by(start, worker_by, worker_map=None):
 
 
 def fetch_book_details(book_id, conn):
-    query = f"SELECT title FROM books WHERE book_id = {book_id}"
+    query = f"SELECT title, book_note FROM books WHERE book_id = {book_id}"
     return conn.query(query, show_spinner=False)
 
 
@@ -1111,7 +1183,7 @@ def correction_dialog(book_id, conn, section):
             st.rerun()
 
 
-@st.dialog("Edit Section Details", width='large')
+@st.dialog("Edit Details", width='large')
 def edit_section_dialog(book_id, conn, section):
     # Map section to display name and database columns
     section_config = {
@@ -1129,14 +1201,20 @@ def edit_section_dialog(book_id, conn, section):
     config = section_config.get(section, section_config["writing"])
     display_name = config["display"]
 
-    # Fetch book title and current book_pages
+    # Fetch book title, book note, and current book_pages
     book_details = fetch_book_details(book_id, conn)
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
+        book_note = book_details.iloc[0].get('book_note', None)
         current_book_pages = book_details.iloc[0].get('book_pages', 0)
         st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
+        # Display book note only if it exists
+        if book_note:
+            st.markdown('<div class="field-label">Book Note or Instructions</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="background-color: #e6f3ff; padding: 12px; border-radius: 6px; border: 1px solid #d1e7ff;">{book_note}</div>', unsafe_allow_html=True)
     else:
         book_title = "Unknown Title"
+        book_note = None
         current_book_pages = 0
         st.markdown(f"### {display_name} Details for Book ID: {book_id}")
         st.warning("Book title not found.")
@@ -1287,55 +1365,72 @@ def edit_section_dialog(book_id, conn, section):
         if submit:
             if start and end and start > end:
                 st.error("Start must be before End.")
+                st.toast("❌ Invalid date range", icon="🚫")
             else:
                 with st.spinner(f"Saving {display_name} details..."):
-                    sleep(2)
-                    updates = {
-                        config["start"]: start,
-                        config["end"]: end,
-                        config["by"]: worker
-                    }
-                    if section in ["writing", "proofreading", "formatting"]:
-                        updates["book_pages"] = book_pages
-                    # Remove None values from updates
-                    updates = {k: v for k, v in updates.items() if v is not None}
-                    with conn.session as s:
-                        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
-                        query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
-                        params = updates.copy()
-                        params["id"] = int(book_id)
-                        s.execute(text(query), params)
-                        s.commit()
-                    
-                    # Log the form submission
-                    details = (
-                        f"Book ID: {book_id}, {display_name} Team Member: {worker or 'None'}, "
-                        f"Start: {start or 'None'}, End: {end or 'None'}"
-                    )
-                    if section in ["writing", "proofreading", "formatting"]:
-                        details += f", Pages: {book_pages}"
-                    try:
-                        log_activity(
-                            conn,
-                            st.session_state.user_id,
-                            st.session_state.username,
-                            st.session_state.session_id,
-                            f"updated {section} details",
-                            details
-                        )
-                    except Exception as e:
-                        st.error(f"Error logging {display_name.lower()} details: {str(e)}")
-                    
-                    st.success(f"✔️ Updated {display_name} details")
-                    # Clear new worker input after saving
-                    st.session_state[f"{section}_new_worker_{book_id}"] = ""
                     sleep(1)
-                    st.rerun()
+                    try:
+                        updates = {
+                            config["start"]: start,
+                            config["end"]: end,
+                            config["by"]: worker
+                        }
+                        if section in ["writing", "proofreading", "formatting"]:
+                            updates["book_pages"] = book_pages
+                        # Remove None values from updates
+                        updates = {k: v for k, v in updates.items() if v is not None}
+                        
+                        with conn.session as s:
+                            try:
+                                set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                                query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
+                                params = updates.copy()
+                                params["id"] = int(book_id)
+                                s.execute(text(query), params)
+                                s.commit()
+                            except Exception as e:
+                                s.rollback()  # Rollback on database error
+                                raise Exception(f"Database error: {str(e)}")
+
+                        # Log the form submission
+                        details = (
+                            f"Book ID: {book_id}, {display_name} Team Member: {worker or 'None'}, "
+                            f"Start: {start or 'None'}, End: {end or 'None'}"
+                        )
+                        if section in ["writing", "proofreading", "formatting"]:
+                            details += f", Pages: {book_pages}"
+                        
+                        try:
+                            log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                f"updated {section} details",
+                                details
+                            )
+                        except Exception as e:
+                            st.warning(f"Warning: {display_name} details saved but failed to log activity: {str(e)}")
+                        
+                        st.success(f"✔️ Updated {display_name} details")
+                        st.toast(f"Saved {display_name} details for Book ID {book_id}", icon="💾")
+                        
+                        # Clear new worker input after saving
+                        st.session_state[f"{section}_new_worker_{book_id}"] = ""
+                        sleep(2)
+                        st.rerun()
+
+                    except Exception as e:
+                        st.error(f"❌ Failed to save {display_name} details: {str(e)}")
+                        st.toast(f"Error saving {display_name} details for Book ID {book_id}", icon="🚫")
+                        sleep(2)
 
         elif cancel:
             for key in keys:
                 st.session_state.pop(f"{key}_{book_id}", None)
             st.rerun()
+
+        
 
 
 def render_table(books_df, title, column_sizes, color, section, role, is_running=False):
@@ -1852,6 +1947,9 @@ for section, config in sections.items():
             st.session_state[f"show_{section}_completed"] = False
 
         selected_month = render_month_selector(books_df)
+        if selected_month is None:
+            st.warning("Please select a month to view metrics.")
+            st.stop()
         render_metrics(books_df, selected_month, section, role_user)
         render_table(running_books, f"{section.capitalize()} Running", column_sizes_running, config["color"], section, config["role"], is_running=True)
         render_table(pending_books, f"{section.capitalize()} Pending", column_sizes_pending, config["color"], section, config["role"], is_running=False)

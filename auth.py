@@ -49,6 +49,13 @@ def clear_auth_session():
         if key in st.session_state:
             del st.session_state[key]
 
+@st.dialog("Authentication Failed", dismissible = False)
+def error_dialog(error_message):
+    st.error(error_message)
+    if st.link_button("Login:material/open_in_new:", url=FLASK_LOGIN_URL, type = "tertiary"):
+        clear_auth_session()
+        st.stop()
+
 def validate_token():
     # Check if token and user details are cached and not near expiry
     current_time = time.time()
@@ -64,9 +71,7 @@ def validate_token():
         token = st.query_params.get("token")
         if not token:
             logger.error("No token provided")
-            st.error("Access denied: Please log in first")
-            st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-            st.stop()
+            error_dialog("Access denied: Please log in first.")
         st.session_state.token = token if isinstance(token, str) else token[0]
 
     token = st.session_state.token
@@ -136,37 +141,23 @@ def validate_token():
 
     except jwt.ExpiredSignatureError as e:
         logger.error(f"Token expired: {str(e)}", exc_info=True)
-        st.error("Access denied: Token expired. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog("Access denied: Token expired. Please log in again.")
+        #st.error("Access denied: Token expired. Please log in again.")
+        #st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
+        #clear_auth_session()
+        #st.stop()
     except jwt.InvalidSignatureError as e:
         logger.error(f"Invalid token signature: {str(e)}", exc_info=True)
-        st.error("Access denied: Invalid token signature. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog("Access denied: Invalid token signature. Please log in again.")
     except jwt.DecodeError as e:
         logger.error(f"Token decoding failed: {str(e)}", exc_info=True)
-        st.error("Access denied: Token decoding failed. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog("Access denied: Token decoding failed. Please log in again.")
     except jwt.InvalidTokenError as e:
         logger.error(f"Invalid token: {str(e)}", exc_info=True)
-        st.error(f"Access denied: {str(e)}. Please log in again.")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog(f"Access denied: {str(e)}. Please log in again.")
     except requests.RequestException as e:
         logger.error(f"Request to Flask failed: {str(e)}", exc_info=True)
-        st.error(f"Access denied: Unable to contact authentication server. Error: {str(e)}")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog(f"Access denied: Unable to contact authentication server.")
     except Exception as e:
         logger.error(f"Unexpected error in validate_token: {str(e)}", exc_info=True)
-        st.error(f"Access denied: An unexpected error occurred. Error: {str(e)}")
-        st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        clear_auth_session()
-        st.stop()
+        error_dialog(f"Unexpected error in validate_token: {str(e)}", exc_info=True)

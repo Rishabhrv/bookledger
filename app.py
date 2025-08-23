@@ -964,7 +964,8 @@ def export_data():
 ##################################--------------- Manage Users ----------------------------##################################
 ###################################################################################################################################
 
-@st.dialog("Manage Users", width="large")
+
+@st.dialog("Manage Users", width="large", dismissible = True)
 def manage_users(conn):
     # Check if user is admin
     if st.session_state.get("role", None) != "admin":
@@ -994,7 +995,7 @@ def manage_users(conn):
         if not users:
             st.error("❌ No users found in database.")
         else:
-            st.markdown("### Users Overview", unsafe_allow_html=True)
+            #st.markdown("### Users Overview", unsafe_allow_html=True)
             # Show Password checkbox with logging
             show_passwords = st.checkbox(
                 "Show Passwords",
@@ -1002,6 +1003,9 @@ def manage_users(conn):
                 key="toggle_passwords",
                 help="Check to reveal all passwords in the table"
             )
+            if show_passwords:
+                st.toast("Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️")
+
             # Log checkbox toggle
             if show_passwords != st.session_state.show_passwords_prev:
                 log_activity(
@@ -1157,6 +1161,8 @@ def manage_users(conn):
                             f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
                         )
                         st.success("User Added Successfully!", icon="✔️")
+                        st.toast("User Added Successfully!", icon="✔️")
+                        time.sleep(1)
                         st.rerun()
 
     # Tab 2: Edit Users
@@ -1165,11 +1171,11 @@ def manage_users(conn):
             st.error("❌ No users found in database.")
         else:
             with st.container(border=True):
-                st.markdown("### Select User", unsafe_allow_html=True)
+                #st.markdown("### Select User", unsafe_allow_html=True)
                 user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
                 selected_user_name = st.selectbox("Select User", options=list(user_dict.keys()), key="user_select")
                 selected_user = user_dict[selected_user_name]
-                st.markdown(f"**ID:** <span style='color: #2196F3'>{selected_user.id}</span>", unsafe_allow_html=True)
+                #st.markdown(f"**ID:** <span style='color: #2196F3'>{selected_user.id}</span>", unsafe_allow_html=True)
 
             with st.container(border=True):
                 st.markdown(f"### Editing: <span style='color: #4CAF50'>{selected_user.username}</span>", unsafe_allow_html=True)
@@ -1285,6 +1291,8 @@ def manage_users(conn):
                                         details
                                     )
                                 st.success("User Updated Successfully!", icon="✔️")
+                                st.toast("User Updated Successfully!", icon="✔️")
+                                time.sleep(2)
                                 st.rerun()
 
                 with btn_col2:
@@ -1314,7 +1322,9 @@ def manage_users(conn):
                                     f"User ID: {selected_user.id}, Username: {selected_user.username}"
                                 )
                                 st.success("User Deleted Successfully!", icon="✔️")
+                                st.toast("User Deleted Successfully!", icon="✔️")
                                 st.session_state.confirm_delete_user_id = None
+                                time.sleep(2)
                                 st.rerun()
     
     # Tab 4: Export Data (no logging assumed)
@@ -1432,8 +1442,10 @@ def edit_author_detail(conn):
                                     f"Author ID: {selected_author.author_id}, {', '.join(changes)}"
                                 )
                             st.success("Author Updated Successfully!", icon="✔️")
+                            st.toast("Author Updated Successfully!", icon="✔️")
                         except Exception as e:
                             st.error(f"Failed to save changes: {str(e)}")
+                            st.toast(f"Failed to save changes: {str(e)}", icon="❌")
 
         with btn_col2:
             delete_key = f"delete_{selected_author.author_id}"
@@ -1477,11 +1489,14 @@ def edit_author_detail(conn):
                                 f"Author ID: {selected_author.author_id}, Name: {selected_author.name}"
                             )
                             st.success("Author Deleted Successfully!", icon="✔️")
+                            st.toast("Author Deleted Successfully!", icon="✔️")
                             st.session_state["confirm_delete"] = False
+                            time.sleep(1)
                             # Refresh the dialog to update author list
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to delete author: {str(e)}")
+                            st.toast(f"Failed to delete author: {str(e)}", icon="❌")
 
 
 ###################################################################################################################################
@@ -1509,7 +1524,7 @@ def add_book_dialog(conn):
 
     # --- UI Components Inside Dialog ---
     def publisher_section():
-        with st.container(border=True):
+        with st.expander("Select Publisher", expanded=False):
             st.markdown("<h5 style='color: #4CAF50;'>Publisher</h5>", unsafe_allow_html=True)
             publisher = st.radio(
                 "Select Publisher",
@@ -1534,7 +1549,7 @@ def add_book_dialog(conn):
             with col3:
                 # Radio buttons for author type
                 author_type = st.radio(
-                    "Author Type",
+                    "Author Type:",
                     ["Multiple", "Single", "Double", "Triple"],
                     key="author_type_radio",
                     horizontal=True,
@@ -1544,7 +1559,7 @@ def add_book_dialog(conn):
             with col4:
                 # Segmented buttons for book mode (only 2 options)
                 book_mode = st.segmented_control(
-                    "Book Type",
+                    "Book Type:",
                     options=["Publish Only", "Thesis to Book"],
                     key="book_mode_segment",
                     disabled=not toggles_enabled
@@ -1562,10 +1577,8 @@ def add_book_dialog(conn):
                 "publisher": publisher
             }
 
-
-
     def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled):
-        with st.container(border=True):
+        with st.expander("Syllabus & Book Note", expanded=False):
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
             syllabus_file = None
             if not is_publish_only and not is_thesis_to_book and toggles_enabled:
@@ -1573,7 +1586,8 @@ def add_book_dialog(conn):
                     "Upload Book Syllabus",
                     type=["pdf", "docx", "jpg", "jpeg", "png"],
                     key="syllabus_upload",
-                    help="Upload the book syllabus as a PDF, DOCX, or image file."
+                    help="Upload the book syllabus as a PDF, DOCX, or image file.",
+                    label_visibility="collapsed"
                 )
             else:
                 if is_publish_only:
@@ -1582,7 +1596,17 @@ def add_book_dialog(conn):
                     st.info("Syllabus upload is disabled for Thesis to Book conversions.")
                 if not toggles_enabled:
                     st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
-            return syllabus_file
+            
+            st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
+            book_note = st.text_area(
+                "Book Note or Instructions",
+                key="book_note",
+                help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
+                max_chars=1000,
+                placeholder="Enter notes or special instructions for the book here..."
+            )
+            
+            return syllabus_file, book_note
 
     def author_details_section(conn, author_type, publisher):
         author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
@@ -1755,8 +1779,9 @@ def add_book_dialog(conn):
         publisher = publisher_section()
         book_data = book_details_section(publisher)
         author_data = author_details_section(conn, book_data["author_type"], publisher)
-        syllabus_file = syllabus_upload_section(book_data["is_publish_only"], book_data["is_thesis_to_book"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
+        syllabus_file, book_note = syllabus_upload_section(book_data["is_publish_only"], book_data["is_thesis_to_book"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
         book_data["syllabus_file"] = syllabus_file
+        book_data["book_note"] = book_note
 
     # --- Save, Clear, and Cancel Buttons ---
     col1, col2 = st.columns([7, 1])
@@ -1786,10 +1811,10 @@ def add_book_dialog(conn):
                                     st.error(f"Failed to save syllabus file: {str(e)}")
                                     raise
                             
-                            # Insert book
+                            # Insert book with book note
                             s.execute(text("""
-                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path)
-                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path)
+                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path, book_note)
+                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path, :book_note)
                             """), params={
                                 "title": book_data["title"],
                                 "date": book_data["date"],
@@ -1797,7 +1822,8 @@ def add_book_dialog(conn):
                                 "is_publish_only": book_data["is_publish_only"],
                                 "is_thesis_to_book": book_data["is_thesis_to_book"],
                                 "publisher": book_data["publisher"],
-                                "syllabus_path": syllabus_path
+                                "syllabus_path": syllabus_path,
+                                "book_note": book_data["book_note"]
                             })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
@@ -1835,18 +1861,21 @@ def add_book_dialog(conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added book",
-                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}"
+                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}"
                             )
 
                             st.success("Book and Authors Saved Successfully!", icon="✔️")
+                            st.toast("Book and Authors Saved Successfully!", icon="✔️")
                             st.session_state.authors = [
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
                             ]
+                            st.sleep(1)
                             st.rerun()
                         except Exception as db_error:
                             s.rollback()
                             st.error(f"Database error: {db_error}")
+                            st.toast(f"Database error: {db_error}", icon="❌")
 
     with col2:
         if st.button("Cancel", key="dialog_cancel", type="secondary"):
@@ -1906,9 +1935,31 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     if f"is_thesis_to_book_{book_id}" not in st.session_state:
         st.session_state[f"is_thesis_to_book_{book_id}"] = current_is_thesis_to_book
 
+
     # Main container
     with st.container():
         st.markdown(f"### {book_id} - {current_title}{publisher_badge}", unsafe_allow_html=True)
+
+        st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
+        with st.expander("Authors", expanded=False):
+            authors_data = fetch_book_authors(book_id, conn)
+            if authors_data.empty:
+                st.info("No authors associated with this book.")
+            else:
+                authors_data = authors_data.sort_values(by='author_position')
+                with st.container(border=False):
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown("#### 👤 Author Name")
+                    with col2:
+                        st.markdown("#### 🏷️ Position")
+                for _, author in authors_data.iterrows():
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        st.markdown(f"<div style='margin-bottom: 6px;'>➤ {author['name']}</div>", unsafe_allow_html=True)
+                    with col2:
+                        position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
+                        st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
 
         # Book Details Section
         st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
@@ -1962,29 +2013,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
             if not toggles_enabled:
                 st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
             st.markdown('</div>', unsafe_allow_html=True)
-
-        
-        st.markdown("<h5 style='color: #4CAF50;'>Associated Authors</h5>", unsafe_allow_html=True)
-        with st.expander("Authors", expanded=False):
-            authors_data = fetch_book_authors(book_id, conn)
-            if authors_data.empty:
-                st.info("No authors associated with this book.")
-            else:
-                authors_data = authors_data.sort_values(by='author_position')
-                with st.container(border=False):
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.markdown("#### 👤 Author Name")
-                    with col2:
-                        st.markdown("#### 🏷️ Position")
-                for _, author in authors_data.iterrows():
-                    col1, col2 = st.columns([2, 1])
-                    with col1:
-                        st.markdown(f"<div style='margin-bottom: 6px;'>➤ {author['name']}</div>", unsafe_allow_html=True)
-                    with col2:
-                        position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
-                        st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
-
+            
+        publisher = current_publisher
         if not has_open_author_position(conn, book_id):
             # ISBN Details Section
             st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
@@ -2049,11 +2079,74 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         else:
             st.info("This book has open author positions. ISBN management is not applicable.")
 
+        def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled, current_syllabus_path=None, current_book_note=None):
+            with st.expander("Syllabus & Book Note", expanded=False):
+                st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
+                syllabus_file = None
+                if not is_publish_only and not is_thesis_to_book and toggles_enabled:
+                    syllabus_file = st.file_uploader(
+                        "Upload Book Syllabus",
+                        type=["pdf", "docx", "jpg", "jpeg", "png"],
+                        key=f"syllabus_upload_{book_id}",
+                        help="Upload the book syllabus as a PDF, DOCX, or image file."
+                    )
+                else:
+                    if is_publish_only:
+                        st.info("Syllabus upload is disabled for Publish Only books.")
+                    if is_thesis_to_book:
+                        st.info("Syllabus upload is disabled for Thesis to Book conversions.")
+                    if not toggles_enabled:
+                        st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
+                
+                st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
+                book_note = st.text_area(
+                    "Book Note or Instructions",
+                    value=current_book_note if current_book_note else "",
+                    key=f"book_note_{book_id}",
+                    help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
+                    max_chars=1000,
+                    placeholder="Enter notes or special instructions for the book here..."
+                )
+                
+                return syllabus_file, book_note
+
+        # Fetch current syllabus and book note for the book
+        with conn.session as s:
+            result = s.execute(text("SELECT syllabus_path, book_note FROM books WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+            current_syllabus_path = result[0] if result else None
+            current_book_note = result[1] if result else None
+
+        # Add syllabus and book note section
+        syllabus_file, book_note = syllabus_upload_section(
+            new_is_publish_only,
+            new_is_thesis_to_book,
+            publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"],
+            current_syllabus_path,
+            current_book_note
+        )
+
         # Save Button
         if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
             with st.spinner("Saving changes..."):
                 with conn.session as s:
                     try:
+                        # Handle syllabus file upload
+                        syllabus_path = current_syllabus_path
+                        if syllabus_file and not new_is_publish_only and not new_is_thesis_to_book and publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]:
+                            file_extension = os.path.splitext(syllabus_file.name)[1]
+                            unique_filename = f"syllabus_{new_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
+                            syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                            if not os.access(UPLOAD_DIR, os.W_OK):
+                                st.error(f"No write permission for {UPLOAD_DIR}.")
+                                raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
+                            try:
+                                with open(syllabus_path_temp, "wb") as f:
+                                    f.write(syllabus_file.getbuffer())
+                                syllabus_path = syllabus_path_temp
+                            except Exception as e:
+                                st.error(f"Failed to save syllabus file: {str(e)}")
+                                raise
+
                         # Track changes for logging
                         changes = []
                         if new_title != current_title:
@@ -2072,6 +2165,10 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                             changes.append(f"Updated ISBN to '{new_isbn}'")
                         if apply_isbn and receive_isbn and isbn_receive_date != current_isbn_receive_date:
                             changes.append(f"Updated ISBN Receive Date to '{isbn_receive_date}'")
+                        if syllabus_path != current_syllabus_path:
+                            changes.append(f"Updated syllabus file to '{syllabus_path}'")
+                        if book_note != current_book_note:
+                            changes.append(f"Updated book note to '{book_note[:50] + '...' if book_note else 'None'}'")
 
                         # Update database
                         if apply_isbn and receive_isbn and new_isbn:
@@ -2084,7 +2181,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         title = :title, 
                                         date = :date,
                                         is_publish_only = :is_publish_only,
-                                        is_thesis_to_book = :is_thesis_to_book
+                                        is_thesis_to_book = :is_thesis_to_book,
+                                        syllabus_path = :syllabus_path,
+                                        book_note = :book_note
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2095,6 +2194,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
                                     "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
+                                    "syllabus_path": syllabus_path,
+                                    "book_note": book_note,
                                     "book_id": book_id
                                 }
                             )
@@ -2108,7 +2209,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         title = :title, 
                                         date = :date,
                                         is_publish_only = :is_publish_only,
-                                        is_thesis_to_book = :is_thesis_to_book
+                                        is_thesis_to_book = :is_thesis_to_book,
+                                        syllabus_path = :syllabus_path,
+                                        book_note = :book_note
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2117,6 +2220,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
                                     "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
+                                    "syllabus_path": syllabus_path,
+                                    "book_note": book_note,
                                     "book_id": book_id
                                 }
                             )
@@ -2130,7 +2235,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         title = :title, 
                                         date = :date,
                                         is_publish_only = :is_publish_only,
-                                        is_thesis_to_book = :is_thesis_to_book
+                                        is_thesis_to_book = :is_thesis_to_book,
+                                        syllabus_path = :syllabus_path,
+                                        book_note = :book_note
                                     WHERE book_id = :book_id
                                 """),
                                 {
@@ -2139,6 +2246,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     "date": new_date,
                                     "is_publish_only": 1 if new_is_publish_only else 0,
                                     "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
+                                    "syllabus_path": syllabus_path,
+                                    "book_note": book_note,
                                     "book_id": book_id
                                 }
                             )
@@ -2157,6 +2266,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                             )
 
                         st.success("Book Details Updated Successfully!", icon="✔️")
+                        st.toast("Book details updated successfully!", icon="✅")
                         time.sleep(1)
                         st.rerun()
                     except Exception as db_error:
@@ -3846,171 +3956,173 @@ def edit_author_dialog(book_id, conn):
                 return False, f"Too many authors. {author_type} allows up to {max_allowed} authors."
 
             return True, ""
+        
 
-        # Render author input forms
-        st.markdown(f"### Add Up to {available_slots} New Authors")
-        all_authors = get_all_authors(conn)
-        author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
-        unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
-        agent_options = ["Select Agent"] + ["Add New..."] + unique_agents
-        consultant_options = ["Select Consultant"] + ["Add New..."] + unique_consultants
-        existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
-        existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
+        with st.expander("Add New Authors", expanded=False):
+            # Render author input forms
+            st.markdown(f"### Add Up to {available_slots} New Authors")
+            all_authors = get_all_authors(conn)
+            author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+            unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+            agent_options = ["Select Agent"] + ["Add New..."] + unique_agents
+            consultant_options = ["Select Consultant"] + ["Add New..."] + unique_consultants
+            existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
+            existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
 
-        for i in range(available_slots):
-            with st.expander(f"New Author {i+1}", expanded=False):
-                disabled = existing_author_count + i >= max_authors_allowed
-                if disabled:
-                    st.warning(f"⚠️ Disabled: Maximum {max_authors_allowed} authors reached for {selected_author_type} mode.")
+            for i in range(available_slots):
+                with st.expander(f"New Author {i+1}", expanded=False):
+                    disabled = existing_author_count + i >= max_authors_allowed
+                    if disabled:
+                        st.warning(f"⚠️ Disabled: Maximum {max_authors_allowed} authors reached for {selected_author_type} mode.")
 
-                selected_author = st.selectbox(
-                    f"Select Author {i+1}",
-                    author_options,
-                    key=f"new_author_select_{i}",
-                    disabled=disabled
-                )
-
-                if selected_author != "Add New Author" and selected_author and not disabled:
-                    selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
-                    selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
-                    if selected_author_details:
-                        st.session_state.new_authors[i].update({
-                            "name": selected_author_details.name,
-                            "email": selected_author_details.email,
-                            "phone": selected_author_details.phone,
-                            "author_id": selected_author_details.author_id
-                        })
-                elif selected_author == "Add New Author" and not disabled:
-                    st.session_state.new_authors[i]["author_id"] = None
-
-                col1, col2 = st.columns(2)
-                st.session_state.new_authors[i]["name"] = col1.text_input(
-                    f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
-                    disabled=disabled
-                )
-                available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
-                                    (existing_positions + [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]])]
-                st.session_state.new_authors[i]["author_position"] = col2.selectbox(
-                    f"Position {i+1}",
-                    available_positions,
-                    key=f"new_author_position_{i}",
-                    disabled=disabled or not available_positions
-                ) if available_positions else st.error("❌ No available positions left.")
-
-                col3, col4 = st.columns(2)
-                st.session_state.new_authors[i]["phone"] = col3.text_input(
-                    f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
-                    disabled=disabled
-                )
-                st.session_state.new_authors[i]["email"] = col4.text_input(
-                    f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
-                    disabled=disabled
-                )
-
-                col5, col6 = st.columns(2)
-                selected_agent = col5.selectbox(
-                    f"Corresponding Agent {i+1}",
-                    agent_options,
-                    index=agent_options.index(st.session_state.new_authors[i]["corresponding_agent"]) if st.session_state.new_authors[i]["corresponding_agent"] in unique_agents else 0,
-                    key=f"new_agent_select_{i}",
-                    disabled=disabled
-                )
-                if selected_agent == "Add New..." and not disabled:
-                    st.session_state.new_authors[i]["corresponding_agent"] = col5.text_input(
-                        f"New Agent Name {i+1}", key=f"new_agent_input_{i}"
+                    selected_author = st.selectbox(
+                        f"Select Author {i+1}",
+                        author_options,
+                        key=f"new_author_select_{i}",
+                        disabled=disabled
                     )
-                elif selected_agent != "Select Agent" and not disabled:
-                    st.session_state.new_authors[i]["corresponding_agent"] = selected_agent
-                else:
-                    st.session_state.new_authors[i]["corresponding_agent"] = ""
 
-                selected_consultant = col6.selectbox(
-                    f"Publishing Consultant {i+1}",
-                    consultant_options,
-                    index=consultant_options.index(st.session_state.new_authors[i]["publishing_consultant"]) if st.session_state.new_authors[i]["publishing_consultant"] in unique_consultants else 0,
-                    key=f"new_consultant_select_{i}",
-                    disabled=disabled
-                )
-                if selected_consultant == "Add New..." and not disabled:
-                    st.session_state.new_authors[i]["publishing_consultant"] = col6.text_input(
-                        f"New Consultant Name {i+1}", key=f"new_consultant_input_{i}"
+                    if selected_author != "Add New Author" and selected_author and not disabled:
+                        selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
+                        selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
+                        if selected_author_details:
+                            st.session_state.new_authors[i].update({
+                                "name": selected_author_details.name,
+                                "email": selected_author_details.email,
+                                "phone": selected_author_details.phone,
+                                "author_id": selected_author_details.author_id
+                            })
+                    elif selected_author == "Add New Author" and not disabled:
+                        st.session_state.new_authors[i]["author_id"] = None
+
+                    col1, col2 = st.columns(2)
+                    st.session_state.new_authors[i]["name"] = col1.text_input(
+                        f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
+                        disabled=disabled
                     )
-                elif selected_consultant != "Select Consultant" and not disabled:
-                    st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
-                else:
-                    st.session_state.new_authors[i]["publishing_consultant"] = ""
+                    available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
+                                        (existing_positions + [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]])]
+                    st.session_state.new_authors[i]["author_position"] = col2.selectbox(
+                        f"Position {i+1}",
+                        available_positions,
+                        key=f"new_author_position_{i}",
+                        disabled=disabled or not available_positions
+                    ) if available_positions else st.error("❌ No available positions left.")
 
-        # Add or Cancel buttons
-        col1, col2 = st.columns([7, 1])
-        with col1:
-            if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
-                errors = []
-                for i, author in enumerate(st.session_state.new_authors):
-                    if author["name"]:  # Only validate if author has a name
-                        is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, 
-                                                                st.session_state.new_authors, i, selected_author_type)
-                        if not is_valid:
-                            errors.append(f"Author {i+1}: {error_message}")
-                if errors:
-                    for error in errors:
-                        st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
-                else:
-                    try:
-                        authors_added = False
-                        added_authors = []  # Track added authors for logging
-                        with conn.session as s:
-                            for author in st.session_state.new_authors:
-                                if author["name"]:  # Only process non-empty authors
-                                    author_id_to_link = author["author_id"]
-                                    if not author_id_to_link:  # New author
-                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
-                                        if not author_id_to_link:
-                                            st.error(f"Failed to insert author {author['name']}")
-                                            continue
-                                    # Insert into book_authors
-                                    s.execute(
-                                        text("""
-                                            INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                            VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                        """),
-                                        params={
-                                            "book_id": book_id,
+                    col3, col4 = st.columns(2)
+                    st.session_state.new_authors[i]["phone"] = col3.text_input(
+                        f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
+                        disabled=disabled
+                    )
+                    st.session_state.new_authors[i]["email"] = col4.text_input(
+                        f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
+                        disabled=disabled
+                    )
+
+                    col5, col6 = st.columns(2)
+                    selected_agent = col5.selectbox(
+                        f"Corresponding Agent {i+1}",
+                        agent_options,
+                        index=agent_options.index(st.session_state.new_authors[i]["corresponding_agent"]) if st.session_state.new_authors[i]["corresponding_agent"] in unique_agents else 0,
+                        key=f"new_agent_select_{i}",
+                        disabled=disabled
+                    )
+                    if selected_agent == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = col5.text_input(
+                            f"New Agent Name {i+1}", key=f"new_agent_input_{i}"
+                        )
+                    elif selected_agent != "Select Agent" and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = selected_agent
+                    else:
+                        st.session_state.new_authors[i]["corresponding_agent"] = ""
+
+                    selected_consultant = col6.selectbox(
+                        f"Publishing Consultant {i+1}",
+                        consultant_options,
+                        index=consultant_options.index(st.session_state.new_authors[i]["publishing_consultant"]) if st.session_state.new_authors[i]["publishing_consultant"] in unique_consultants else 0,
+                        key=f"new_consultant_select_{i}",
+                        disabled=disabled
+                    )
+                    if selected_consultant == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = col6.text_input(
+                            f"New Consultant Name {i+1}", key=f"new_consultant_input_{i}"
+                        )
+                    elif selected_consultant != "Select Consultant" and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
+                    else:
+                        st.session_state.new_authors[i]["publishing_consultant"] = ""
+
+            # Add or Cancel buttons
+            col1, col2 = st.columns([7, 1])
+            with col1:
+                if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
+                    errors = []
+                    for i, author in enumerate(st.session_state.new_authors):
+                        if author["name"]:  # Only validate if author has a name
+                            is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, 
+                                                                    st.session_state.new_authors, i, selected_author_type)
+                            if not is_valid:
+                                errors.append(f"Author {i+1}: {error_message}")
+                    if errors:
+                        for error in errors:
+                            st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
+                    else:
+                        try:
+                            authors_added = False
+                            added_authors = []  # Track added authors for logging
+                            with conn.session as s:
+                                for author in st.session_state.new_authors:
+                                    if author["name"]:  # Only process non-empty authors
+                                        author_id_to_link = author["author_id"]
+                                        if not author_id_to_link:  # New author
+                                            author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+                                            if not author_id_to_link:
+                                                st.error(f"Failed to insert author {author['name']}")
+                                                continue
+                                        # Insert into book_authors
+                                        s.execute(
+                                            text("""
+                                                INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                            """),
+                                            params={
+                                                "book_id": book_id,
+                                                "author_id": author_id_to_link,
+                                                "author_position": author["author_position"],
+                                                "corresponding_agent": author["corresponding_agent"],
+                                                "publishing_consultant": author["publishing_consultant"] or None
+                                            }
+                                        )
+                                        authors_added = True
+                                        # Store author details for logging
+                                        added_authors.append({
                                             "author_id": author_id_to_link,
+                                            "name": author["name"],
                                             "author_position": author["author_position"],
                                             "corresponding_agent": author["corresponding_agent"],
-                                            "publishing_consultant": author["publishing_consultant"] or None
-                                        }
+                                            "publishing_consultant": author["publishing_consultant"]
+                                        })
+                                s.commit()
+                            if authors_added:
+                                # Log each added author
+                                for author in added_authors:
+                                    log_activity(
+                                        conn,
+                                        st.session_state.user_id,
+                                        st.session_state.username,
+                                        st.session_state.session_id,
+                                        "added author to book",
+                                        f"Book ID: {book_id}, Author ID: {author['author_id']}, Name: {author['name']}, Position: {author['author_position']}, Agent: {author['corresponding_agent'] or 'None'}, Consultant: {author['publishing_consultant'] or 'None'}"
                                     )
-                                    authors_added = True
-                                    # Store author details for logging
-                                    added_authors.append({
-                                        "author_id": author_id_to_link,
-                                        "name": author["name"],
-                                        "author_position": author["author_position"],
-                                        "corresponding_agent": author["corresponding_agent"],
-                                        "publishing_consultant": author["publishing_consultant"]
-                                    })
-                            s.commit()
-                        if authors_added:
-                            # Log each added author
-                            for author in added_authors:
-                                log_activity(
-                                    conn,
-                                    st.session_state.user_id,
-                                    st.session_state.username,
-                                    st.session_state.session_id,
-                                    "added author to book",
-                                    f"Book ID: {book_id}, Author ID: {author['author_id']}, Name: {author['name']}, Position: {author['author_position']}, Agent: {author['corresponding_agent'] or 'None'}, Consultant: {author['publishing_consultant'] or 'None'}"
-                                )
-                            st.cache_data.clear()
-                            st.success("✔️ New authors added successfully!")
-                            del st.session_state.new_authors
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("❌ No authors were added due to errors.")
-                    except Exception as e:
-                        st.error(f"❌ Error adding authors: {e}")
+                                st.cache_data.clear()
+                                st.success("✔️ New authors added successfully!")
+                                del st.session_state.new_authors
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ No authors were added due to errors.")
+                        except Exception as e:
+                            st.error(f"❌ Error adding authors: {e}")
 
         with col2:
             if st.button("Cancel", key="cancel_add_authors", type="secondary"):
@@ -4242,7 +4354,7 @@ def edit_operation_dialog(book_id, conn):
 
             # Book Syllabus Section
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-            with st.container(border=True):
+            with st.expander("Book Syllabus", expanded=False):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 # Syllabus uploader
                 syllabus_file = None
@@ -4251,7 +4363,8 @@ def edit_operation_dialog(book_id, conn):
                         "Upload New Syllabus",
                         type=["pdf", "docx", "jpg", "jpeg", "png"],
                         key=f"syllabus_upload_{book_id}",
-                        help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image)."
+                        help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image).",
+                        label_visibility="collapsed",
                     )
                     if syllabus_file and current_syllabus_path:
                         st.warning("Uploading a new syllabus will replace the existing one.")
@@ -5720,6 +5833,11 @@ with srcol1:
         key="search_bar",
         label_visibility="collapsed"
     )
+
+    if search_query and search_query.lower() in ["yogesh sharma", "rishabh vyas"]:
+        st.balloons()
+        st.toast(f"Hellow {user_name}!😄", icon="🎉")
+
 
     # Log search query when it changes
     if "prev_search_query" not in st.session_state:
