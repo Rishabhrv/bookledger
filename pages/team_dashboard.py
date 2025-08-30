@@ -412,7 +412,8 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 "writing_start AS 'Writing Start'", 
                 "writing_end AS 'Writing End'",
                 "book_pages AS 'Number of Book Pages'",
-                "syllabus_path AS 'Syllabus Path'"
+                "syllabus_path AS 'Syllabus Path'",
+                "book_note AS 'book_note'"
             ],
             "extra": [],
             "publish_filter": "AND is_publish_only = 0 AND is_thesis_to_book = 0"
@@ -424,6 +425,7 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 "proofreading_end AS 'Proofreading End'",
                 "is_publish_only AS 'is_publish_only'",
                 "is_thesis_to_book AS 'is_thesis_to_book'",
+                "book_note AS 'book_note'"
             ],
             "extra": [
                 "writing_end AS 'Writing End'", 
@@ -437,7 +439,8 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 "formatting_by AS 'Formatting By'", 
                 "formatting_start AS 'Formatting Start'", 
                 "formatting_end AS 'Formatting End'",
-                "book_pages AS 'Number of Book Pages'"
+                "book_pages AS 'Number of Book Pages'",
+                "book_note AS 'book_note'"
             ],
             "extra": ["proofreading_end AS 'Proofreading End'"],
             "publish_filter": ""
@@ -448,7 +451,8 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 "cover_start AS 'Cover Start'", 
                 "cover_end AS 'Cover End'", 
                 "apply_isbn AS 'Apply ISBN'", 
-                "isbn AS 'ISBN'"
+                "isbn AS 'ISBN'",
+                "book_note AS 'book_note'"
             ],
             "extra": [
                 "formatting_end AS 'Formatting End'",
@@ -517,7 +521,7 @@ def fetch_author_details(book_id):
     return df
 
 
-@st.dialog("Author Details", width='large')
+@st.dialog("Author Details", width='medium')
 def show_author_details_dialog(book_id):
     # Fetch book details (title and ISBN)
     conn = connect_db()
@@ -879,7 +883,7 @@ def fetch_book_details(book_id, conn):
 from time import sleep
 from sqlalchemy.sql import text
 
-@st.dialog("Rate User", width='large')
+@st.dialog("Rate User", width='medium')
 def rate_user_dialog(book_id, conn):
     # Fetch book title
     book_details = fetch_book_details(book_id, conn)
@@ -896,7 +900,7 @@ def rate_user_dialog(book_id, conn):
         st.markdown(f"You selected {sentiment_mapping[selected]} star(s).")
 
 
-@st.dialog("Correction Details", width='large')
+@st.dialog("Correction Details", width='medium')
 def correction_dialog(book_id, conn, section):
     # Map section to display name and database columns
     section_config = {
@@ -1172,6 +1176,7 @@ def correction_dialog(book_id, conn, section):
                     st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
                 
                 st.success(f"✔️ {action.capitalize()} {display_name} correction")
+                st.toast(f"✔️ {action.capitalize()} {display_name} correction", icon="✔️", duration="long")
                 for key in worker_keys + date_keys:
                     st.session_state.pop(f"{key}_{book_id}", None)
                 sleep(1)
@@ -1183,7 +1188,7 @@ def correction_dialog(book_id, conn, section):
             st.rerun()
 
 
-@st.dialog("Edit Details", width='large')
+@st.dialog("Edit Details", width='medium')
 def edit_section_dialog(book_id, conn, section):
     # Map section to display name and database columns
     section_config = {
@@ -1365,7 +1370,7 @@ def edit_section_dialog(book_id, conn, section):
         if submit:
             if start and end and start > end:
                 st.error("Start must be before End.")
-                st.toast("❌ Invalid date range", icon="🚫")
+                st.toast("Invalid date range", icon="🚫", duration = 'long')
             else:
                 with st.spinner(f"Saving {display_name} details..."):
                     sleep(1)
@@ -1413,7 +1418,7 @@ def edit_section_dialog(book_id, conn, section):
                             st.warning(f"Warning: {display_name} details saved but failed to log activity: {str(e)}")
                         
                         st.success(f"✔️ Updated {display_name} details")
-                        st.toast(f"Saved {display_name} details for Book ID {book_id}", icon="💾")
+                        st.toast(f"Saved {display_name} details for Book ID {book_id}", icon="💾", duration='long')
                         
                         # Clear new worker input after saving
                         st.session_state[f"{section}_new_worker_{book_id}"] = ""
@@ -1422,15 +1427,13 @@ def edit_section_dialog(book_id, conn, section):
 
                     except Exception as e:
                         st.error(f"❌ Failed to save {display_name} details: {str(e)}")
-                        st.toast(f"Error saving {display_name} details for Book ID {book_id}", icon="🚫")
+                        st.toast(f"Error saving {display_name} details for Book ID {book_id}", icon="🚫", duration = 'long')
                         sleep(2)
 
         elif cancel:
             for key in keys:
                 st.session_state.pop(f"{key}_{book_id}", None)
             st.rerun()
-
-        
 
 
 def render_table(books_df, title, column_sizes, color, section, role, is_running=False):
@@ -1440,7 +1443,45 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
     
     cont = st.container(border=True)
     with cont:
-        count = len(books_df)
+        # Custom CSS for search bar and note icon
+        st.markdown("""
+            <style>
+            .note-icon {
+                font-size: 1em;
+                color: #666;
+                margin-left: 0.5rem;
+                cursor: default;
+            }
+            .note-icon:hover {
+                color: #333;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+        # Search bar for Completed table
+        filtered_df = books_df
+        if "Completed" in title:
+            with st.container():
+                search_term = st.text_input(
+                    "",
+                    placeholder="Search by Book ID or Title",
+                    key=f"search_{section}_{title}",
+                    label_visibility="collapsed",
+                    width = 700
+                )
+                if search_term:
+                    # Convert Book ID to string for consistent searching
+                    filtered_df = books_df[
+                        books_df['Book ID'].astype(str).str.contains(search_term, case=False, na=False) |
+                        books_df['Title'].str.contains(search_term, case=False, na=False)
+                    ]
+
+        # Update count based on filtered DataFrame
+        count = len(filtered_df)
+        if count == 0 and "Completed" in title and search_term:
+            st.warning(f"No books match the search term '{search_term}' in {title.lower()} books.")
+            return
+
         badge_color = 'yellow' if "Running" in title else 'red' if "Pending" in title else 'green'
         st.markdown(f"<h5><span class='status-badge-{badge_color}'>{title} Books <span class='badge-count'>{count}</span></span></h5>", 
                     unsafe_allow_html=True)
@@ -1500,7 +1541,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
         st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
 
         # Fetch ongoing corrections for running table
-        book_ids = tuple(books_df['Book ID'].tolist())
+        book_ids = tuple(filtered_df['Book ID'].tolist())
         if book_ids and is_running:
             query = """
                 SELECT book_id
@@ -1516,10 +1557,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
         current_date = datetime.now().date()
         # Worker maps
         if user_role == role:
-            unique_workers = [w for w in books_df[f'{section.capitalize()} By'].unique() if pd.notnull(w)]
+            unique_workers = [w for w in filtered_df[f'{section.capitalize()} By'].unique() if pd.notnull(w)]
             worker_map = {worker: idx % 10 for idx, worker in enumerate(unique_workers)}
             if role == "proofreader":
-                unique_writing_workers = [w for w in books_df['Writing By'].unique() if pd.notnull(w)]
+                unique_writing_workers = [w for w in filtered_df['Writing By'].unique() if pd.notnull(w)]
                 writing_worker_map = {worker: idx % 10 for idx, worker in enumerate(unique_writing_workers)}
             else:
                 writing_worker_map = None
@@ -1527,7 +1568,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             worker_map = None
             writing_worker_map = None
 
-        for _, row in books_df.iterrows():
+        for _, row in filtered_df.iterrows():
             col_configs = st.columns(column_sizes[:len(columns)])
             col_idx = 0
             
@@ -1541,6 +1582,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         title_text += ' <span class="pill publish-only-badge">Publish only</span>'
                     elif pd.notnull(row.get('is_thesis_to_book')) and row['is_thesis_to_book'] == 1:
                         title_text += ' <span class="pill thesis-to-book-badge">Thesis to Book</span>'
+                # Add note icon if Notes column exists and is non-empty
+                if 'book_note' in row and pd.notnull(row['book_note']) and row['book_note'].strip():
+                    note_snippet = row['book_note'][:50] + ('...' if len(row['book_note']) > 50 else '')
+                    title_text += f' <span class="note-icon" title="{note_snippet}">:material/forum:</span>'
                 st.markdown(title_text, unsafe_allow_html=True)
             col_idx += 1
             with col_configs[col_idx]:
@@ -1700,7 +1745,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         if pd.notnull(start) and start != '0000-00-00 00:00:00':
                             st.markdown(f'<span class="pill section-start-date">{start.strftime("%d %B %Y")}</span>', unsafe_allow_html=True)
                         else:
-                            st.markdown('<span class="pill section-start-not">Not started</span>', unsafe_allow_html=True)
+                            st.markdown(f'<span class="pill section-start-not">Not started</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
                         worker = row['Proofreading By']

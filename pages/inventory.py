@@ -277,7 +277,7 @@ df = df.rename(columns={
 })
 
 # Dialog for updating sales and links
-@st.dialog("Update Book Details", width="large")
+@st.dialog("Update Book Details", width="medium")
 def update_book_details(book_id, current_data):
     st.markdown(f"### (ID: {book_id}) {current_data['Book Title']} ")
 
@@ -595,7 +595,7 @@ def update_book_details(book_id, current_data):
                 st.error(f"Failed to save changes: {str(e)}")
 
 
-@st.dialog("Inventory Visualizations", width="large")
+@st.dialog("Inventory Visualizations", width="medium")
 def show_charts():
     # # Cell No. Occupancy Chart
     # st.markdown("### Cell No. Occupancy")

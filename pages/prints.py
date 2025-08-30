@@ -412,7 +412,7 @@ def update_batch_receive_date(conn, batch_id, receive_date):
 
         session.commit()
 
-@st.dialog("Create New Batch", width="large")
+@st.dialog("Create New Batch", width="medium")
 def create_batch_dialog():
     conn = connect_db()
     st.subheader("New Batch Details")

@@ -395,7 +395,7 @@ def format_status(status, status_type):
 #######################################################################################################################
 
 
-@st.dialog("Add New Paper", width="large")
+@st.dialog("Add New Paper", width="medium")
 def add_paper_dialog(conn):
     with st.container(border=True):
         # Publication ID and Title in one row
@@ -836,7 +836,7 @@ def payment_dialog(paper_id, conn):
 #######################################################################################################################
 
 
-@st.dialog("✏️ Edit Paper Details", width="large")
+@st.dialog("✏️ Edit Paper Details", width="medium")
 def edit_paper_dialog(paper_id, conn):
     # Initialize session state for deletion confirmation
     if 'confirm_delete' not in st.session_state:
@@ -1016,7 +1016,7 @@ st.markdown(
         unsafe_allow_html=True
     )
 
-@st.dialog("Edit Author Details", width="large")
+@st.dialog("Edit Author Details", width="medium")
 def edit_author_dialog(paper_id, conn):
     # --- Fetch Paper Title and Publishing Type ---
     try:

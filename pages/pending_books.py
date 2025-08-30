@@ -508,7 +508,7 @@ def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
 
     return "Not Started"
 
-@st.dialog("Publishing Process Flow", width="large")
+@st.dialog("Publishing Process Flow", width="medium")
 def show_stuck_reason_sequence(is_publish_only=False):
     # Data definitions remain the same
     author_checklist_items = [
@@ -800,43 +800,67 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         st.markdown(f"<div class='info-box'><span class='info-label'>Authors:</span>{author_count}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Author Checklists (Only Pending Tasks)
-    st.markdown("<h4 class='section-title'>Author Pending Tasks</h4>", unsafe_allow_html=True)
+    # Author Checklists (Full Sequence)
+    st.markdown("<h4 class='section-title'>Author Checklist</h4>", unsafe_allow_html=True)
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
     if not book_authors_df.empty:
         checklist_columns = [
-            'welcome_mail_sent', 'author_details_sent', 'photo_recive', 'cover_agreement_sent',
-            'digital_book_sent', 'id_proof_recive', 'agreement_received',
-            'printing_confirmation'
+            'welcome_mail_sent', 'author_details_sent', 'photo_recive',
+            'apply_isbn_not_applied', 'isbn_not_received',
+            'cover_agreement_sent', 'digital_book_sent', 'id_proof_recive',
+            'agreement_received', 'printing_confirmation'
         ]
         checklist_labels = [
-            'Welcome', 'Details', 'Photo', 'Cover/Agr', 'Digital', 'ID Proof',
-            'Agreement', 'Print Conf'
+            'Welcome', 'Details', 'Photo', 'ISBN Apply', 'ISBN Recv',
+            'Cover/Agr', 'Digital', 'ID Proof', 'Agreement', 'Print Conf'
         ]
-        # Filter pending tasks dynamically
-        pending_columns = []
-        pending_labels = []
-        for col, label in zip(checklist_columns, checklist_labels):
-            if book_authors_df[col].eq(False).any():  # Include column if any author has it pending
-                pending_columns.append(col)
-                pending_labels.append(label)
         
-        # Build HTML table for pending tasks only
-        if pending_columns:
-            table_html = "<table class='compact-table'><tr><th>ID</th><th>Name</th><th>Contact</th><th>Consultant</th><th>Pos</th>"
-            for label in pending_labels:
-                table_html += f"<th>{label}</th>"
-            table_html += "</tr>"
-            for _, author in book_authors_df.iterrows():
-                table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['phone']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
-                for col in pending_columns:
+        # Build HTML table for full checklist
+        table_html = """
+        <style>
+            .compact-table {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 11px;
+                color: #1f2937;
+                border-collapse: collapse;
+                width: 100%;
+            }
+            .compact-table th, .compact-table td tr {
+                padding: 4px 6px;
+                text-align: center;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            .compact-table th {
+                background: #f1f5f9;
+                font-weight: 600;
+            }
+            .compact-table td {
+                color: #4b5563;
+            }
+        </style>
+        <table class='compact-table'>
+            <tr><th>ID</th><th>Name</th><th>Contact</th><th>Consultant</th><th>Pos</th>
+        """
+        for label in checklist_labels:
+            table_html += f"<th>{label}</th>"
+        table_html += "</tr>"
+        
+        for _, author in book_authors_df.iterrows():
+            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['phone']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
+            for col, label in zip(checklist_columns, checklist_labels):
+                if col in ['apply_isbn_not_applied', 'isbn_not_received']:
+                    # Handle book-level ISBN fields
+                    if col == 'apply_isbn_not_applied':
+                        status = '✅' if book_row.get('apply_isbn', 0) == 1 else '❌'
+                    else:  # isbn_not_received
+                        status = '✅' if pd.notnull(book_row.get('isbn')) and book_row.get('apply_isbn', 0) == 1 else '❌'
+                else:
+                    # Handle author-level fields
                     status = '✅' if author[col] else '❌'
-                    table_html += f"<td>{status}</td>"
-                table_html += "</tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-        else:
-            st.success("✅ All author tasks are completed.")
+                table_html += f"<td>{status}</td>"
+            table_html += "</tr>"
+        table_html += "</table>"
+        st.markdown(table_html, unsafe_allow_html=True)
     else:
         st.info("No authors found for this book.")
 
