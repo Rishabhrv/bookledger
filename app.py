@@ -3365,7 +3365,6 @@ def edit_author_dialog(book_id, conn):
                                     if st.form_submit_button("Yes, Remove", use_container_width=True, type="primary"):
                                         try:
                                             with st.spinner("Removing author..."):
-                                                time.sleep(1)
                                                 delete_book_author(row['id'], conn)
                                                 # Log remove action
                                                 log_activity(
