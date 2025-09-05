@@ -1165,6 +1165,7 @@ def manage_users(conn):
                             )
                             st.success("User Added Successfully!", icon="✔️")
                             st.toast("User Added Successfully!", icon="✔️", duration="long")
+                            import time
                             time.sleep(1)
                             st.rerun()
 
@@ -1296,6 +1297,7 @@ def manage_users(conn):
                                         )
                                     st.success("User Updated Successfully!", icon="✔️")
                                     st.toast("User Updated Successfully!", icon="✔️", duration="long")
+                                    import time
                                     time.sleep(2)
                                     st.rerun()
 
@@ -1328,6 +1330,7 @@ def manage_users(conn):
                                     st.success("User Deleted Successfully!", icon="✔️")
                                     st.toast("User Deleted Successfully!", icon="✔️", duration="long")
                                     st.session_state.confirm_delete_user_id = None
+                                    import time
                                     time.sleep(2)
                                     st.rerun()
     
@@ -1409,6 +1412,7 @@ def edit_author_detail(conn):
                             type="primary",
                             use_container_width=True):
                     with st.spinner("Saving changes..."):
+                        import time
                         time.sleep(1)
                         # Track changes for logging
                         changes = []
@@ -1477,6 +1481,7 @@ def edit_author_detail(conn):
             with confirm_col2:
                 if st.button("✔️ Confirm", key=f"confirm_{delete_key}"):
                     with st.spinner("Deleting author..."):
+                        import time
                         time.sleep(1)
                         try:
                             with conn.session as s:
@@ -1497,6 +1502,7 @@ def edit_author_detail(conn):
                             st.success("Author Deleted Successfully!", icon="✔️")
                             st.toast("Author Deleted Successfully!", icon="✔️", duration="long")
                             st.session_state["confirm_delete"] = False
+                            import time
                             time.sleep(1)
                             # Refresh the dialog to update author list
                             st.rerun()
@@ -1926,6 +1932,7 @@ def add_book_dialog(conn):
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
                             ]
+                            import time
                             time.sleep(1)
                             st.rerun()
                         except Exception as db_error:
@@ -2372,6 +2379,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 
                     st.success("Book Details Updated Successfully!", icon="✔️")
                     st.toast("Book details updated successfully!", icon="✅", duration="long")
+                    import time
                     time.sleep(1)
                     st.rerun()
                 except Exception as db_error:
@@ -2526,6 +2534,7 @@ def manage_price_dialog(book_id, current_price, conn):
         with col2:
             if st.button("Save Book Price", key=f"save_price_{book_id}"):
                 with st.spinner("Saving..."):
+                    import time
                     time.sleep(1)
                     try:
                         price = int(price_str) if price_str.strip() else None
@@ -2717,6 +2726,7 @@ def manage_price_dialog(book_id, current_price, conn):
                     # Save button
                     if st.button("Save Payment", key=f"save_payment_{row['id']}"):
                         with st.spinner("Saving Payment..."):
+                            import time
                             time.sleep(1)
                             if new_paid > new_total:
                                 st.error("Total EMI payments cannot exceed total amount")
@@ -3329,6 +3339,7 @@ def edit_author_dialog(book_id, conn):
 
                                     try:
                                         with st.spinner("Saving changes..."):
+                                            import time
                                             time.sleep(1)
                                             update_book_authors(row['id'], updates, conn)
                                             # Log save action
@@ -3564,6 +3575,7 @@ def edit_author_dialog(book_id, conn):
                             with col_save:
                                 if st.button("Save Chapter", key=f"save_chapter_{chapter_id}"):
                                     with st.spinner("Saving chapter..."):
+                                        import time
                                         time.sleep(1)  # 2-second delay for UX
                                         errors = []
                                         if not edit_data["chapter_title"]:
@@ -3651,6 +3663,7 @@ def edit_author_dialog(book_id, conn):
                             with col_delete:
                                 if st.button("Delete Chapter", key=f"delete_chapter_{chapter_id}"):
                                     with st.spinner("Deleting chapter..."):
+                                        import time
                                         time.sleep(1)  # 2-second delay for UX
                                         try:
                                             with conn.session as s:
@@ -3867,6 +3880,7 @@ def edit_author_dialog(book_id, conn):
                 with col_save:
                     if st.button("Add Chapter and Editors", key="add_chapters", type="primary"):
                         with st.spinner("Saving chapter..."):
+                            import time
                             time.sleep(1)  # 2-second delay for UX
                             errors = []
                             chapter = st.session_state.new_chapters[0]
@@ -4043,6 +4057,7 @@ def edit_author_dialog(book_id, conn):
                                     "changed author type",
                                     f"Book ID: {book_id}, New Author Type: {selected_author_type}"
                                 )
+                                import time
                                 time.sleep(1)
                                 st.rerun()
                         except Exception as e:
@@ -4250,6 +4265,7 @@ def edit_author_dialog(book_id, conn):
                                     st.success("✔️ New authors added successfully!")
                                     st.toast("New authors added successfully!", icon="✔️", duration="long")
                                     del st.session_state.new_authors
+                                    import time
                                     time.sleep(2)
                                     st.rerun()
                                 else:
@@ -4646,6 +4662,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
                 with st.spinner("Saving Proofreading details..."):
+                    import time
                     time.sleep(1)
                     proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
                     proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
@@ -4742,6 +4759,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Formatting", use_container_width=True):
                 with st.spinner("Saving Formatting details..."):
+                    import time
                     time.sleep(1)
                     formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
                     formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
@@ -4831,6 +4849,7 @@ def edit_operation_dialog(book_id, conn):
 
             if st.form_submit_button("💾 Save Cover Details", use_container_width=True):
                 with st.spinner("Saving Cover details..."):
+                    import time
                     time.sleep(1)
                     cover_start = f"{cover_start_date} {cover_start_time}" if cover_start_date and cover_start_time else None
                     cover_end = f"{cover_end_date} {cover_end_time}" if cover_end_date and cover_end_time else None
@@ -5302,6 +5321,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                         if save_edit:
                             with st.spinner("Saving edited print edition..."):
+                                import time
                                 time.sleep(1)
                                 try:
                                     if edit_num_copies <= 0:
@@ -5415,6 +5435,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                     if save_new_print:
                         with st.spinner("Saving new print edition..."):
+                            import time
                             time.sleep(1)
                             try:
                                 if new_num_copies > 0:
@@ -5653,6 +5674,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 # Handle form submission
                 if save_inventory:
                     with st.spinner("Saving Inventory details..."):
+                        import time
                         time.sleep(1)
                         try:
                             # Track changes for logging
