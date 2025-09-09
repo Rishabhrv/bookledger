@@ -17,12 +17,18 @@ st.title("Book Tags Importer")
 
 # Ensure tags column is JSON (or TEXT if JSON type is unavailable)
 conn = connect_db()
+
 with conn.session as s:
-    s.execute(text("""
-        ALTER TABLE books 
-        ADD COLUMN IF NOT EXISTS tags JSON
+    # Check if column exists
+    result = s.execute(text("""
+        SELECT COUNT(*) 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME='books' AND COLUMN_NAME='tags'
     """))
+    if result.scalar() == 0:
+        s.execute(text("ALTER TABLE books ADD COLUMN tags JSON"))
     s.commit()
+
 
 # File uploader
 uploaded_file = st.file_uploader("Upload Excel File", type=["xlsx", "xls"])
