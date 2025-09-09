@@ -6,6 +6,7 @@ import time
 import re
 import os
 import datetime
+import random
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -16,7 +17,7 @@ from urllib.parse import urlencode
 from constants import log_activity
 from constants import connect_db
 from constants import clean_old_logs
-
+import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -266,7 +267,8 @@ if not st.session_state.cleanup_done:
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
-"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end FROM books"
+"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end, tags FROM books"
+
 books = conn.query(query,show_spinner = False)
 
 # Apply date range filtering
@@ -300,7 +302,7 @@ elif user_role != "admin":
 
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
+    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -1547,12 +1549,47 @@ def add_book_dialog(conn):
             )
             return publisher
 
-    def book_details_section(publisher):
+    def book_details_section(publisher, conn):
         with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
             col1, col2 = st.columns([2, 0.6])
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
+
+            # Initialize session state for tags
+            if "new_book_tags" not in st.session_state:
+                st.session_state["new_book_tags"] = []
+
+            # Fetch and process tags
+            with conn.session as s:
+                tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
+                all_tags = s.execute(tag_query).fetchall()
+                
+                unique_tags = set()
+                for row in all_tags[:5]:
+                    if row[0] and isinstance(row[0], str):
+                        try:
+                            tags = json.loads(row[0])  # Parse JSON array
+                            unique_tags.update(tags)
+                        except json.JSONDecodeError:
+                            st.error(f"Invalid JSON in tags: {row[0]} -> Skipped")
+                    else:
+                        st.error(f"Raw tag: {row[0]} -> Skipped (invalid or empty)")
+                
+                # Collect unique tags from all rows
+                for row in all_tags:
+                    if row[0] and isinstance(row[0], str):
+                        try:
+                            tags = json.loads(row[0])
+                            unique_tags.update(tags)
+                        except json.JSONDecodeError:
+                            st.write(f"Invalid JSON in tags: {row[0]} -> Skipped")
+                
+                # Convert to sorted list
+                sorted_tags = sorted(unique_tags)
+
+            # Add session state tags
+            options = sorted_tags + [tag for tag in st.session_state["new_book_tags"] if tag not in sorted_tags]
 
             toggles_enabled = publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
 
@@ -1561,7 +1598,7 @@ def add_book_dialog(conn):
             with col3:
                 # Radio buttons for author type
                 author_type = st.radio(
-                    "Author Type:",
+                    "Author Type",
                     ["Multiple", "Single", "Double", "Triple"],
                     key="author_type_radio",
                     horizontal=True,
@@ -1569,9 +1606,9 @@ def add_book_dialog(conn):
                 )
 
             with col4:
-                # Segmented buttons for book mode (only 2 options)
+                # Segmented buttons for book mode
                 book_mode = st.segmented_control(
-                    "Book Type:",
+                    "Book Type",
                     options=["Publish Only", "Thesis to Book"],
                     key="book_mode_segment",
                     disabled=not toggles_enabled
@@ -1579,6 +1616,16 @@ def add_book_dialog(conn):
 
             if not toggles_enabled:
                 st.warning("Author Type and Book Mode options are disabled for AG Kids and NEET/JEE publishers.")
+            
+            selected_tags = st.multiselect(
+                "Add Tags",
+                options=options,
+                default=st.session_state["new_book_tags"],
+                key="new_book_tags",
+                accept_new_options=True,
+                max_selections=5,
+                placeholder="Select or add up to 5 tags...",
+            )
 
             return {
                 "title": book_title,
@@ -1586,7 +1633,8 @@ def add_book_dialog(conn):
                 "author_type": author_type if toggles_enabled else "Multiple",
                 "is_publish_only": (book_mode == "Publish Only") if (book_mode and toggles_enabled) else False,
                 "is_thesis_to_book": (book_mode == "Thesis to Book") if (book_mode and toggles_enabled) else False,
-                "publisher": publisher
+                "publisher": publisher,
+                "tags": selected_tags
             }
 
 
@@ -1618,7 +1666,7 @@ def add_book_dialog(conn):
 
     def book_note_section():
 
-        with st.expander("Book Note", expanded=False):
+        with st.container(border=True):
             st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
             
             book_note = st.text_area(
@@ -1627,7 +1675,8 @@ def add_book_dialog(conn):
                 help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
                 max_chars=1000,
                 placeholder="Enter notes or special instructions for the book here...",
-                height=50
+                height=50,
+                label_visibility="collapsed"
             )
         
         return book_note
@@ -1662,6 +1711,44 @@ def add_book_dialog(conn):
     #         )
             
     #         return syllabus_file, book_note
+
+    # def tags_section(conn):
+    #     # Initialize session state for tags if not already set
+    #     if "new_book_tags" not in st.session_state:
+    #         st.session_state["new_book_tags"] = []
+
+    #     # Fetch all unique tags and their counts from the database
+    #     with conn.session as s:
+    #         tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
+    #         all_tags = s.execute(tag_query).fetchall()
+    #         tag_counts = {}
+    #         for row in all_tags:
+    #             tags = [tag.strip() for tag in row[0].split(',') if tag.strip()]
+    #             for tag in tags:
+    #                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            
+    #         # Sort tags by count (descending) and then alphabetically
+    #         sorted_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
+
+    #     # Add any new tags from session state that aren't in the database yet
+    #     options = sorted_tags + [tag for tag in st.session_state["new_book_tags"] if tag not in sorted_tags]
+
+    #     with st.container(border=True):
+    #         # Tags Section UI
+    #         st.markdown("<h5 style='color: #4CAF50;'>Add Tags</h5>", unsafe_allow_html=True)
+    #         selected_tags = st.multiselect(
+    #             "Add Tags",
+    #             options=options,
+    #             default=st.session_state["new_book_tags"],
+    #             key="new_book_tags",
+    #             accept_new_options=True,
+    #             max_selections=5,
+    #             help="Select existing tags or type to add new tags for the book",
+    #             label_visibility="collapsed",
+    #             placeholder="Select or add up to 5 tags..."
+    #         )
+
+    #     return selected_tags
 
     def author_details_section(conn, author_type, publisher):
         author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
@@ -1796,20 +1883,30 @@ def add_book_dialog(conn):
 
     def validate_form(book_data, author_data, author_type, publisher):
         errors = []
+        
+        # Validation for Book Details
         if not book_data["title"]:
             errors.append("Book title is required.")
         if not book_data["date"]:
             errors.append("Book date is required.")
         if not book_data["publisher"]:
             errors.append("Publisher is required.")
-
+        
+        # Add this new check for tags
+        if not book_data.get("tags"):
+            errors.append("At least one tag is required.")
+            
+        # Validation for Authors (Publisher-specific)
         if publisher not in ["AG Kids", "NEET/JEE"]:
             active_authors = [a for a in author_data if is_author_active(a)]
+            
             if not active_authors:
                 errors.append("At least one author must be provided.")
+                
             max_authors = {"Single": 1, "Double": 2, "Triple": 3, "Multiple": 4}.get(author_type, 4)
             if len(active_authors) > max_authors:
                 errors.append(f"Too many authors. {author_type} allows up to {max_authors} authors.")
+                
             existing_author_ids = set()
             for i, author in enumerate(author_data):
                 if is_author_active(author):
@@ -1825,9 +1922,11 @@ def add_book_dialog(conn):
                         if author["author_id"] in existing_author_ids:
                             errors.append(f"Author {i+1} (ID: {author['author_id']}) is already added. Please remove duplicates.")
                         existing_author_ids.add(author["author_id"])
+                        
             active_positions = [author["author_position"] for author in active_authors]
             if len(active_positions) != len(set(active_positions)):
                 errors.append("All active authors must have unique positions.")
+                
         return errors
 
     # --- Combined Container Inside Dialog ---
@@ -1836,7 +1935,8 @@ def add_book_dialog(conn):
 
         with col1:
             publisher = publisher_section()
-            book_data = book_details_section(publisher)
+            book_data = book_details_section(publisher,conn)
+            #tags = tags_section(conn)
             syllabus_file = syllabus_upload_section(book_data["is_publish_only"], book_data["is_thesis_to_book"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
             book_data["syllabus_file"] = syllabus_file
         with col2:
@@ -1844,7 +1944,7 @@ def add_book_dialog(conn):
             book_note = book_note_section()
             book_data["book_note"] = book_note
 
-    # --- Save, Clear, and Cancel Buttons ---
+    # Save, Clear, and Cancel Buttons
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
@@ -1873,10 +1973,13 @@ def add_book_dialog(conn):
                                     st.toast(f"Failed to save syllabus file: {str(e)}", icon="❌", duration="long")
                                     raise
                             
-                            # Insert book with book note
+                            # Convert tags list to JSON
+                            tags_json = json.dumps(book_data["tags"]) if book_data["tags"] else None
+
+                            # Insert book with book note and tags
                             s.execute(text("""
-                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path, book_note)
-                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path, :book_note)
+                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path, book_note, tags)
+                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path, :book_note, :tags)
                             """), params={
                                 "title": book_data["title"],
                                 "date": book_data["date"],
@@ -1885,7 +1988,8 @@ def add_book_dialog(conn):
                                 "is_thesis_to_book": book_data["is_thesis_to_book"],
                                 "publisher": book_data["publisher"],
                                 "syllabus_path": syllabus_path,
-                                "book_note": book_data["book_note"]
+                                "book_note": book_data["book_note"],
+                                "tags": tags_json
                             })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
@@ -1903,17 +2007,17 @@ def add_book_dialog(conn):
                                         """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
-                                    if book_id and author_id_to_link:
-                                        s.execute(text("""
-                                            INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                            VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                        """), params={
-                                            "book_id": book_id,
-                                            "author_id": author_id_to_link,
-                                            "author_position": author["author_position"],
-                                            "corresponding_agent": author["corresponding_agent"],
-                                            "publishing_consultant": author["publishing_consultant"]
-                                        })
+                                        if book_id and author_id_to_link:
+                                            s.execute(text("""
+                                                INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                                VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                            """), params={
+                                                "book_id": book_id,
+                                                "author_id": author_id_to_link,
+                                                "author_position": author["author_position"],
+                                                "corresponding_agent": author["corresponding_agent"],
+                                                "publishing_consultant": author["publishing_consultant"]
+                                            })
                             s.commit()
 
                             # Log save action with specified details
@@ -1923,16 +2027,16 @@ def add_book_dialog(conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added book",
-                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}"
+                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}, Tags: {tags_json or 'None'}"
                             )
 
                             st.success("Book and Authors Saved Successfully!", icon="✔️")
                             st.toast("Book and Authors Saved Successfully!", icon="✔️", duration="long")
+                        
                             st.session_state.authors = [
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
                             ]
-                            import time
                             time.sleep(1)
                             st.rerun()
                         except Exception as db_error:
@@ -1946,6 +2050,7 @@ def add_book_dialog(conn):
                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                 for i in range(4)
             ]
+            st.session_state["new_book_tags"] = []  # Reset tags on cancel
             st.rerun()
 
 
@@ -1970,6 +2075,11 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     current_is_thesis_to_book = book_details.iloc[0].get('is_thesis_to_book', 0) == 1
     current_publisher = book_details.iloc[0].get('publisher', '')
     current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
+    current_tags = book_details.iloc[0].get('tags', '')
+    try:
+        current_tags_list = json.loads(current_tags) if current_tags else []
+    except json.JSONDecodeError:
+        current_tags_list = []
 
     publisher_colors = {
         "AGPH": {"color": "#ffffff", "background": "#e4be17"},
@@ -1997,6 +2107,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         st.session_state[f"is_publish_only_{book_id}"] = current_is_publish_only
     if f"is_thesis_to_book_{book_id}" not in st.session_state:
         st.session_state[f"is_thesis_to_book_{book_id}"] = current_is_thesis_to_book
+    if f"tags_{book_id}" not in st.session_state:
+        st.session_state[f"tags_{book_id}"] = current_tags_list
 
 
     def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled, book_id):
@@ -2129,6 +2241,26 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 if not toggles_enabled:
                     st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
                 st.markdown('</div>', unsafe_allow_html=True)
+            
+
+            # Supported colors for badges
+            colors = ["red", "orange", "yellow", "blue", "green", "violet", "primary"]
+
+            # Display existing tags using Streamlit native badges
+            if st.session_state[f"tags_{book_id}"]:
+                badge_markdown = ""
+                # Create a copy of colors list to ensure unique selection
+                available_colors = colors.copy()
+                for tag in st.session_state[f"tags_{book_id}"]:
+                    # Select a random color and remove it from available colors
+                    if available_colors:
+                        color = random.choice(available_colors)
+                        available_colors.remove(color)
+                    else:
+                        # Fallback to random choice if we run out of colors
+                        color = random.choice(colors)
+                    badge_markdown += f":{color}-badge[#{tag}] "
+                st.markdown(badge_markdown)
 
         # Fetch current syllabus and book note for the book
         with conn.session as s:
@@ -2146,8 +2278,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 current_syllabus_path
             )
             book_note = book_note_section(current_book_note, book_id)
-
-       
 
     with dialog_col2:    
         # ISBN Details Section
@@ -2234,6 +2364,40 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     with col2:
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
+        
+        with st.expander("Manage Tags", expanded=False):
+            # Fetch all unique tags and their counts from the database
+            with conn.session as s:
+                tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'")
+                all_tags = s.execute(tag_query).fetchall()
+                tag_counts = {}
+                for row in all_tags:
+                    try:
+                        tags = json.loads(row[0]) if row[0] else []
+                        for tag in tags:
+                            if tag:  # Only count non-empty tags
+                                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                    except json.JSONDecodeError:
+                        continue
+                
+                # Sort tags by count (descending) and then alphabetically
+                sorted_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
+            
+            # Add any new tags from session state that aren't in the database yet
+            for tag in st.session_state[f"tags_{book_id}"]:
+                if tag and tag not in sorted_tags:
+                    sorted_tags.append(tag)
+            
+            # Multiselect for adding/removing tags
+            st.session_state[f"tags_{book_id}"] = st.multiselect(
+                "Manage Tags",
+                options=sorted_tags,
+                default=st.session_state[f"tags_{book_id}"],
+                key=f"manage_tags_{book_id}",
+                accept_new_options=True,
+                max_selections=10,
+                help="Select or deselect tags for the book, or type to add new tags"
+            )
 
 
     # Save Button
@@ -2259,6 +2423,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                             st.toast(f"Failed to save syllabus file: {str(e)}", icon="❌", duration="long")
                             raise
 
+                    # Convert tags list to JSON string for database
+                    new_tags_json = json.dumps(st.session_state[f"tags_{book_id}"]) if st.session_state[f"tags_{book_id}"] else '[]'
+
                     # Track changes for logging
                     changes = []
                     if new_title != current_title:
@@ -2281,6 +2448,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         changes.append(f"Updated syllabus file to '{syllabus_path}'")
                     if book_note != current_book_note:
                         changes.append(f"Updated book note to '{book_note[:50] + '...' if book_note else 'None'}'")
+                    if new_tags_json != current_tags:
+                        changes.append(f"Updated tags to '{new_tags_json}'")
 
                     # Update database
                     if apply_isbn and receive_isbn and new_isbn:
@@ -2295,7 +2464,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_publish_only = :is_publish_only,
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
-                                    book_note = :book_note
+                                    book_note = :book_note,
+                                    tags = :tags
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2308,6 +2478,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
+                                "tags": new_tags_json,
                                 "book_id": book_id
                             }
                         )
@@ -2323,7 +2494,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_publish_only = :is_publish_only,
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
-                                    book_note = :book_note
+                                    book_note = :book_note,
+                                    tags = :tags
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2334,6 +2506,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
+                                "tags": new_tags_json,
                                 "book_id": book_id
                             }
                         )
@@ -2349,7 +2522,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_publish_only = :is_publish_only,
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
-                                    book_note = :book_note
+                                    book_note = :book_note,
+                                    tags = :tags
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2360,6 +2534,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "is_thesis_to_book": 1 if new_is_thesis_to_book else 0,
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
+                                "tags": new_tags_json,
                                 "book_id": book_id
                             }
                         )
@@ -2379,7 +2554,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 
                     st.success("Book Details Updated Successfully!", icon="✔️")
                     st.toast("Book details updated successfully!", icon="✅", duration="long")
-                    import time
                     time.sleep(1)
                     st.rerun()
                 except Exception as db_error:
@@ -6025,14 +6199,43 @@ with srcol1:
     filtered_books = filter_books(books, search_query)
 
 
+
 with srcol3:
 
+    # Callback function to update the tags filter in session state
+    def update_tags_filter():
+        """
+        This function is called when the multiselect widget changes.
+        It updates 'tags_filter' in the session state with the current value
+        of the widget. The widget's value is accessed via its key.
+        """
+        widget_key = f"tags_multiselect_{st.session_state.clear_filters_trigger}"
+        
+        # ✅ This safety check prevents the KeyError
+        if widget_key in st.session_state:
+            st.session_state.tags_filter = st.session_state[widget_key]
+
     # Popover for filtering
-    with st.popover("Filter by Date, Status, Publisher & Author Type", use_container_width=True):
+    with st.popover("Filter by Date, Status, Publisher, Author Type & Tags", use_container_width=True):
         # Extract unique publishers, years, and author types from the dataset
         unique_publishers = sorted(books['publisher'].dropna().unique())
         unique_years = sorted(books['date'].dt.year.unique())
         unique_author_types = sorted(books['author_type'].dropna().unique())
+
+        # Fetch unique tags from database
+        with conn.session as s:
+            tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'")
+            all_tags = s.execute(tag_query).fetchall()
+            tag_counts = {}
+            for row in all_tags:
+                try:
+                    tags = json.loads(row[0]) if row[0] else []
+                    for tag in tags:
+                        if tag:
+                            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+                except json.JSONDecodeError:
+                    continue
+            unique_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
 
         # Use session state to manage filter values
         if 'year_filter' not in st.session_state:
@@ -6057,6 +6260,8 @@ with srcol3:
             st.session_state.publish_only_filter = None
         if 'thesis_to_book_filter' not in st.session_state:
             st.session_state.thesis_to_book_filter = None
+        if 'tags_filter' not in st.session_state:
+            st.session_state.tags_filter = []
         if 'clear_filters_trigger' not in st.session_state:
             st.session_state.clear_filters_trigger = 0
 
@@ -6073,14 +6278,15 @@ with srcol3:
             st.session_state.multiple_open_positions_filter = None
             st.session_state.publish_only_filter = None
             st.session_state.thesis_to_book_filter = None
+            st.session_state.tags_filter = []
             st.session_state.clear_filters_trigger += 1
             st.rerun()
 
         # Tabs for filter categories
-        tabs = st.tabs(["Status", "Publisher", "Author", "Date"])
+        tabs = st.tabs(["Status", "Type", "Date"])
 
-        with tabs[3]:
-            # Date Filters Expander
+        with tabs[2]:  # Date tab (index 4)
+            # Date Filters
             year_options = [str(year) for year in unique_years]
             selected_year = st.pills(
                 "Year:",
@@ -6147,8 +6353,10 @@ with srcol3:
                     st.session_state.start_date_filter = None
                     st.session_state.end_date_filter = None
 
-        # Publisher Filters Expander
-        with tabs[1]:
+
+        # Status Filters
+        with tabs[0]:  # Status tab (index 0)
+
             publisher_options = unique_publishers
             selected_publisher = st.pills(
                 "Publisher:",
@@ -6161,14 +6369,12 @@ with srcol3:
             elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
                 st.session_state.publisher_filter = None
 
-        # Status Filters Expander
-        with tabs[0]:
             # Status filter
             status_options = ["Delivered", "On Going"]
             if user_role == "admin":
                 status_options.append("Pending Payment")
             selected_status = st.pills(
-                "Status:",
+                "Book Status:",
                 options=status_options,
                 key=f"status_pills_{st.session_state.clear_filters_trigger}",
                 label_visibility='visible'
@@ -6185,10 +6391,35 @@ with srcol3:
             )
             st.session_state.isbn_filter = selected_isbn
 
+
+            # Tag filter with searchable multiselect
+            selected_tags = st.multiselect(
+                "Filter by Tags:",
+                options=unique_tags,
+                on_change=update_tags_filter,
+                default=st.session_state.tags_filter,
+                key=f"tags_filter_{st.session_state.clear_filters_trigger}",
+                max_selections=5,
+                placeholder="Search or select up to 5 tags",
+                help="Select up to 5 tags to filter books"
+            )
+            st.session_state.tags_filter = selected_tags
+
+        # Author Filters
+        with tabs[1]:  # Author tab (index 3)
+            # Author type filter
+            author_type_options = ["Single", "Double", "Triple", "Multiple"]
+            selected_author_type = st.pills(
+                "Author Type:",
+                options=author_type_options,
+                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.author_type_filter = selected_author_type
+
             # Book Type filters
             with st.container():
-                #st.write("####### Book Type:")
-                col1, col2, col3 = st.columns([1,1,0.9],gap="small")
+                col1, col2, col3 = st.columns([1,1,0.9], gap="small")
                 with col1:
                     # Publish Only filter
                     publish_only_options = ["Publish Only"]
@@ -6210,18 +6441,6 @@ with srcol3:
                     )
                     st.session_state.thesis_to_book_filter = selected_thesis_to_book
 
-        # Author Filters Expander
-        with tabs[2]:
-            # Author type filter
-            author_type_options = ["Single", "Double", "Triple", "Multiple"]
-            selected_author_type = st.pills(
-                "Author Type:",
-                options=author_type_options,
-                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
-            )
-            st.session_state.author_type_filter = selected_author_type
-
             # Multiple with open positions filter
             multiple_open_positions_options = ["Open Positions"]
             selected_multiple_open_positions = st.pills(
@@ -6231,6 +6450,7 @@ with srcol3:
                 label_visibility='visible'
             )
             st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
+           
 
         # Collect applied filters after all selections
         applied_filters = []
@@ -6256,6 +6476,8 @@ with srcol3:
             applied_filters.append(f"Publish Type={st.session_state.publish_only_filter}")
         if st.session_state.thesis_to_book_filter:
             applied_filters.append(f"Thesis Type={st.session_state.thesis_to_book_filter}")
+        if st.session_state.tags_filter:
+            applied_filters.append(f"Tags={', '.join(st.session_state.tags_filter)}")
 
         # Apply filters only if there are any
         if applied_filters:
@@ -6314,6 +6536,14 @@ with srcol3:
                 filtered_books = filtered_books[
                     (filtered_books['author_type'] == 'Multiple') &
                     (filtered_books['book_id'].map(author_count_dict) < 4)
+                ]
+
+            # Apply tags filter
+            if st.session_state.tags_filter:
+                filtered_books = filtered_books[
+                    filtered_books['tags'].apply(
+                        lambda x: all(tag in json.loads(x) if x and isinstance(x, str) else [] for tag in st.session_state.tags_filter)
+                    )
                 ]
 
             st.success(f"Applied Filters: {', '.join(applied_filters)}")
