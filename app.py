@@ -3203,8 +3203,293 @@ def edit_author_dialog(book_id, conn):
     book_authors = fetch_book_authors(book_id, conn)
     if book_authors.empty:
         st.warning(f"No authors found for Book ID: {book_id}")
-        if st.button("Close"):
-            st.rerun()
+        
+        # Fetch current book details and authors
+        book_authors = fetch_book_authors(book_id, conn)
+        existing_author_count = len(book_authors)
+
+        # Fetch current author_type from books table
+        with conn.session as s:
+            result = s.execute(
+                text("SELECT author_type FROM books WHERE book_id = :book_id"),
+                {"book_id": book_id}
+            ).fetchone()
+            current_author_type = result[0] if result else "Multiple"
+
+        # Author type selection
+        st.markdown("### Change Author Type")
+        author_types = ["Single", "Double", "Triple", "Multiple"]
+        selected_author_type = st.radio(
+            "Author Type",
+            author_types,
+            index=author_types.index(current_author_type),
+            key="author_type_selection",
+            horizontal=True,
+            label_visibility="collapsed" 
+        )
+
+        # Determine max authors based on selected author type
+        max_authors_allowed = {
+            "Single": 1,
+            "Double": 2,
+            "Triple": 3,
+            "Multiple": 4
+        }.get(selected_author_type, 4)
+
+        # Validate author type change
+        if selected_author_type != current_author_type:
+            if existing_author_count > max_authors_allowed:
+                st.error(f"❌ Cannot change to {selected_author_type} author type. Current {existing_author_count} author(s) exceed the limit of {max_authors_allowed}. Please remove excess authors first.")
+                st.toast("Can't Change Author Type", icon="❌", duration="long")
+                if st.button("Revert to Current Type"):
+                    st.rerun()
+                return
+            else:
+                # Update author_type in books table
+                try:
+                    with conn.session as s:
+                        s.execute(
+                            text("UPDATE books SET author_type = :author_type WHERE book_id = :book_id"),
+                            {"author_type": selected_author_type, "book_id": book_id}
+                        )
+                        s.commit()
+                        st.success(f"✔️ Author type changed to {selected_author_type}")
+                        st.toast(f"Author type changed to {selected_author_type}", icon="✔️", duration="long")
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "changed author type",
+                            f"Book ID: {book_id}, New Author Type: {selected_author_type}"
+                        )
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error updating author type: {e}")
+                    st.toast(f"Error updating author type: {e}", icon="❌", duration="long")
+                    return
+
+        available_slots = max_authors_allowed - existing_author_count
+        if available_slots <= 0:
+            st.warning(f"⚠️ Maximum number of authors ({max_authors_allowed}) reached for {selected_author_type} author type.")
+            if st.button("Close"):
+                st.rerun()
+            return
+
+        if existing_author_count == 0:
+            st.warning(f"⚠️ No authors found for Book ID: {book_id}")
+
+        # Initialize session state for new authors
+        if "new_authors" not in st.session_state or len(st.session_state.new_authors) != available_slots:
+            st.session_state.new_authors = initialize_new_authors(available_slots)
+
+        def validate_author(author, existing_positions, existing_author_ids, all_new_authors, index, author_type):
+            """Validate an author's details."""
+            if not author["name"]:
+                return False, "Author name is required."
+            if not author["email"] or not validate_email(author["email"]):
+                return False, "Invalid email format."
+            if not author["phone"] or not validate_phone(author["phone"]):
+                return False, "Invalid phone number format."
+            if not author["author_position"]:
+                return False, "Author position is required."
+            if not author["publishing_consultant"]:
+                return False, "Publishing consultant is required."
+
+            if author["author_position"] in existing_positions or \
+            author["author_position"] in [a["author_position"] for i, a in enumerate(all_new_authors) if i != index and a["author_position"]]:
+                return False, f"Position '{author['author_position']}' is already taken."
+
+            if author["author_id"] and author["author_id"] in existing_author_ids + \
+            [a["author_id"] for i, a in enumerate(all_new_authors) if i != index and a["author_id"]]:
+                return False, f"Author '{author['name']}' (ID: {author['author_id']}) is already linked."
+
+            # Validate number of authors based on author_type
+            total_authors = existing_author_count + sum(1 for a in all_new_authors if a["name"])
+            max_allowed = {"Single": 1, "Double": 2, "Triple": 3, "Multiple": 4}.get(author_type, 4)
+            if total_authors > max_allowed:
+                return False, f"Too many authors. {author_type} allows up to {max_allowed} authors."
+
+            return True, ""
+        
+        # Render author input forms
+        st.markdown(f"### Add Up to {available_slots} New Authors")
+        all_authors = get_all_authors(conn)
+        author_options = ["Add New Author"] + [f"{a.name} (ID: {a.author_id})" for a in all_authors]
+        unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
+        agent_options = ["Select Agent"] + ["Add New..."] + unique_agents
+        consultant_options = ["Select Consultant"] + ["Add New..."] + unique_consultants
+        existing_positions = [author["author_position"] for _, author in book_authors.iterrows()]
+        existing_author_ids = [author["author_id"] for _, author in book_authors.iterrows()]
+
+        cols = st.columns(2)
+
+        # Iterate through available slots and assign each expander to a column
+        for i in range(available_slots):
+            with cols[i % 2]:
+                with st.expander(f"New Author {i+1}", expanded=True):
+                    disabled = existing_author_count + i >= max_authors_allowed
+                    if disabled:
+                        st.warning(f"⚠️ Disabled: Maximum {max_authors_allowed} authors reached for {selected_author_type} mode.")
+
+                    selected_author = st.selectbox(
+                        f"Select Author {i+1}",
+                        author_options,
+                        key=f"new_author_select_{i}",
+                        disabled=disabled
+                    )
+
+                    if selected_author != "Add New Author" and selected_author and not disabled:
+                        selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
+                        selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
+                        if selected_author_details:
+                            st.session_state.new_authors[i].update({
+                                "name": selected_author_details.name,
+                                "email": selected_author_details.email,
+                                "phone": selected_author_details.phone,
+                                "author_id": selected_author_details.author_id
+                            })
+                    elif selected_author == "Add New Author" and not disabled:
+                        st.session_state.new_authors[i]["author_id"] = None
+
+                    col1, col2 = st.columns(2)
+                    st.session_state.new_authors[i]["name"] = col1.text_input(
+                        f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
+                        disabled=disabled
+                    )
+                    available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
+                                        (existing_positions + [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]])]
+                    st.session_state.new_authors[i]["author_position"] = col2.selectbox(
+                        f"Position {i+1}",
+                        available_positions,
+                        key=f"new_author_position_{i}",
+                        disabled=disabled or not available_positions
+                    ) if available_positions else st.error("❌ No available positions left.")
+
+                    col3, col4 = st.columns(2)
+                    st.session_state.new_authors[i]["phone"] = col3.text_input(
+                        f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
+                        disabled=disabled
+                    )
+                    st.session_state.new_authors[i]["email"] = col4.text_input(
+                        f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
+                        disabled=disabled
+                    )
+
+                    col5, col6 = st.columns(2)
+                    selected_agent = col5.selectbox(
+                        f"Corresponding Agent {i+1}",
+                        agent_options,
+                        index=agent_options.index(st.session_state.new_authors[i]["corresponding_agent"]) if st.session_state.new_authors[i]["corresponding_agent"] in unique_agents else 0,
+                        key=f"new_agent_select_{i}",
+                        disabled=disabled
+                    )
+                    if selected_agent == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = col5.text_input(
+                            f"New Agent Name {i+1}", key=f"new_agent_input_{i}"
+                        )
+                    elif selected_agent != "Select Agent" and not disabled:
+                        st.session_state.new_authors[i]["corresponding_agent"] = selected_agent
+                    else:
+                        st.session_state.new_authors[i]["corresponding_agent"] = ""
+
+                    selected_consultant = col6.selectbox(
+                        f"Publishing Consultant {i+1}",
+                        consultant_options,
+                        index=consultant_options.index(st.session_state.new_authors[i]["publishing_consultant"]) if st.session_state.new_authors[i]["publishing_consultant"] in unique_consultants else 0,
+                        key=f"new_consultant_select_{i}",
+                        disabled=disabled
+                    )
+                    if selected_consultant == "Add New..." and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = col6.text_input(
+                            f"New Consultant Name {i+1}", key=f"new_consultant_input_{i}"
+                        )
+                    elif selected_consultant != "Select Consultant" and not disabled:
+                        st.session_state.new_authors[i]["publishing_consultant"] = selected_consultant
+                    else:
+                        st.session_state.new_authors[i]["publishing_consultant"] = ""
+
+        # Add or Cancel buttons (outside the column layout to maintain original placement)
+        col1, col2 = st.columns([7, 1])
+        with col1:
+            if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
+                errors = []
+                for i, author in enumerate(st.session_state.new_authors):
+                    if author["name"]:
+                        is_valid, error_message = validate_author(author, existing_positions, existing_author_ids, 
+                                                                st.session_state.new_authors, i, selected_author_type)
+                        if not is_valid:
+                            errors.append(f"Author {i+1}: {error_message}")
+                if errors:
+                    for error in errors:
+                        st.markdown(f'<div class="error-box">❌ {error}</div>', unsafe_allow_html=True)
+                else:
+                    try:
+                        authors_added = False
+                        added_authors = []  # Track added authors for logging
+                        with conn.session as s:
+                            for author in st.session_state.new_authors:
+                                if author["name"]:
+                                    author_id_to_link = author["author_id"]
+                                    if not author_id_to_link:  # New author
+                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+                                        if not author_id_to_link:
+                                            st.error(f"Failed to insert author {author['name']}")
+                                            continue
+                                    # Insert into book_authors
+                                    s.execute(
+                                        text("""
+                                            INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                            VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                        """),
+                                        params={
+                                            "book_id": book_id,
+                                            "author_id": author_id_to_link,
+                                            "author_position": author["author_position"],
+                                            "corresponding_agent": author["corresponding_agent"],
+                                            "publishing_consultant": author["publishing_consultant"] or None
+                                        }
+                                    )
+                                    authors_added = True
+                                    # Store author details for logging
+                                    added_authors.append({
+                                        "author_id": author_id_to_link,
+                                        "name": author["name"],
+                                        "author_position": author["author_position"],
+                                        "corresponding_agent": author["corresponding_agent"],
+                                        "publishing_consultant": author["publishing_consultant"]
+                                    })
+                            s.commit()
+                        if authors_added:
+                            # Log each added author
+                            for author in added_authors:
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "added author to book",
+                                    f"Book ID: {book_id}, Author ID: {author['author_id']}, Name: {author['name']}, Position: {author['author_position']}, Agent: {author['corresponding_agent'] or 'None'}, Consultant: {author['publishing_consultant'] or 'None'}"
+                                )
+                            st.cache_data.clear()
+                            st.success("✔️ New authors added successfully!")
+                            st.toast("New authors added successfully!", icon="✔️", duration="long")
+                            del st.session_state.new_authors
+                            import time
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error("❌ No authors were added due to errors.")
+                    except Exception as e:
+                        st.error(f"❌ Error adding authors: {e}")
+                        st.toast(f"Error adding authors: {e}", icon="❌", duration="long")
+
+        with col2:
+            if st.button("Cancel", key="cancel_add_authors", type="secondary"):
+                del st.session_state.new_authors
+                st.rerun()
         return
 
     # Initialize session state for expander states and previous checkbox states
