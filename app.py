@@ -4,16 +4,14 @@ from sqlalchemy import text
 from datetime import date
 import time
 import re
-import os
 import datetime
 import random
-import time
+import uuid
+from urllib.parse import urlencode
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
 from constants import ACCESS_TO_BUTTON
-import uuid
-from urllib.parse import urlencode
 from constants import log_activity
 from constants import connect_db
 from constants import clean_old_logs
@@ -25,6 +23,14 @@ from email.mime.text import MIMEText
 from email import encoders
 import io
 import os
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from PIL import Image as PILImage
+from io import BytesIO
+import requests
 
 
 ####################################################################################################################
@@ -208,7 +214,15 @@ BUTTON_CONFIG = {
         "permission": None,
         "type": "new_tab",
         "admin_only": True,
-    }
+    },
+    "data_export": {
+        "label": "Export Data",
+        "icon": "📤",
+        "permission": None,
+        "type": "call_function",
+        "function": lambda conn: export_data_dialog(conn),
+        "admin_only": True,
+    },
 }
 
 st.cache_data.clear()
@@ -863,103 +877,42 @@ def get_all_booktracker_data(conn):
     
     return final_df
 
-def export_data():
-    st.header("Export Data")
-    
-    with st.container(border=True):
-        col1, col2 = st.columns([1,1], gap="small")
-        with col1:
-            st.subheader("Database Selection")
-            database = st.radio(
-                "Select Database",
-                ["MIS", "IJISEM"],
-                index=0,
-                horizontal=True
-            )
-        
-        with col2:
-            st.subheader("Export Options")
-            if database == "MIS":
-                export_all = st.checkbox("All Data Export", value=True)
-                export_authors = st.checkbox("Only Author Data")
-                export_books = st.checkbox("Only Book Data")
-                export_inventory = st.checkbox("Only Inventory Data")
-                
-                export_options = []
-                if export_all:
-                    export_options.append("All Data Export")
-                if export_authors:
-                    export_options.append("Only Author Data")
-                if export_books:
-                    export_options.append("Only Book Data")
-                if export_inventory:
-                    export_options.append("Only Inventory Data")
-            else:
-                export_all = st.checkbox("All Data Export", value=True)
-                export_authors = st.checkbox("Only Author Data")
-                export_papers = st.checkbox("Only Papers Data")
-                
-                export_options = []
-                if export_all:
-                    export_options.append("All Data Export")
-                if export_authors:
-                    export_options.append("Only Author Data")
-                if export_papers:
-                    export_options.append("Only Papers Data")
-        
-        if st.button("Export"):
-            if not export_options:
-                st.error("Please select at least one export option")
-                return
-                
-            with st.spinner("Generating export..."):
-                dfs = []
-                if database == "IJISEM":
-                    for option in export_options:
-                        if option == "All Data Export":
-                            df = get_all_ijisem_data(ijisem_conn)
-                            dfs.append(('All_Data', df))
-                        elif option == "Only Author Data":
-                            df = ijisem_conn.query("SELECT * FROM authors")
-                            dfs.append(('Authors', df))
-                        else:  # Only Papers Data
-                            df = ijisem_conn.query("SELECT * FROM papers")
-                            dfs.append(('Papers', df))
-                else:  # booktracker
-                    for option in export_options:
-                        if option == "All Data Export":
-                            df = get_all_booktracker_data(conn)
-                            dfs.append(('All_Data', df))
-                        elif option == "Only Author Data":
-                            df = conn.query("SELECT * FROM authors")
-                            dfs.append(('Authors', df))
-                        elif option == "Only Book Data":
-                            df = conn.query("SELECT * FROM books")
-                            dfs.append(('Books', df))
-                        else:  # Inventory Data Export
-                            df = conn.query("SELECT * FROM inventory")
-                            dfs.append(('Inventory', df))
-                
-                # Create Excel file in memory
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    for sheet_name, df in dfs:
-                        df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-                
-                # Get current timestamp for filename
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"{database}_export_{timestamp}.xlsx"
-                
-                # Send email
-                subject = f"{database} Data Export - {', '.join(export_options)}"
-                body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
-                
-                if send_email(subject, body, output.getvalue(), filename):
-                    st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
-                    st.toast(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}", icon="✔️", duration="long")
-                    st.balloons()
+
+def fetch_tags(conn):
+
+    try:
+        # Fetch and process tags
+        with conn.session as s:
+            tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
+            all_tags = s.execute(tag_query).fetchall()
+            
+            unique_tags = set()
+            for row in all_tags[:5]:
+                if row[0] and isinstance(row[0], str):
+                    try:
+                        tags = json.loads(row[0])  # Parse JSON array
+                        unique_tags.update(tags)
+                    except json.JSONDecodeError:
+                        st.error(f"Invalid JSON in tags: {row[0]} -> Skipped")
                 else:
-                    st.error("Failed to send export email")
+                    st.error(f"Raw tag: {row[0]} -> Skipped (invalid or empty)")
+            
+            # Collect unique tags from all rows
+            for row in all_tags:
+                if row[0] and isinstance(row[0], str):
+                    try:
+                        tags = json.loads(row[0])
+                        unique_tags.update(tags)
+                    except json.JSONDecodeError:
+                        st.write(f"Invalid JSON in tags: {row[0]} -> Skipped")
+            
+            # Convert to sorted list
+            sorted_tags = sorted(unique_tags)
+
+            return sorted_tags
+    except Exception as e:
+        st.error(f"Error fetching tags: {e}")
+        return []
 
 
 ###################################################################################################################################
@@ -990,7 +943,7 @@ def manage_users(conn):
         ).fetchall()
     
     # Tabs for user management
-    tab1, tab2, tab3 = st.tabs(["Users", "Edit or Add", "Export Data"])
+    tab1, tab2 = st.tabs(["Users", "Edit or Add"])
 
     # Tab 1: View Users
     with tab1:
@@ -1335,12 +1288,285 @@ def manage_users(conn):
                                     import time
                                     time.sleep(2)
                                     st.rerun()
-    
-    # Tab 4: Export Data (no logging assumed)
-    with tab3:
-        col1,_ = st.columns(2)
-        with col1:
-            export_data()
+        
+
+
+###################################################################################################################################
+##################################--------------- Export Data in PDF/Excel ----------------------------##################################
+###################################################################################################################################
+
+
+@st.dialog("Export Data", width="large")
+def export_data_dialog(conn):
+
+    def export_data():
+        st.write(" ### Export Filtered Books as Excel")
+        
+        with st.container(border=True):
+            col1, col2 = st.columns([1,1], gap="small")
+            with col1:
+                st.subheader("Database Selection")
+                database = st.radio(
+                    "Select Database",
+                    ["MIS", "IJISEM"],
+                    index=0,
+                    horizontal=True
+                )
+            
+            with col2:
+                st.subheader("Export Options")
+                if database == "MIS":
+                    export_all = st.checkbox("All Data Export", value=True)
+                    export_authors = st.checkbox("Only Author Data")
+                    export_books = st.checkbox("Only Book Data")
+                    export_inventory = st.checkbox("Only Inventory Data")
+                    
+                    export_options = []
+                    if export_all:
+                        export_options.append("All Data Export")
+                    if export_authors:
+                        export_options.append("Only Author Data")
+                    if export_books:
+                        export_options.append("Only Book Data")
+                    if export_inventory:
+                        export_options.append("Only Inventory Data")
+                else:
+                    export_all = st.checkbox("All Data Export", value=True)
+                    export_authors = st.checkbox("Only Author Data")
+                    export_papers = st.checkbox("Only Papers Data")
+                    
+                    export_options = []
+                    if export_all:
+                        export_options.append("All Data Export")
+                    if export_authors:
+                        export_options.append("Only Author Data")
+                    if export_papers:
+                        export_options.append("Only Papers Data")
+            
+            if st.button("Export to Excel", key="export_button", type="primary"):
+                if not export_options:
+                    st.error("Please select at least one export option")
+                    return
+                    
+                with st.spinner("Generating export..."):
+                    dfs = []
+                    if database == "IJISEM":
+                        for option in export_options:
+                            if option == "All Data Export":
+                                df = get_all_ijisem_data(ijisem_conn)
+                                dfs.append(('All_Data', df))
+                            elif option == "Only Author Data":
+                                df = ijisem_conn.query("SELECT * FROM authors")
+                                dfs.append(('Authors', df))
+                            else:  # Only Papers Data
+                                df = ijisem_conn.query("SELECT * FROM papers")
+                                dfs.append(('Papers', df))
+                    else:  # booktracker
+                        for option in export_options:
+                            if option == "All Data Export":
+                                df = get_all_booktracker_data(conn)
+                                dfs.append(('All_Data', df))
+                            elif option == "Only Author Data":
+                                df = conn.query("SELECT * FROM authors")
+                                dfs.append(('Authors', df))
+                            elif option == "Only Book Data":
+                                df = conn.query("SELECT * FROM books")
+                                dfs.append(('Books', df))
+                            else:  # Inventory Data Export
+                                df = conn.query("SELECT * FROM inventory")
+                                dfs.append(('Inventory', df))
+                    
+                    # Create Excel file in memory
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        for sheet_name, df in dfs:
+                            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+                    
+                    # Get current timestamp for filename
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"{database}_export_{timestamp}.xlsx"
+                    
+                    # Send email
+                    subject = f"{database} Data Export - {', '.join(export_options)}"
+                    body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
+                    
+                    if send_email(subject, body, output.getvalue(), filename):
+                        st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
+                        st.toast(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}", icon="✔️", duration="long")
+                        st.balloons()
+                    else:
+                        st.error("Failed to send export email")
+
+    def export_filtered_books_pdf(conn):
+        st.write(" ### Export Filtered Books as PDF")
+        
+        with st.container(border=True):
+            
+            # Publisher filter (Radio button at the top)
+            publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
+            selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
+            
+            # Delivery Status and Author Type filters (side-by-side selectboxes)
+            col1, col2 = st.columns([1, 1], gap="small")
+            
+            with col1:
+                delivery_status = st.selectbox("Delivery Status", ["All", "Delivered", "Ongoing"], index=0, key="filter_delivery_status")
+            
+            with col2:
+                author_types = ["All", "Single", "Double", "Triple", "Multiple"]
+                selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
+            
+            # Tags filter (multiselect below)
+            sorted_tags = fetch_tags(conn)
+            selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
+            
+            if st.button("Export to PDF", key="export_pdf_button", type="primary"):
+                with st.spinner("Generating PDF..."):
+                    # Build query with filters
+                    query = "SELECT images, title, isbn, book_mrp FROM books WHERE 1=1"
+                    params = {}
+                    if selected_publisher != "All":
+                        query += " AND publisher = :publisher"
+                        params["publisher"] = selected_publisher
+                    if delivery_status != "All":
+                        query += " AND deliver = :deliver"
+                        params["deliver"] = 1 if delivery_status == "Delivered" else 0
+                    if selected_tags:
+                        query += " AND (" + " OR ".join(["tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
+                        for i, tag in enumerate(selected_tags):
+                            params[f"tag{i}"] = f"%{tag}%"
+                    if selected_author_type != "All":
+                        query += " AND author_type = :author_type"
+                        params["author_type"] = selected_author_type
+                    
+                    # Fetch filtered data
+                    df = conn.query(query, params=params)
+                    
+                    if df.empty:
+                        st.warning("No books match the selected filters.")
+                        return
+                    
+                    # Generate PDF using reportlab
+                    pdf_output = io.BytesIO()
+                    doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+                    elements = []
+                    
+                    # Styles
+                    styles = getSampleStyleSheet()
+                    title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=16, spaceAfter=12)
+                    normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, spaceAfter=6)
+                    summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=10, spaceAfter=8)
+                    
+                    # Add title
+                    elements.append(Paragraph("Exported Books Report", title_style))
+                    elements.append(Spacer(1, 12))
+                    elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
+                    elements.append(Spacer(1, 12))
+                    
+                    # Add summary
+                    book_count = len(df)
+                    publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
+                    tags_text = ", ".join(selected_tags) if selected_tags else "None"
+                    elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
+                    elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
+                    elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
+                    elements.append(Spacer(1, 12))
+                    
+                    # Table data
+                    table_data = [["Image", "Title", "ISBN", "MRP"]]
+                    for idx, row in df.iterrows():
+                        image_url = row['images'] if pd.notna(row['images']) else ''
+                        title = row['title'] if pd.notna(row['title']) else ''
+                        isbn = row['isbn'] if pd.notna(row['isbn']) else ''
+                        mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
+                        
+                        # Handle image (fetch from URL and compress/resize)
+                        image_element = Paragraph("No Image", normal_style)
+                        if image_url and image_url.startswith(('http://', 'https://')):
+                            try:
+                                response = requests.get(image_url, stream=True, timeout=10)
+                                if response.status_code == 200:
+                                    # Load image with PIL
+                                    pil_image = PILImage.open(BytesIO(response.content))
+                                    # Resize to 150x200 pixels (reasonable for book cover thumbnail)
+                                    pil_image.thumbnail((200, 250), PILImage.Resampling.LANCZOS)
+                                    # Save compressed to BytesIO as JPEG
+                                    img_buffer = BytesIO()
+                                    pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
+                                    img_buffer.seek(0)
+                                    # Load into reportlab Image
+                                    image_element = Image(img_buffer, width=4*cm, height=5*cm)
+                            except Exception as e:
+                                # Fallback if any error
+                                pass
+                        
+                        table_data.append([image_element, Paragraph(title, normal_style), Paragraph(isbn, normal_style), Paragraph(mrp, normal_style)])
+                    
+                    # Create table with modern styling
+                    table = Table(table_data, colWidths=[4.5*cm, 8*cm, 4*cm, 2*cm])
+                    table.setStyle(TableStyle([
+                        # Header
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F618D')),  # Deep blue header
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), 12),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                        ('TOPPADDING', (0, 0), (-1, 0), 10),
+
+                        # Body
+                        ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+                        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 1), (-1, -1), 10),
+
+                        # Alternate row colors (soft grayscale with hint of blue)
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
+                            colors.HexColor('#F9FBFC'),  # very light blue-gray
+                            colors.HexColor('#ECF3F9')   # soft gray-blue
+                        ]),
+
+                        # Grid & borders
+                        ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#BDC3C7')),  # subtle grid
+                        ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#7D8C9E')),   # darker outer border
+
+                        # Padding for readability
+                        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+                        ('TOPPADDING', (0, 1), (-1, -1), 6),
+                    ]))
+
+                    elements.append(table)
+                    
+                    # Build PDF
+                    try:
+                        doc.build(elements)
+                    except Exception as e:
+                        st.error(f"Failed to generate PDF: {str(e)}")
+                        st.toast(f"Failed to generate PDF: {str(e)}", icon="❌", duration="long")
+                        return
+                    
+                    # Send email
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    filename = f"Filtered_Books_{timestamp}.pdf"
+                    subject = f"Filtered Books PDF Export"
+                    body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
+                    
+                    if send_email(subject, body, pdf_output.getvalue(), filename):
+                        st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
+                        st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
+                        st.balloons()
+                    else:
+                        st.error("Failed to send export email")
+                        st.toast("Failed to send export email", icon="❌", duration="long")
+
+    col1,col2 = st.columns(2)
+    with col1:
+        export_filtered_books_pdf(conn)
+    with col2:
+        export_data()
         
         
 ###################################################################################################################################
@@ -1560,34 +1786,9 @@ def add_book_dialog(conn):
             if "new_book_tags" not in st.session_state:
                 st.session_state["new_book_tags"] = []
 
-            # Fetch and process tags
-            with conn.session as s:
-                tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
-                all_tags = s.execute(tag_query).fetchall()
-                
-                unique_tags = set()
-                for row in all_tags[:5]:
-                    if row[0] and isinstance(row[0], str):
-                        try:
-                            tags = json.loads(row[0])  # Parse JSON array
-                            unique_tags.update(tags)
-                        except json.JSONDecodeError:
-                            st.error(f"Invalid JSON in tags: {row[0]} -> Skipped")
-                    else:
-                        st.error(f"Raw tag: {row[0]} -> Skipped (invalid or empty)")
-                
-                # Collect unique tags from all rows
-                for row in all_tags:
-                    if row[0] and isinstance(row[0], str):
-                        try:
-                            tags = json.loads(row[0])
-                            unique_tags.update(tags)
-                        except json.JSONDecodeError:
-                            st.write(f"Invalid JSON in tags: {row[0]} -> Skipped")
-                
-                # Convert to sorted list
-                sorted_tags = sorted(unique_tags)
-
+            # Fetch all unique tags from the database
+            sorted_tags = fetch_tags(conn)
+            
             # Add session state tags
             options = sorted_tags + [tag for tag in st.session_state["new_book_tags"] if tag not in sorted_tags]
 
@@ -1893,8 +2094,9 @@ def add_book_dialog(conn):
             errors.append("Publisher is required.")
         
         # Add this new check for tags
-        if not book_data.get("tags"):
-            errors.append("At least one tag is required.")
+        tags = book_data.get("tags", [])
+        if len(tags) < 3:
+            errors.append("At least 3 tags are required.")
             
         # Validation for Authors (Publisher-specific)
         if publisher not in ["AG Kids", "NEET/JEE"]:
@@ -1998,26 +2200,29 @@ def add_book_dialog(conn):
                             if publisher not in ["AG Kids", "NEET/JEE"]:
                                 for author in active_authors:
                                     if author["author_id"]:
+                                        # Existing author: use the existing ID
                                         author_id_to_link = author["author_id"]
                                     else:
+                                        # New author: insert and get ID
                                         s.execute(text("""
                                             INSERT INTO authors (name, email, phone)
                                             VALUES (:name, :email, :phone)
                                             ON DUPLICATE KEY UPDATE name=name
                                         """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
-
-                                        if book_id and author_id_to_link:
-                                            s.execute(text("""
-                                                INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
-                                                VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
-                                            """), params={
-                                                "book_id": book_id,
-                                                "author_id": author_id_to_link,
-                                                "author_position": author["author_position"],
-                                                "corresponding_agent": author["corresponding_agent"],
-                                                "publishing_consultant": author["publishing_consultant"]
-                                            })
+                                    
+                                    # Link author to book (runs for both new and existing authors)
+                                    if book_id and author_id_to_link:
+                                        s.execute(text("""
+                                            INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
+                                            VALUES (:book_id, :author_id, :author_position, :corresponding_agent, :publishing_consultant)
+                                        """), params={
+                                            "book_id": book_id,
+                                            "author_id": author_id_to_link,
+                                            "author_position": author["author_position"],
+                                            "corresponding_agent": author["corresponding_agent"],
+                                            "publishing_consultant": author["publishing_consultant"]
+                                        })
                             s.commit()
 
                             # Log save action with specified details
@@ -2058,6 +2263,25 @@ def add_book_dialog(conn):
 ###################################################################################################################################
 ##################################--------------- Edit ISBN Dialog ----------------------------##################################
 ###################################################################################################################################
+
+
+def get_book_image_url(conn, book_id):
+    """Fetch the image URL for a given book_id from the database"""
+    try:
+        with conn.session as s:
+            result = s.execute(
+                text("SELECT images FROM books WHERE book_id = :book_id"),
+                {"book_id": book_id}
+            )
+            row = result.fetchone()
+            if row and row[0]:
+                return row[0]
+            else:
+                return None
+    except Exception as e:
+        st.error(f"Error fetching book image: {e}")
+        return None
+
 
 from datetime import datetime
 @st.dialog("Manage ISBN and Book Title", width="large")
@@ -2193,53 +2417,107 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
             with st.container(border=True):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    new_title = st.text_input(
-                        "Book Title",
-                        value=current_title,
-                        key=f"title_{book_id}",
-                        help="Enter the book title"
-                    )
-                with col2:
-                    new_date = st.date_input(
-                        "Book Date",
-                        value=current_date if current_date else datetime.today(),
-                        key=f"date_{book_id}",
-                        help="Select the book date"
-                    )
-                toggles_enabled = current_publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
-                col3, col4 = st.columns([1, 3])
-                with col3:
-                    # Callback to handle Publish Only toggle
-                    def on_publish_only_change():
-                        if st.session_state[f"is_publish_only_{book_id}"]:
-                            st.session_state[f"is_thesis_to_book_{book_id}"] = False
+                
+                # Get book image URL
+                image_url = get_book_image_url(conn, book_id)
+                
+                if image_url:
+                    # Layout with image
+                    col1, col2 = st.columns([1, 3])  # Adjusted column ratio for image and inputs
+                    with col1:
+                        st.image(image_url, width=140)
+                    with col2:
+                        new_title = st.text_input(
+                            "Book Title",
+                            value=current_title,
+                            key=f"title_{book_id}"
+                        )
+                        # Place remaining inputs below title
+                        new_date = st.date_input(
+                            "Book Date",
+                            value=current_date if current_date else datetime.today(),
+                            key=f"date_{book_id}",
+                            width = 250
+                        )
+                        toggles_enabled = current_publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
+                        
+                        col3, col4 = st.columns([2, 4])
+                        with col3:
+                            # Callback to handle Publish Only toggle
+                            def on_publish_only_change():
+                                if st.session_state[f"is_publish_only_{book_id}"]:
+                                    st.session_state[f"is_thesis_to_book_{book_id}"] = False
 
-                    new_is_publish_only = st.toggle(
-                        "Publish Only?",
-                        value=st.session_state[f"is_publish_only_{book_id}"],
-                        key=f"is_publish_only_{book_id}",
-                        help="Enable this to mark the book as publish only (disables writing operations)",
-                        disabled=not toggles_enabled,
-                        on_change=on_publish_only_change
-                    )
-                with col4:
-                    # Callback to handle Thesis to Book toggle
-                    def on_thesis_to_book_change():
-                        if st.session_state[f"is_thesis_to_book_{book_id}"]:
-                            st.session_state[f"is_publish_only_{book_id}"] = False
+                            new_is_publish_only = st.toggle(
+                                "Publish Only?",
+                                value=st.session_state[f"is_publish_only_{book_id}"],
+                                key=f"is_publish_only_{book_id}",
+                                disabled=not toggles_enabled,
+                                on_change=on_publish_only_change
+                            )
+                        with col4:
+                            # Callback to handle Thesis to Book toggle
+                            def on_thesis_to_book_change():
+                                if st.session_state[f"is_thesis_to_book_{book_id}"]:
+                                    st.session_state[f"is_publish_only_{book_id}"] = False
 
-                    new_is_thesis_to_book = st.toggle(
-                        "Thesis to Book?",
-                        value=st.session_state[f"is_thesis_to_book_{book_id}"],
-                        key=f"is_thesis_to_book_{book_id}",
-                        help="Enable this to mark the book as a thesis-to-book conversion",
-                        disabled=not toggles_enabled,
-                        on_change=on_thesis_to_book_change
-                    )
-                if not toggles_enabled:
-                    st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
+                            new_is_thesis_to_book = st.toggle(
+                                "Thesis to Book?",
+                                value=st.session_state[f"is_thesis_to_book_{book_id}"],
+                                key=f"is_thesis_to_book_{book_id}",
+                                disabled=not toggles_enabled,
+                                on_change=on_thesis_to_book_change
+                            )
+                        if not toggles_enabled:
+                            st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
+                else:
+                    # Original layout without image
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        new_title = st.text_input(
+                            "Book Title",
+                            value=current_title,
+                            key=f"title_{book_id}"
+                        )
+                    with col2:
+                        new_date = st.date_input(
+                            "Book Date",
+                            value=current_date if current_date else datetime.today(),
+                            key=f"date_{book_id}"
+                        )
+                    toggles_enabled = current_publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
+                    col3, col4 = st.columns([1, 3])
+                    with col3:
+                        # Callback to handle Publish Only toggle
+                        def on_publish_only_change():
+                            if st.session_state[f"is_publish_only_{book_id}"]:
+                                st.session_state[f"is_thesis_to_book_{book_id}"] = False
+
+                        new_is_publish_only = st.toggle(
+                            "Publish Only?",
+                            value=st.session_state[f"is_publish_only_{book_id}"],
+                            key=f"is_publish_only_{book_id}",
+                            help="Enable this to mark the book as publish only (disables writing operations)",
+                            disabled=not toggles_enabled,
+                            on_change=on_publish_only_change
+                        )
+                    with col4:
+                        # Callback to handle Thesis to Book toggle
+                        def on_thesis_to_book_change():
+                            if st.session_state[f"is_thesis_to_book_{book_id}"]:
+                                st.session_state[f"is_publish_only_{book_id}"] = False
+
+                        new_is_thesis_to_book = st.toggle(
+                            "Thesis to Book?",
+                            value=st.session_state[f"is_thesis_to_book_{book_id}"],
+                            key=f"is_thesis_to_book_{book_id}",
+                            help="Enable this to mark the book as a thesis-to-book conversion",
+                            disabled=not toggles_enabled,
+                            on_change=on_thesis_to_book_change
+                        )
+                    if not toggles_enabled:
+                        st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
+                
                 st.markdown('</div>', unsafe_allow_html=True)
             
 
@@ -2279,15 +2557,17 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
             )
             book_note = book_note_section(current_book_note, book_id)
 
+
     with dialog_col2:    
         # ISBN Details Section
         st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
+        apply_isbn = bool(current_apply_isbn)
         if not has_open_author_position(conn, book_id):
             with st.container(border=True):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 apply_isbn = st.checkbox(
                     "ISBN Applied?",
-                    value=bool(current_apply_isbn),
+                    value=apply_isbn,
                     key=f"apply_{book_id}",
                     help="Check if ISBN application has been made"
                 )
@@ -2367,21 +2647,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         
         with st.expander("Manage Tags", expanded=False):
             # Fetch all unique tags and their counts from the database
-            with conn.session as s:
-                tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'")
-                all_tags = s.execute(tag_query).fetchall()
-                tag_counts = {}
-                for row in all_tags:
-                    try:
-                        tags = json.loads(row[0]) if row[0] else []
-                        for tag in tags:
-                            if tag:  # Only count non-empty tags
-                                tag_counts[tag] = tag_counts.get(tag, 0) + 1
-                    except json.JSONDecodeError:
-                        continue
-                
-                # Sort tags by count (descending) and then alphabetically
-                sorted_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
+            sorted_tags = fetch_tags(conn)
             
             # Add any new tags from session state that aren't in the database yet
             for tag in st.session_state[f"tags_{book_id}"]:

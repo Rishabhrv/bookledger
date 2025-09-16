@@ -9,3 +9,4 @@ SQLAlchemy==2.0.38
 streamlit==1.49.0
 mysqlclient
 XlsxWriter
+reportlab

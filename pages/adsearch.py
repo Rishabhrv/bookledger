@@ -89,6 +89,7 @@ SELECT
     b.book_id AS `Book ID`,
     b.title AS `Book Title`,
     b.date AS `Date`,
+    b.images AS `Image`,
     COUNT(ba.author_id) AS `No of Author`,
     MAX(CASE WHEN rn = 1 THEN ba.author_id END) AS `Author Id 1`,
     MAX(CASE WHEN rn = 2 THEN ba.author_id END) AS `Author Id 2`,
@@ -393,6 +394,7 @@ try:
     if not filtered_data.empty:
         st.success(f"Found {len(filtered_data)} results for '{search_query}' in '{search_column}'")
 
+
         for _, book in filtered_data.iterrows():
             # Determine book status
             deliver_status = str(book['Deliver']).strip().lower()
@@ -400,12 +402,11 @@ try:
             status_color = "#ff6b6b" if status == "Pending" else "#51cf66"
 
             # Handle missing ISBN
-            
             isbn_display = (
-                            str(book['ISBN']).lower().strip()
-                            if pd.notna(book['ISBN']) and str(book['ISBN']).lower().strip() != "nan" and book['ISBN'] != ""
-                            else "<span style='color:#ff6b6b;font-weight:bold;'>Pending</span>"
-                        )
+                str(book['ISBN']).lower().strip()
+                if pd.notna(book['ISBN']) and str(book['ISBN']).lower().strip() != "nan" and book['ISBN'] != ""
+                else "<span style='color:#ff6b6b;font-weight:bold;'>Pending</span>"
+            )
 
             # Helper function for highlighting boolean values
             def highlight_boolean(value):
@@ -424,12 +425,18 @@ try:
                 }
                 links_html = ""
                 for column, icon_url in icons.items():
-                    # Safely retrieve the link and handle missing or invalid values
                     link = book.get(column, None)
                     if link is not None and pd.notna(link) and str(link).strip() != "":
                         links_html += f"<a href='{str(link).strip()}' target='_blank'><img src='{icon_url}' alt='{column}' style='width:24px; margin-right:8px;'></a>"
                 return links_html
 
+            # Handle missing or invalid image
+            image_html = (
+                f"<img src='{book['Image']}' alt='{book['Book Title']}' style='width:50%; height:26vh; object-fit:cover; border-radius:6px;' onerror=\"this.style.display='none'; this.nextSibling.style.display='block';\">"
+                "<div style='display:none; text-align:center; color:#ff6b6b; font-weight:bold;'>Image Not Available</div>"
+                if pd.notna(book['Image']) and str(book['Image']).strip() != "" and str(book['Image']).lower() != "nan"
+                else "<div style='text-align:center; color:#9c9c9c; font-weight:bold;'>Image Not Available</div>"
+            )
 
             with st.container():
                 st.markdown(
@@ -463,31 +470,34 @@ try:
                         </h3>
                         <div style="
                             display: grid;
-                            grid-template-columns: repeat(3, 1fr);
-                            gap: 20px;
+                            grid-template-columns: 1fr 1fr 1fr 1fr;
+                            gap: 10px;
                             font-size: 14px;
-                            color: #343a40;">
-                            <div>
+                            color: #343a40;
+                            align-items: stretch;">
+                            <div style="display: flex; align-items: center; justify-content: center;">
+                                {image_html}
+                            </div>
+                            <div style = "padding-top: 11px;">
                                 <p>🔖 <b>Book ID:</b> {book['Book ID']}</p>
                                 <p>📚 <b>ISBN:</b> {isbn_display}</p>
                                 <p>📅 <b>Enroll Date:</b> {book['Date']}</p>
                                 <p>🗓️ <b>Book Month:</b> {book['Month']}</p>
                                 <p>⌛ <b>Since Enrolled:</b> {book['Since Enrolled']}</p>
                             </div>
-                            <div>
+                            <div style = "padding-top: 11px;">
                                 <p>👥 <b>No. of Authors:</b> {book['No of Author']}</p>
                                 <p>✅ <b>Book Writing Complete:</b> {highlight_boolean(book['Book Complete'])}</p>
                                 <p>📤 <b>Cover Page & Agreement Sent:</b> {highlight_boolean(book['Send Cover Page and Agreement'])}</p>
                                 <p>📄 <b>Agreement Received:</b> {highlight_boolean(book['Agreement Received'])}</p>
                                 <p>🖼️ <b>Digital Proof Sent:</b> {highlight_boolean(book['Digital Prof'])}</p>
                             </div>
-                            <div>
+                            <div style = "padding-top: 11px;">
                                 <p>🔔 <b>Print Confirmation:</b> {highlight_boolean(book['Confirmation'])}</p>
                                 <p>🖨️ <b>Ready to Print:</b> {highlight_boolean(book['Ready to Print'])}</p>
                                 <p>📦 <b>Print:</b> {highlight_boolean(book['Print'])}</p>
                                 <p>🚚 <b>Deliver:</b> {highlight_boolean(book['Deliver'])}</p>
                                 <div><p>🔗 <b>Links:</b> {generate_link_icons(book)}</p></div>
-                            </div>
                             </div>
                         </div>
                     </div>

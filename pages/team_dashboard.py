@@ -592,6 +592,41 @@ def format_duration(duration):
         return "Less than an hour"
 
 def render_worker_completion_graph(books_df, selected_month, section):
+    from datetime import datetime, timedelta, time
+    # Function to compute working duration between two timestamps
+    def compute_working_time(start, end):
+        """Returns (days, hours) using 09:30-18:00 Mon–Sat schedule."""
+        if pd.isna(start) or pd.isna(end) or start >= end:
+            return (0, 0)
+
+        work_start = time(9, 30)
+        work_end = time(18, 0)
+        work_day_hours = 8.5
+
+        total_minutes = 0
+        current = start
+
+        while current.date() <= end.date():
+            if current.weekday() != 6:  # skip Sundays
+                day_start = datetime.combine(current.date(), work_start)
+                day_end = datetime.combine(current.date(), work_end)
+
+                actual_start = max(day_start, start)
+                actual_end = min(day_end, end)
+
+                if actual_start < actual_end:
+                    worked = (actual_end - actual_start).total_seconds() / 60
+                    total_minutes += worked
+
+            current += timedelta(days=1)
+            current = current.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        total_hours = total_minutes / 60.0
+        total_days = int(total_hours // work_day_hours)
+        remaining_hours = int(round(total_hours % work_day_hours))  # rounded hours
+
+        return total_days, remaining_hours
+
     # Convert selected_month to year and month for filtering
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
     target_period = pd.Timestamp(selected_month_dt).to_period('M')
@@ -633,16 +668,23 @@ def render_worker_completion_graph(books_df, selected_month, section):
             st.warning(f"No books completed by {selected_worker} in {selected_month} for {section.capitalize()}.")
             return
 
-        # Create table for book details using st.dataframe
+        # Create table for book details
         st.write(f"##### {section.capitalize()} Completed in {selected_month} by {selected_worker}")
         section_columns = [f'{section.capitalize()} By', f'{section.capitalize()} Start', f'{section.capitalize()} End']
         display_columns = ['Title'] + section_columns if 'Title' in books_df.columns else section_columns
-        
-        # Calculate time taken and split dates/times
+
+        # Calculate time taken using working-hours logic
         completed_books = completed_books.copy()  # Avoid modifying original dataframe
-        completed_books['Time Taken'] = completed_books[end_col] - completed_books[start_col]
-        completed_books['Time Taken'] = completed_books['Time Taken'].apply(format_duration)
-        
+        completed_books['Time Taken'] = completed_books.apply(
+            lambda row: compute_working_time(row[start_col], row[end_col]),
+            axis=1
+        )
+
+        # Format as "Xd Yh"
+        completed_books['Time Taken'] = completed_books['Time Taken'].apply(
+            lambda x: f"{x[0]}d {x[1]}h"
+        )
+
         # Split Start and End into Date and Time with AM/PM format
         completed_books['Start Date'] = completed_books[start_col].dt.strftime('%Y-%m-%d')
         completed_books['Start Time'] = completed_books[start_col].dt.strftime('%I:%M %p')
@@ -653,12 +695,11 @@ def render_worker_completion_graph(books_df, selected_month, section):
         display_columns = ['Title', 'Date', f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken'] if 'Title' in books_df.columns else [f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken']
         
         st.dataframe(
-            completed_books[display_columns].rename(columns={
-                f'{section.capitalize()} By': 'Team Member'
-            }),
+            completed_books[display_columns].rename(columns={f'{section.capitalize()} By': 'Team Member'}),
             hide_index=True,
             use_container_width=True
         )
+
 
     with col2:
         # Group by worker for the bar chart
@@ -713,9 +754,6 @@ def render_worker_completion_graph(books_df, selected_month, section):
 
 
 def render_metrics(books_df, selected_month, section, user_role):
-    # Configurable number of columns for writing section metrics
-    METRIC_COLUMNS = 7  # Change this to experiment with layout (e.g., 6, 8)
-
 
     # Convert selected_month (e.g., "April 2025") to date range
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
@@ -1436,6 +1474,51 @@ def edit_section_dialog(book_id, conn, section):
             st.rerun()
 
 
+def calculate_working_duration(start_date, end_date):
+    """Calculate duration in working hours (09:30–18:00, Mon–Sat) between two timestamps.
+       Returns (total_days, remaining_hours) where 1 day = 8.5 hours, hours rounded."""
+    
+    if pd.isna(start_date) or pd.isna(end_date):
+        return None
+    if start_date >= end_date:
+        return (0, 0)
+    
+    from datetime import datetime, timedelta, time
+
+    # Working day limits
+    work_start = time(9, 30)
+    work_end = time(18, 0)
+    work_day_hours = 8.5
+
+    total_minutes = 0
+    current = start_date
+
+    while current.date() <= end_date.date():
+        # Skip Sundays
+        if current.weekday() != 6:
+            day_start = datetime.combine(current.date(), work_start)
+            day_end = datetime.combine(current.date(), work_end)
+
+            actual_start = max(day_start, start_date)
+            actual_end = min(day_end, end_date)
+
+            if actual_start < actual_end:
+                worked = (actual_end - actual_start).total_seconds() / 60
+                total_minutes += worked
+
+        current += timedelta(days=1)
+        current = current.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    total_hours = total_minutes / 60.0
+
+    # Split into full workdays + leftover (hours rounded)
+    total_days = int(total_hours // work_day_hours)
+    remaining_hours = int(round(total_hours % work_day_hours))  # round to nearest hour
+
+    return (total_days, remaining_hours)
+
+
+
 def render_table(books_df, title, column_sizes, color, section, role, is_running=False):
     if books_df.empty:
         st.warning(f"No {title.lower()} books available from the last 3 months.")
@@ -1467,10 +1550,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     placeholder="Search by Book ID or Title",
                     key=f"search_{section}_{title}",
                     label_visibility="collapsed",
-                    width = 700
+                    width=700
                 )
                 if search_term:
-                    # Convert Book ID to string for consistent searching
                     filtered_df = books_df[
                         books_df['Book ID'].astype(str).str.contains(search_term, case=False, na=False) |
                         books_df['Title'].str.contains(search_term, case=False, na=False)
@@ -1496,7 +1578,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                 columns.append("Writing End")
             if "Pending" in title or "Completed" in title:
                 columns.append("Book Pages")
-            if "Pending" in title:
+            if "Pending" in title and section != "proofreading":
                 columns.append("Rating")
         elif role == "formatter":
             if not is_running:
@@ -1516,7 +1598,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             if role == "cover_designer":
                 columns.extend(["Cover By", "Action", "Details"])
             elif role == "proofreader":
-                columns.extend(["Proofreading Start", "Proofreading By", "Rating", "Action"])
+                columns.extend(["Proofreading Start", "Proofreading By", "Action"])  # Removed "Rating"
             elif role == "writer":
                 columns.extend(["Writing Start", "Writing By", "Syllabus", "Action"])
             else:
@@ -1582,7 +1664,6 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         title_text += ' <span class="pill publish-only-badge">Publish only</span>'
                     elif pd.notnull(row.get('is_thesis_to_book')) and row['is_thesis_to_book'] == 1:
                         title_text += ' <span class="pill thesis-to-book-badge">Thesis to Book</span>'
-                # Add note icon if Notes column exists and is non-empty
                 if 'book_note' in row and pd.notnull(row['book_note']) and row['book_note'].strip():
                     note_snippet = row['book_note'][:50] + ('...' if len(row['book_note']) > 50 else '')
                     title_text += f' <span class="note-icon" title="{note_snippet}">:material/forum:</span>'
@@ -1597,21 +1678,22 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                 days_since = get_days_since_enrolled(row['Date'], current_date)
                 status_html = f'<span class="pill status-{"correction" if is_in_correction else "pending" if status == "Pending" else "running" if status == "Running" else "completed"}">{status}'
                 if days is not None and status == "Running":
-                    status_html += f' {days}d'
+                    duration = calculate_working_duration(row[f'{section.capitalize()} Start'], datetime.now())
+                    if duration:
+                        days, hours = duration
+                        duration_str = f"{days}d" if hours == 0 else f"{days}d {hours}h"
+                        status_html += f' {duration_str}'
                 elif "Completed" in title:
                     start_date = row[f'{section.capitalize()} Start']
                     end_date = row[f'{section.capitalize()} End']
                     if pd.notnull(start_date) and pd.notnull(end_date) and start_date != '0000-00-00 00:00:00' and end_date != '0000-00-00 00:00:00':
-                        duration = end_date - start_date
-                        total_hours = duration.total_seconds() / 3600
-                        if total_hours >= 24:
-                            duration_days = duration.days
-                            duration_hours = round(total_hours % 24)
-                            duration_str = f"{duration_days}d" if duration_hours == 0 else f"{duration_days}d {duration_hours}h"
+                        duration = calculate_working_duration(start_date, end_date)
+                        if duration:
+                            days, hours = duration
+                            duration_str = f"{days}d" if hours == 0 else f"{days}d {hours}h"
+                            status_html += f' ({duration_str})'
                         else:
-                            duration_hours = round(total_hours)
-                            duration_str = f"{duration_hours}h"
-                        status_html += f' ({duration_str})'
+                            status_html += ' (-)'
                     else:
                         status_html += ' (-)'
                 elif not is_running and days_since is not None:
@@ -1644,7 +1726,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         value = str(book_pages) if pd.notnull(book_pages) and book_pages != 0 else "-"
                         st.markdown(f'<span>{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
-                if "Rating" in columns and not is_running:
+                if "Rating" in columns and not is_running and section != "proofreading":
                     with col_configs[col_idx]:
                         if st.button("Rate", key=f"rate_{section}_{row['Book ID']}"):
                             rate_user_dialog(row['Book ID'], conn)
@@ -1752,10 +1834,6 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         value = worker if pd.notnull(worker) else "Not Assigned"
                         class_name = f"worker-by-{worker_map.get(worker)}" if worker_map and pd.notnull(worker) else "worker-by-not"
                         st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
-                    col_idx += 1
-                    with col_configs[col_idx]:
-                        if st.button("Rate", key=f"rate_{section}_{row['Book ID']}"):
-                            rate_user_dialog(row['Book ID'], conn)
                     col_idx += 1
                     with col_configs[col_idx]:
                         is_in_correction = row['Book ID'] in correction_book_ids
@@ -1971,19 +2049,19 @@ for section, config in sections.items():
 
         # Column sizes (from your previous code)
         if section == "writing":
-            column_sizes_running = [0.7, 5.2, 1, 1.2, 1.2, 1.2, 1, 1]
+            column_sizes_running = [0.7, 5.2, 1, 1.3, 1.3, 1.2, 1, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 0.8, 1]
             column_sizes_completed = [0.7, 5, 1, 1.3, 1, 1, 1, 1]
         elif section == "proofreading":
-            column_sizes_running = [0.8, 5.5, 1, 1.2, 1, 1.2, 1.2, 1, 1]
-            column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 0.8]
+            column_sizes_running = [0.7, 5, 1, 1.2, 0.9, 1.6, 1.2, 1]
+            column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1,0.8]
             column_sizes_completed = [0.7, 3, 1, 1.3, 1.1, 1, 1, 1, 1, 1]
         elif section == "formatting":
             column_sizes_running = [0.7, 5.5, 1, 1, 1.2, 1.2, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 1.2, 1, 1]
             column_sizes_completed = [0.7, 3, 1, 1.3, 1.2, 1, 1, 1, 1]
         elif section == "cover":
-            column_sizes_running = [0.8, 5, 1.2, 1.2, 1, 1, 1, 1, 1, 1]
+            column_sizes_running = [0.8, 5, 1.2, 1.3, 1, 1, 1, 1, 1, 1]
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 1]
             column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3, 1, 1]
 
