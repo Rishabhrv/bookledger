@@ -133,6 +133,17 @@ st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0" rel="stylesheet" />
             """, unsafe_allow_html=True)
 
+st.markdown(
+    """
+    <style>
+    [data-testid="stElementToolbar"] {
+        display: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 
 # Button configuration
 BUTTON_CONFIG = {
@@ -1397,176 +1408,202 @@ def export_data_dialog(conn):
                     else:
                         st.error("Failed to send export email")
 
+
     def export_filtered_books_pdf(conn):
-        st.write(" ### Export Filtered Books as PDF")
+        st.write("### Export Filtered Books as PDF")
+
+        global_col1, global_col2 = st.columns([1,1.5], gap="small")
+
+        with global_col1:
         
-        with st.container(border=True):
-            
-            # Publisher filter (Radio button at the top)
-            publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
-            selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
-            
-            # Delivery Status and Author Type filters (side-by-side selectboxes)
-            col1, col2 = st.columns([1, 1], gap="small")
-            
-            with col1:
-                delivery_status = st.selectbox("Delivery Status", ["All", "Delivered", "Ongoing"], index=0, key="filter_delivery_status")
-            
-            with col2:
-                author_types = ["All", "Single", "Double", "Triple", "Multiple"]
-                selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
-            
-            # Tags filter (multiselect below)
-            sorted_tags = fetch_tags(conn)
-            selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
-            
-            if st.button("Export to PDF", key="export_pdf_button", type="primary"):
-                with st.spinner("Generating PDF..."):
-                    # Build query with filters
-                    query = "SELECT images, title, isbn, book_mrp FROM books WHERE 1=1"
-                    params = {}
-                    if selected_publisher != "All":
-                        query += " AND publisher = :publisher"
-                        params["publisher"] = selected_publisher
-                    if delivery_status != "All":
-                        query += " AND deliver = :deliver"
-                        params["deliver"] = 1 if delivery_status == "Delivered" else 0
-                    if selected_tags:
-                        query += " AND (" + " OR ".join(["tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
-                        for i, tag in enumerate(selected_tags):
-                            params[f"tag{i}"] = f"%{tag}%"
-                    if selected_author_type != "All":
-                        query += " AND author_type = :author_type"
-                        params["author_type"] = selected_author_type
-                    
-                    # Fetch filtered data
-                    df = conn.query(query, params=params)
-                    
-                    if df.empty:
-                        st.warning("No books match the selected filters.")
-                        return
-                    
-                    # Generate PDF using reportlab
-                    pdf_output = io.BytesIO()
-                    doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
-                    elements = []
-                    
-                    # Styles
-                    styles = getSampleStyleSheet()
-                    title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=16, spaceAfter=12)
-                    normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, spaceAfter=6)
-                    summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=10, spaceAfter=8)
-                    
-                    # Add title
-                    elements.append(Paragraph("Exported Books Report", title_style))
-                    elements.append(Spacer(1, 12))
-                    elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
-                    elements.append(Spacer(1, 12))
-                    
-                    # Add summary
-                    book_count = len(df)
-                    publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
-                    tags_text = ", ".join(selected_tags) if selected_tags else "None"
-                    elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
-                    elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
-                    elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
-                    elements.append(Spacer(1, 12))
-                    
-                    # Table data
-                    table_data = [["Image", "Title", "ISBN", "MRP"]]
-                    for idx, row in df.iterrows():
-                        image_url = row['images'] if pd.notna(row['images']) else ''
-                        title = row['title'] if pd.notna(row['title']) else ''
-                        isbn = row['isbn'] if pd.notna(row['isbn']) else ''
-                        mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
+            with st.container(border=True):
+                # Publisher filter (Radio button at the top)
+                publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
+                selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
+                
+                # Delivery Status and Author Type filters (side-by-side selectboxes)
+                col1, col2 = st.columns([1, 1], gap="small")
+                
+                with col1:
+                    delivery_status = st.selectbox("Delivery Status", ["All", "Delivered", "Ongoing"], index=0, key="filter_delivery_status")
+                
+                with col2:
+                    author_types = ["All", "Single", "Double", "Triple", "Multiple"]
+                    selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
+                
+                # Tags filter (multiselect below)
+                sorted_tags = fetch_tags(conn)
+                selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
+                
+                # Build query with filters
+                query = "SELECT images, title, isbn, book_mrp FROM books WHERE 1=1"
+                params = {}
+                if selected_publisher != "All":
+                    query += " AND publisher = :publisher"
+                    params["publisher"] = selected_publisher
+                if delivery_status != "All":
+                    query += " AND deliver = :deliver"
+                    params["deliver"] = 1 if delivery_status == "Delivered" else 0
+                if selected_tags:
+                    query += " AND (" + " OR ".join(["tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
+                    for i, tag in enumerate(selected_tags):
+                        params[f"tag{i}"] = f"%{tag}%"
+                if selected_author_type != "All":
+                    query += " AND author_type = :author_type"
+                    params["author_type"] = selected_author_type
+                
+                # Fetch filtered data for preview
+                df = conn.query(query, params=params)
+
+            button_col1, button_col2 = st.columns([3.9,1.9], gap="small")   
+
+            with button_col1:
+
+                # Export button
+                if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
+                    with st.spinner("Generating PDF..."):
+                        # Generate PDF using reportlab
+                        pdf_output = io.BytesIO()
+                        doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+                        elements = []
                         
-                        # Handle image (fetch from URL and compress/resize)
-                        image_element = Paragraph("No Image", normal_style)
-                        if image_url and image_url.startswith(('http://', 'https://')):
-                            try:
-                                response = requests.get(image_url, stream=True, timeout=10)
-                                if response.status_code == 200:
-                                    # Load image with PIL
-                                    pil_image = PILImage.open(BytesIO(response.content))
-                                    # Resize to 150x200 pixels (reasonable for book cover thumbnail)
-                                    pil_image.thumbnail((200, 250), PILImage.Resampling.LANCZOS)
-                                    # Save compressed to BytesIO as JPEG
-                                    img_buffer = BytesIO()
-                                    pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
-                                    img_buffer.seek(0)
-                                    # Load into reportlab Image
-                                    image_element = Image(img_buffer, width=4*cm, height=5*cm)
-                            except Exception as e:
-                                # Fallback if any error
-                                pass
+                        # Styles
+                        styles = getSampleStyleSheet()
+                        title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=16, spaceAfter=12)
+                        normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, spaceAfter=6)
+                        summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=10, spaceAfter=8)
                         
-                        table_data.append([image_element, Paragraph(title, normal_style), Paragraph(isbn, normal_style), Paragraph(mrp, normal_style)])
-                    
-                    # Create table with modern styling
-                    table = Table(table_data, colWidths=[4.5*cm, 8*cm, 4*cm, 2*cm])
-                    table.setStyle(TableStyle([
-                        # Header
-                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F618D')),  # Deep blue header
-                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                        ('FONTSIZE', (0, 0), (-1, 0), 12),
-                        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                        ('TOPPADDING', (0, 0), (-1, 0), 10),
+                        # Add title
+                        elements.append(Paragraph("Exported Books Report", title_style))
+                        elements.append(Spacer(1, 12))
+                        elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
+                        elements.append(Spacer(1, 12))
+                        
+                        # Add summary
+                        book_count = len(df)
+                        publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
+                        tags_text = ", ".join(selected_tags) if selected_tags else "None"
+                        elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
+                        elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
+                        elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
+                        elements.append(Spacer(1, 12))
+                        
+                        # Table data
+                        table_data = [["Image", "Title", "ISBN", "MRP"]]
+                        for idx, row in df.iterrows():
+                            image_url = row['images'] if pd.notna(row['images']) else ''
+                            title = row['title'] if pd.notna(row['title']) else ''
+                            isbn = row['isbn'] if pd.notna(row['isbn']) else ''
+                            mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
+                            
+                            # Handle image (fetch from URL and compress/resize)
+                            image_element = Paragraph("No Image", normal_style)
+                            if image_url and image_url.startswith(('http://', 'https://')):
+                                try:
+                                    response = requests.get(image_url, stream=True, timeout=10)
+                                    if response.status_code == 200:
+                                        # Load image with PIL
+                                        pil_image = PILImage.open(BytesIO(response.content))
+                                        # Resize to 150x200 pixels (reasonable for book cover thumbnail)
+                                        pil_image.thumbnail((200, 250), PILImage.Resampling.LANCZOS)
+                                        # Save compressed to BytesIO as JPEG
+                                        img_buffer = io.BytesIO()
+                                        pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
+                                        img_buffer.seek(0)
+                                        # Load into reportlab Image
+                                        image_element = Image(img_buffer, width=4*cm, height=5*cm)
+                                except Exception:
+                                    pass
+                                
+                            table_data.append([image_element, Paragraph(title, normal_style), Paragraph(isbn, normal_style), Paragraph(mrp, normal_style)])
+                        
+                        # Create table with modern styling
+                        table = Table(table_data, colWidths=[4.5*cm, 8*cm, 4*cm, 2*cm])
+                        table.setStyle(TableStyle([
+                            # Header
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F618D')),  # Deep blue header
+                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                            ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                            ('FONTSIZE', (0, 0), (-1, 0), 12),
+                            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                            ('TOPPADDING', (0, 0), (-1, 0), 10),
+                            # Body
+                            ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
+                            ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+                            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                            ('FONTSIZE', (0, 1), (-1, -1), 10),
+                            # Alternate row colors (soft grayscale with hint of blue)
+                            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
+                                colors.HexColor('#F9FBFC'),  # very light blue-gray
+                                colors.HexColor('#ECF3F9')   # soft gray-blue
+                            ]),
+                            # Grid & borders
+                            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#BDC3C7')),  # subtle grid
+                            ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#7D8C9E')),   # darker outer border
+                            # Padding for readability
+                            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+                            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+                            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+                            ('TOPPADDING', (0, 1), (-1, -1), 6),
+                        ]))
+                        
+                        elements.append(table)
+                        
+                        # Build PDF
+                        try:
+                            doc.build(elements)
+                        except Exception as e:
+                            st.error(f"Failed to generate PDF: {str(e)}")
+                            st.toast(f"Failed to generate PDF: {str(e)}", icon="❌", duration="long")
+                            return
+                        
+                        # Send email
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"Filtered_Books_{timestamp}.pdf"
+                        subject = f"Filtered Books PDF Export"
+                        body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
+                        
+                        if send_email(subject, body, pdf_output.getvalue(), filename):
+                            st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
+                            st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
+                            st.balloons()
+                        else:
+                            st.error("Failed to send export email")
+                            st.toast("Failed to send export email", icon="❌", duration="long")
 
-                        # Body
-                        ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
-                        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
-                        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                        ('FONTSIZE', (0, 1), (-1, -1), 10),
+            with button_col2:
+                st.markdown(f"**Total Books: <span style='color:red;'>{len(df)}</span>**", unsafe_allow_html=True)
+            
+        with global_col2:
+            
+            # Display preview of filtered data
+            if df.empty:
+                st.warning("No books match the selected filters.")
+            else:
+                st.dataframe(
+                    df[['images','title', 'isbn', 'book_mrp']],
+                    column_config={
+                        "images": st.column_config.ImageColumn("Image"),
+                        "title": "Book Title",
+                        "isbn": "ISBN",
+                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f")
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                
 
-                        # Alternate row colors (soft grayscale with hint of blue)
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                            colors.HexColor('#F9FBFC'),  # very light blue-gray
-                            colors.HexColor('#ECF3F9')   # soft gray-blue
-                        ]),
+    tab1, tab2 = st.tabs(["Export as PDF", "Export as Excel"])
 
-                        # Grid & borders
-                        ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#BDC3C7')),  # subtle grid
-                        ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#7D8C9E')),   # darker outer border
-
-                        # Padding for readability
-                        ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                        ('TOPPADDING', (0, 1), (-1, -1), 6),
-                    ]))
-
-                    elements.append(table)
-                    
-                    # Build PDF
-                    try:
-                        doc.build(elements)
-                    except Exception as e:
-                        st.error(f"Failed to generate PDF: {str(e)}")
-                        st.toast(f"Failed to generate PDF: {str(e)}", icon="❌", duration="long")
-                        return
-                    
-                    # Send email
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"Filtered_Books_{timestamp}.pdf"
-                    subject = f"Filtered Books PDF Export"
-                    body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
-                    
-                    if send_email(subject, body, pdf_output.getvalue(), filename):
-                        st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
-                        st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
-                        st.balloons()
-                    else:
-                        st.error("Failed to send export email")
-                        st.toast("Failed to send export email", icon="❌", duration="long")
-
-    col1,col2 = st.columns(2)
-    with col1:
+    with tab1:
         export_filtered_books_pdf(conn)
-    with col2:
-        export_data()
+    with tab2:
+
+        col1,_ = st.columns(2)
+        with col1:
+            export_data()
         
         
 ###################################################################################################################################

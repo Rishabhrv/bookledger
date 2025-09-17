@@ -692,7 +692,7 @@ def render_worker_completion_graph(books_df, selected_month, section):
         completed_books['End Time'] = completed_books[end_col].dt.strftime('%I:%M %p')
         
         # Reorder columns to include Time Taken and split date/time
-        display_columns = ['Title', 'Date', f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken'] if 'Title' in books_df.columns else [f'{section.capitalize()} By', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Time Taken']
+        display_columns = ['Title', 'Date', f'{section.capitalize()} By', 'Time Taken', 'Start Date', 'Start Time', 'End Date', 'End Time'] if 'Title' in books_df.columns else [f'{section.capitalize()} By', 'Time Taken' , 'Start Date', 'Start Time', 'End Date', 'End Time']
         
         st.dataframe(
             completed_books[display_columns].rename(columns={f'{section.capitalize()} By': 'Team Member'}),
