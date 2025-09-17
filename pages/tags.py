@@ -634,7 +634,7 @@ def generate_tags_with_ollama(book_title, model):
     try:
         prompt = f"""
         You are a book tagging assistant for a book management system. 
-        Based only on the given book title, generate exactly 3 to 4 concise and highly relevant tags. 
+        Based only on the given book title, generate only 3 to 4 concise and highly relevant tags. 
 
         Rules:
         - Tags must be single words or short phrases (max 2 words). 
@@ -696,13 +696,12 @@ st.write("#### Test Tag Generation")
 # Input for book title and model selection
 col1, col2 = st.columns([2, 1])
 book_title = col1.text_input("Book Title", placeholder="Enter Book Title (e.g., The History of Space Exploration)")
-model = col2.selectbox("Select Model", ["llama3.1:8b", "gemma3:1b", "smollm2:1.7b"], index=1)
+model = col2.selectbox("Select Model", ["llama3.1:8b", "gemma3:1b", "smollm2:1.7b", "gemma3:4b"], index=1)
 
 if book_title:
     with st.spinner(f"Generating tags with {model}..."):
         tags, elapsed_time = generate_tags_with_ollama(book_title, model)
         if tags:
-            st.success(f"Tags generated successfully using {model}!")
             st.write(f"**Tags to be saved**: {tags}")
             st.write(f"**JSON format for database**: {json.dumps(tags)}")
             st.write(f"**Generation time**: {elapsed_time:.2f} seconds")
@@ -721,7 +720,7 @@ def generate_tags_with_ollama(book_title):
     try:
         prompt = f"""
         You are a book tagging assistant for a book management system. 
-        Based only on the given book title, generate exactly 3 to 4 concise and highly relevant tags. 
+        Based only on the given book title, generate only 3 to 4 concise and highly relevant tags. 
 
         Rules:
         - Tags must be single words or short phrases (max 2 words). 
@@ -868,8 +867,8 @@ VALID_SUBJECTS = [
     "Mathematics", "Physics", "Chemistry", "Biology", "Computer Science",
     "History", "Geography", "Literature", "Economics", "Business Studies",
     "Political Science", "Sociology", "Psychology", "Engineering", "Medicine",
-    "Education", "General Science", "Management", "Marketing", "Medical", "Self Help", "Physical Education", "Commerce", 
-    "Law", "Social Science"
+    "Education", "General Science", "Management", "Marketing", "Medical", "Self Help", 
+    "Physical Education", "Commerce", "Law", "Social Science"
 ]
 
 
@@ -984,11 +983,14 @@ conn = connect_db()
 # Ensure subject column exists
 try:
     with conn.session as s:
-        s.execute(text("""
-            ALTER TABLE books 
-            ADD COLUMN IF NOT EXISTS subject TEXT
-        """))
-        s.commit()
+        result = s.execute(text("""
+            SHOW COLUMNS FROM books LIKE 'subject'
+        """)).fetchone()
+        
+        if not result:  # column does not exist
+            s.execute(text("ALTER TABLE books ADD COLUMN subject TEXT"))
+            s.commit()
+
 except Exception as e:
     st.error(f"Error ensuring subject column: {e}")
     st.stop()
