@@ -269,7 +269,7 @@ try:
         st.write("## 📚 AGPH Advance Search")
     
     with col2:
-        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
             st.switch_page('app.py')
 
     # Columns for search inputs

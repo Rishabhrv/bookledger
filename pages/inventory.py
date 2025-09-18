@@ -236,7 +236,7 @@ with col2:
     if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
         st.cache_data.clear()
 with col3:
-    if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+    if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
         st.switch_page('app.py')
 
 
@@ -607,7 +607,7 @@ def show_charts():
     # if not cell_df.empty:
     #     fig_cell = px.bar(cell_df, x='Cell No.', y='Count', color_discrete_sequence=['#F44336'],
     #                       title='Books per Cell', labels={'Count': 'Number of Books'})
-    #     st.plotly_chart(fig_cell, use_container_width=True)
+    #     st.plotly_chart(fig_cell, width="stretch")
     # else:
     #     st.write("No Cell No. data available to display.")
 
@@ -622,7 +622,7 @@ def show_charts():
     # if not stock_counts.empty and stock_counts['Count'].sum() > 0:
     #     fig_stock = px.bar(stock_counts, x='Stock Range', y='Count', color_discrete_sequence=['#FF6B6B'],
     #                        title='Distribution of In Stock Books', labels={'Count': 'Number of Books'})
-    #     st.plotly_chart(fig_stock, use_container_width=True)
+    #     st.plotly_chart(fig_stock, width="stretch")
     # else:
     #     st.write("No In Stock data available to display.")
 
@@ -635,7 +635,7 @@ def show_charts():
     #     fig_sales = px.pie(sales_data, values='Sales', names='Channel', title='Sales by Channel',
     #                        color='Channel', color_discrete_sequence=['#F44336', '#FF6B6B', '#FFCDD2', '#FFEBEE'])
     #     fig_sales.update_traces(textinfo='percent+label')
-    #     st.plotly_chart(fig_sales, use_container_width=True)
+    #     st.plotly_chart(fig_sales, width="stretch")
     # else:
     #     st.write("No sales data available to display.")
     st.write("Comming Soon 😊")
@@ -677,13 +677,13 @@ with filcol2:
     )
 
 with filcol4:
-    if st.button("📉", key="show_visualizations", type="secondary", use_container_width=True):
+    if st.button("📉", key="show_visualizations", type="secondary", width="stretch"):
         show_charts()
 
 with filcol3:
-    with st.popover("More Filters & Sort", use_container_width=True):
+    with st.popover("More Filters & Sort", width="stretch"):
 
-        if st.button(":material/restart_alt: Reset Filters", key="reset_filters", type="secondary", use_container_width=True):
+        if st.button(":material/restart_alt: Reset Filters", key="reset_filters", type="secondary", width="stretch"):
             # Reset only non-widget session state variables
             st.session_state.update({
                 'search_term': '',

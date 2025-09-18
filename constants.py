@@ -23,6 +23,15 @@ ACCESS_TO_BUTTON = {
     "Authors Edit": "edit_author_detail"
 }
 
+# Predefined list of educational subjects
+VALID_SUBJECTS = [
+    "Mathematics", "Physics", "Chemistry", "Biology", "Computer Science",
+    "History", "Geography", "Literature", "Economics", "Business Studies",
+    "Political Science", "Sociology", "Psychology", "Engineering", "Medicine",
+    "Education", "General Science", "Management", "Marketing", "Medical", "Self Help", 
+    "Physical Education", "Commerce", "Law", "Social Science"
+]
+
 
 def connect_db():
     try:

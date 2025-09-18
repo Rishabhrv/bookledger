@@ -771,7 +771,7 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
                 showlegend=False,
                 title_x=0.3,
             )
-            st.plotly_chart(pie_chart, use_container_width=True)
+            st.plotly_chart(pie_chart, width="stretch")
         else:
             st.info("No data available for pie chart.")
 
@@ -1054,7 +1054,7 @@ with col2:
     if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
         st.cache_data.clear()
 with col3:
-    if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+    if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
         st.switch_page('app.py')
 
 # UI with Popover for Filters and Sorting
@@ -1066,7 +1066,7 @@ with st.container():
         st.text_input("Search by Book ID or Title", key="search_query", placeholder="Enter Book ID or Title", 
                       label_visibility="collapsed")
     with col3:
-        with st.popover("Filters & Sort", use_container_width=True):
+        with st.popover("Filters & Sort", width="stretch"):
             txtcol1, txtcol2, txtcol3 = st.columns([1.5, 2, 1], gap="small", vertical_alignment="bottom")
             with txtcol1:
                 st.number_input("Show books older than (days)", min_value=0, value=st.session_state.days_filter, step=1, key="days_filter")
@@ -1116,7 +1116,7 @@ with st.container():
                     index=0 if st.session_state.sort_order == "Ascending" else 1,
                     horizontal=True, key="sort_order", label_visibility="collapsed")
             with txtcol3:
-                if st.button(":material/restart_alt: Reset Filters", use_container_width=True, type="secondary"):
+                if st.button(":material/restart_alt: Reset Filters", width="stretch", type="secondary"):
                     st.query_params["reset"] = "true"
                     st.rerun()
 

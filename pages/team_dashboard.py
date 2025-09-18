@@ -697,7 +697,7 @@ def render_worker_completion_graph(books_df, selected_month, section):
         st.dataframe(
             completed_books[display_columns].rename(columns={f'{section.capitalize()} By': 'Team Member'}),
             hide_index=True,
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -793,7 +793,7 @@ def render_metrics(books_df, selected_month, section, user_role):
     # Go Back Button - Same Access as Pills
     if user_role == "admin" or (user_role == "user" and user_app == "main" and "Team Dashboard" in user_access):
         with col3:
-            if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+            if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
                 st.switch_page('app.py')
 
     # Metrics rendering
@@ -1055,7 +1055,7 @@ def correction_dialog(book_id, conn, section):
         history_df["Start"] = history_df["Start"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
         history_df["End"] = history_df["End"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
         history_df["Notes"] = history_df["Notes"].apply(lambda x: x if pd.notnull(x) else "-")
-        st.dataframe(history_df, use_container_width=True, hide_index=True)
+        st.dataframe(history_df, width="stretch", hide_index=True)
     else:
         st.info("No correction history available.")
 
@@ -1144,9 +1144,9 @@ def correction_dialog(book_id, conn, section):
 
         col_save, col_cancel = st.columns([1, 1])
         with col_save:
-            submit = st.form_submit_button("💾 Save and Close", use_container_width=True)
+            submit = st.form_submit_button("💾 Save and Close", width="stretch")
         with col_cancel:
-            cancel = st.form_submit_button("Cancel", use_container_width=True, type="secondary")
+            cancel = st.form_submit_button("Cancel", width="stretch", type="secondary")
 
         if submit:
             if not worker:
@@ -1401,9 +1401,9 @@ def edit_section_dialog(book_id, conn, section):
 
         col_save, col_cancel = st.columns([1, 1])
         with col_save:
-            submit = st.form_submit_button("💾 Save and Close", use_container_width=True)
+            submit = st.form_submit_button("💾 Save and Close", width="stretch")
         with col_cancel:
-            cancel = st.form_submit_button("Cancel", use_container_width=True, type="secondary")
+            cancel = st.form_submit_button("Cancel", width="stretch", type="secondary")
 
         if submit:
             if start and end and start > end:

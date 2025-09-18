@@ -211,7 +211,7 @@ def open_author_positions_page():
         if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
             st.cache_data.clear()
     with col3:
-        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
             st.switch_page('app.py')
     
     # Connect to database
@@ -232,7 +232,7 @@ def open_author_positions_page():
                                     key="search_input", label_visibility="collapsed")
     
     with col3:
-        with st.popover("Filters & Sort", use_container_width=True):
+        with st.popover("Filters & Sort", width="stretch"):
             # Filter Controls
             st.markdown("###### Filters:")
             author_type_filter = st.pills(

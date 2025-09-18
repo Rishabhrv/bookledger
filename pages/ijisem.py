@@ -445,7 +445,7 @@ def add_paper_dialog(conn):
             horizontal=True,
         )
 
-        if st.button("Add Paper", key="add_paper", use_container_width=True):
+        if st.button("Add Paper", key="add_paper", width="stretch"):
             # Validate required fields
             if not paper_title or not publishing_type:
                 st.error("Paper Title and Publishing Type are required.")
@@ -540,10 +540,10 @@ def edit_delete_author_dialog(conn):
         col1, col2 = st.columns(2)
         
         with col1:
-            save_clicked = st.button("Save Changes", key="save_author", use_container_width=True)
+            save_clicked = st.button("Save Changes", key="save_author", width="stretch")
             
         with col2:
-            delete_clicked = st.button("Delete Author", key="delete_author", use_container_width=True)
+            delete_clicked = st.button("Delete Author", key="delete_author", width="stretch")
 
         # Handle Save functionality
         if save_clicked:
@@ -1144,7 +1144,7 @@ def edit_author_dialog(paper_id, conn):
                                         )
 
                             # Submit Button
-                            if st.form_submit_button("Update", type="primary", use_container_width=False):
+                            if st.form_submit_button("Update", type="primary", width="content"):
                                 try:
                                     with conn.session as session:
                                         query = text("""
@@ -1274,7 +1274,7 @@ def edit_author_dialog(paper_id, conn):
                 placeholder="Enter affiliation"
             )
 
-            if st.button("Add Author", key="add_author", type="primary", use_container_width=True):
+            if st.button("Add Author", key="add_author", type="primary", width="stretch"):
                 if not name:
                     st.error("Name is required.")
                     return
@@ -1657,15 +1657,15 @@ def all_filters(df):
         )
 
     with col2:
-        with st.popover("Filters & More", use_container_width=True):
+        with st.popover("Filters & More", width="stretch"):
             st.button(":material/cached: Reset Filters", key="reset_filters_button", 
-                      on_click=reset_all_filters, use_container_width=True)
+                      on_click=reset_all_filters, width="stretch")
             
             # Organize filters into tabs
             tab1, tab2, tab3, tab4 = st.tabs(["Status", "Date", "Volume/Issue", "Edit Author"])
 
             with tab4:
-                if st.button("Edit Author Details", key="edit_author", use_container_width=True):
+                if st.button("Edit Author Details", key="edit_author", width="stretch"):
                     edit_delete_author_dialog(conn)
             
             with tab2:
@@ -1738,7 +1738,7 @@ def all_filters(df):
                     #st.rerun()
 
     with col3:
-        if st.button(":material/add: Add Paper", key="add_paper_button", use_container_width=True):
+        if st.button(":material/add: Add Paper", key="add_paper_button", width="stretch"):
             add_paper_dialog(conn)
 
     def apply_filters(df, search_query, filters):
@@ -1854,15 +1854,15 @@ def all_filters(df):
 #         )
 
 #     with col2:
-#         with st.popover("Filters & More", use_container_width=True):
+#         with st.popover("Filters & More", width="stretch"):
 #             st.button(":material/cached: Reset Filters", key="reset_filters_button", 
-#                       on_click=reset_all_filters, use_container_width=True)
+#                       on_click=reset_all_filters, width="stretch")
             
 #             # Organize filters into tabs
 #             tab1, tab2, tab3, tab4 = st.tabs(["Status", "Date", "Volume/Issue", "Edit Author"])
 
 #             with tab4:
-#                 if st.button("Edit Author Details", key="edit_author", use_container_width=True):
+#                 if st.button("Edit Author Details", key="edit_author", width="stretch"):
 #                     edit_delete_author_dialog(conn)
             
 #             with tab2:
@@ -1933,7 +1933,7 @@ def all_filters(df):
 #                     st.session_state.filters['issue'] = selected_issue if selected_issue else None
 
 #     with col3:
-#         if st.button(":material/add: Add Paper", key="add_paper_button", use_container_width=True):
+#         if st.button(":material/add: Add Paper", key="add_paper_button", width="stretch"):
 #             add_paper_dialog(conn)
 
 #     def apply_filters(df, search_query, filters):

@@ -186,3 +186,4 @@ notebook.ipynb
 tosql.ipynb
 databasedata
 default-secret-key.env
+book_info.py

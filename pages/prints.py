@@ -573,7 +573,7 @@ def print_management_page():
         if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
             st.cache_data.clear()
     with col3:
-        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
             st.switch_page('app.py')
 
     tab1, tab2, tab3, tab4 = st.tabs(["Ready for Print", "Reprint Eligible", "Running Batches", "Completed Batches"])

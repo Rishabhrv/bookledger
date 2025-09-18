@@ -15,6 +15,7 @@ from constants import ACCESS_TO_BUTTON
 from constants import log_activity
 from constants import connect_db
 from constants import clean_old_logs
+from constants import VALID_SUBJECTS
 import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -31,6 +32,8 @@ from reportlab.lib import colors
 from PIL import Image as PILImage
 from io import BytesIO
 import requests
+import ollama
+import difflib
 
 
 ####################################################################################################################
@@ -292,7 +295,7 @@ if not st.session_state.cleanup_done:
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
-"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end, tags FROM books"
+"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end, tags, subject FROM books"
 
 books = conn.query(query,show_spinner = False)
 
@@ -327,7 +330,7 @@ elif user_role != "admin":
 
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
+    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -931,7 +934,7 @@ def fetch_tags(conn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Users", width="large")
+@st.dialog("Manage Users", width="large", on_dismiss = 'rerun')
 def manage_users(conn):
     # Check if user is admin
     if st.session_state.get("role", None) != "admin":
@@ -1005,7 +1008,7 @@ def manage_users(conn):
             # Display table
             st.data_editor(
                 df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 disabled=["ID", "Username", "Email", "Password", "Real_Password", "Role", "App", "Access", "Start Date"],
                 column_config={
@@ -1090,7 +1093,7 @@ def manage_users(conn):
                         disabled=new_app != "main"
                     )
 
-                if st.button("Add User", key="add_user", type="primary", use_container_width=True):
+                if st.button("Add User", key="add_user", type="primary", width="stretch"):
                     if not new_username or not new_password:
                         st.error("❌ Username and password are required.")
                     elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
@@ -1131,9 +1134,7 @@ def manage_users(conn):
                             )
                             st.success("User Added Successfully!", icon="✔️")
                             st.toast("User Added Successfully!", icon="✔️", duration="long")
-                            import time
-                            time.sleep(1)
-                            st.rerun()
+
 
         # Tab 2: Edit Users
         with edit_user_col:
@@ -1204,7 +1205,7 @@ def manage_users(conn):
 
                     btn_col1, btn_col2 = st.columns([3, 1])
                     with btn_col1:
-                        if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary", use_container_width=True):
+                        if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary", width="stretch"):
                             if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                                 st.error("❌ Invalid email format.")
                             else:
@@ -1264,12 +1265,11 @@ def manage_users(conn):
                                     st.success("User Updated Successfully!", icon="✔️")
                                     st.toast("User Updated Successfully!", icon="✔️", duration="long")
                                     import time
-                                    time.sleep(2)
-                                    st.rerun()
+
 
                     with btn_col2:
                         if selected_user.id != 1:
-                            if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", use_container_width=True):
+                            if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", width="stretch"):
                                 st.session_state.confirm_delete_user_id = selected_user.id
 
                     if st.session_state.confirm_delete_user_id == selected_user.id:
@@ -1296,9 +1296,7 @@ def manage_users(conn):
                                     st.success("User Deleted Successfully!", icon="✔️")
                                     st.toast("User Deleted Successfully!", icon="✔️", duration="long")
                                     st.session_state.confirm_delete_user_id = None
-                                    import time
-                                    time.sleep(2)
-                                    st.rerun()
+
         
 
 
@@ -1415,13 +1413,13 @@ def export_data_dialog(conn):
         global_col1, global_col2 = st.columns([1,1.5], gap="small")
 
         with global_col1:
-        
+            
             with st.container(border=True):
                 # Publisher filter (Radio button at the top)
                 publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
                 selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
                 
-                # Delivery Status and Author Type filters (side-by-side selectboxes)
+                # Delivery Status, Author Type, and Subject filters (side-by-side selectboxes)
                 col1, col2 = st.columns([1, 1], gap="small")
                 
                 with col1:
@@ -1430,6 +1428,9 @@ def export_data_dialog(conn):
                 with col2:
                     author_types = ["All", "Single", "Double", "Triple", "Multiple"]
                     selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
+                
+                # Subject filter
+                selected_subject = st.selectbox("Subject", ["All"] + VALID_SUBJECTS, index=0, key="filter_subject")
                 
                 # Tags filter (multiselect below)
                 sorted_tags = fetch_tags(conn)
@@ -1451,6 +1452,9 @@ def export_data_dialog(conn):
                 if selected_author_type != "All":
                     query += " AND author_type = :author_type"
                     params["author_type"] = selected_author_type
+                if selected_subject != "All":
+                    query += " AND subject = :subject"
+                    params["subject"] = selected_subject
                 
                 # Fetch filtered data for preview
                 df = conn.query(query, params=params)
@@ -1458,7 +1462,6 @@ def export_data_dialog(conn):
             button_col1, button_col2 = st.columns([3.9,1.9], gap="small")   
 
             with button_col1:
-
                 # Export button
                 if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
                     with st.spinner("Generating PDF..."):
@@ -1483,7 +1486,9 @@ def export_data_dialog(conn):
                         book_count = len(df)
                         publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
                         tags_text = ", ".join(selected_tags) if selected_tags else "None"
+                        subject_text = selected_subject if selected_subject != "All" else "All Subjects"
                         elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
+                        elements.append(Paragraph(f"Subject: {subject_text}", summary_style))
                         elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
                         elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
                         elements.append(Spacer(1, 12))
@@ -1563,7 +1568,7 @@ def export_data_dialog(conn):
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         filename = f"Filtered_Books_{timestamp}.pdf"
                         subject = f"Filtered Books PDF Export"
-                        body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
+                        body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Subject={selected_subject}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
                         
                         if send_email(subject, body, pdf_output.getvalue(), filename):
                             st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
@@ -1590,7 +1595,7 @@ def export_data_dialog(conn):
                         "isbn": "ISBN",
                         "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f")
                     },
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
                 
@@ -1612,7 +1617,7 @@ def export_data_dialog(conn):
 
 
 # Dialog for managing authors
-@st.dialog("Manage Authors", width="medium")
+@st.dialog("Manage Authors", width="medium", on_dismiss = 'rerun')
 def edit_author_detail(conn):
     # Fetch all authors from database
     with conn.session as s:
@@ -1675,7 +1680,7 @@ def edit_author_detail(conn):
                 if st.button("Save Changes", 
                             key=f"save_{selected_author.author_id}", 
                             type="primary",
-                            use_container_width=True):
+                            width="stretch"):
                     with st.spinner("Saving changes..."):
                         import time
                         time.sleep(1)
@@ -1731,7 +1736,7 @@ def edit_author_detail(conn):
                         key=delete_key, 
                         type="secondary",
                         help=f"Delete {selected_author.name}",
-                        use_container_width=True):
+                        width="stretch"):
                 st.session_state["confirm_delete"] = True
 
         # Move confirmation dialog outside the column layout
@@ -1767,10 +1772,6 @@ def edit_author_detail(conn):
                             st.success("Author Deleted Successfully!", icon="✔️")
                             st.toast("Author Deleted Successfully!", icon="✔️", duration="long")
                             st.session_state["confirm_delete"] = False
-                            import time
-                            time.sleep(1)
-                            # Refresh the dialog to update author list
-                            st.rerun()
                         except Exception as e:
                             st.error(f"Failed to delete author: {str(e)}")
                             st.toast(f"Failed to delete author: {str(e)}", icon="❌", duration="long")
@@ -1781,7 +1782,111 @@ def edit_author_detail(conn):
 ###################################################################################################################################
 
 
-@st.dialog("Add Book and Authors", width="large")
+# Predefined list of educational subjects
+VALID_SUBJECTS = [
+    "Mathematics", "Physics", "Chemistry", "Biology", "Computer Science",
+    "History", "Geography", "Literature", "Economics", "Business Studies",
+    "Political Science", "Sociology", "Psychology", "Engineering", "Medicine",
+    "Education", "General Science", "Management", "Marketing", "Medical", "Self Help", 
+    "Physical Education", "Commerce", "Law", "Social Science"
+]
+
+def find_closest_subject(suggested_subject):
+    """Map suggested subject to the closest predefined subject."""
+    if not suggested_subject:
+        return "General Science"
+    
+    # Normalize and find closest match
+    suggested_subject = suggested_subject.strip().lower()
+    valid_subjects_lower = [s.lower() for s in VALID_SUBJECTS]
+    
+    # Exact match
+    if suggested_subject in valid_subjects_lower:
+        return VALID_SUBJECTS[valid_subjects_lower.index(suggested_subject)]
+    
+    # Find closest match using difflib
+    closest = difflib.get_close_matches(suggested_subject, valid_subjects_lower, n=1, cutoff=0.6)
+    if closest:
+        return VALID_SUBJECTS[valid_subjects_lower.index(closest[0])]
+    
+    # Fallback
+    return "General Science"
+
+def generate_subject_with_ollama(book_title):
+    """Generate a single concise subject using the Ollama gemma3:1b model."""
+    try:
+        prompt = f"""
+        You are a book categorization assistant. Based on the book title, suggest a single, concise subject that best describes the book's educational content. The subject must be one of the following: {', '.join(VALID_SUBJECTS)}. Return only the subject name with no additional text or formatting.
+
+        Book Title: {book_title}
+
+        Example output: Physics
+        """
+        response = ollama.generate(model="gemma3:1b", prompt=prompt)
+        raw_response = response['response'].strip()
+        
+        # Clean and map to valid subject
+        subject = find_closest_subject(raw_response)
+        
+        if subject == "General Science" and raw_response and raw_response.lower() not in [s.lower() for s in VALID_SUBJECTS]:
+            st.warning(f"No valid subject generated for '{book_title}'. Using fallback: General Science")
+        
+        return subject
+    except Exception as e:
+        st.error(f"Error generating subject for '{book_title}' with gemma3:1b: {str(e)}")
+        return "General Science"  # Fallback on error
+
+def generate_tags_with_ollama(book_title):
+    """Generate tags using the Ollama gemma3:1b model and clean the output."""
+    try:
+        prompt = f"""
+        You are a book tagging assistant for a book management system. 
+        Based only on the given book title, generate exactly 3 to 4 concise and highly relevant tags. 
+
+        Rules:
+        - Tags must be single words or short phrases (max 2 words). 
+        - Do not add filler or generic tags like 'book', 'novel', 'story', 'interesting', 'popular'.
+        - Only return a comma-separated list with exactly 3 to 4 tags, no extra text.
+
+        Book Title: {book_title}
+
+        Example output: Social Security,AI,Machine Learning,Tourism,Management
+        """
+        response = ollama.generate(model="gemma3:1b", prompt=prompt)
+        raw_response = response['response'].strip()
+        
+        # Clean the output to extract only comma-separated tags
+        if raw_response.startswith("here are the tags") or "*" in raw_response or "-" in raw_response:
+            lines = raw_response.split("\n")
+            tags = []
+            for line in lines:
+                line = line.strip()
+                if line.startswith("*") or line.startswith("-"):
+                    tags.append(line.lstrip("*- ").strip())
+                elif "," in line:
+                    tags.extend([tag.strip() for tag in line.split(",") if tag.strip()])
+        else:
+            tags = [tag.strip() for tag in raw_response.split(",") if tag.strip()]
+        
+        # Ensure 3 to 4 tags: trim or pad with fallbacks
+        tags = list(dict.fromkeys([tag.lower() for tag in tags if tag]))  # Remove duplicates and lowercase
+        if len(tags) > 4:
+            tags = tags[:4]  # Take first 4
+        elif len(tags) < 3:
+            # Fallback tags if insufficient
+            fallback_tags = ["general", "education", "literature", "academic"]
+            tags.extend(fallback_tags[:4 - len(tags)])  # Pad to 3 or 4
+        
+        if not tags:
+            st.warning(f"No valid tags generated by gemma3:1b for '{book_title}'.")
+            return []
+        
+        return tags
+    except Exception as e:
+        st.error(f"Failed to generate tags with gemma3:1b for '{book_title}': {str(e)}")
+        return []
+
+@st.dialog("Add New Book", width="large", on_dismiss = 'rerun')
 def add_book_dialog(conn):
     # --- Helper Function to Ensure Backward Compatibility ---
     def ensure_author_fields(author):
@@ -1819,22 +1924,11 @@ def add_book_dialog(conn):
             book_title = col1.text_input("Book Title", placeholder="Enter Book Title..", key="book_title")
             book_date = col2.date_input("Date", value=date.today(), key="book_date")
 
-            # Initialize session state for tags
-            if "new_book_tags" not in st.session_state:
-                st.session_state["new_book_tags"] = []
-
-            # Fetch all unique tags from the database
-            sorted_tags = fetch_tags(conn)
-            
-            # Add session state tags
-            options = sorted_tags + [tag for tag in st.session_state["new_book_tags"] if tag not in sorted_tags]
-
             toggles_enabled = publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
 
             col3, col4 = st.columns([3, 2], vertical_alignment="bottom")
 
             with col3:
-                # Radio buttons for author type
                 author_type = st.radio(
                     "Author Type",
                     ["Multiple", "Single", "Double", "Triple"],
@@ -1844,7 +1938,6 @@ def add_book_dialog(conn):
                 )
 
             with col4:
-                # Segmented buttons for book mode
                 book_mode = st.segmented_control(
                     "Book Type",
                     options=["Publish Only", "Thesis to Book"],
@@ -1854,17 +1947,8 @@ def add_book_dialog(conn):
 
             if not toggles_enabled:
                 st.warning("Author Type and Book Mode options are disabled for AG Kids and NEET/JEE publishers.")
-            
-            selected_tags = st.multiselect(
-                "Add Tags",
-                options=options,
-                default=st.session_state["new_book_tags"],
-                key="new_book_tags",
-                accept_new_options=True,
-                max_selections=5,
-                placeholder="Select or add up to 5 tags...",
-            )
 
+            # Tags and subject will be generated at save time, no UI input
             return {
                 "title": book_title,
                 "date": book_date,
@@ -1872,7 +1956,8 @@ def add_book_dialog(conn):
                 "is_publish_only": (book_mode == "Publish Only") if (book_mode and toggles_enabled) else False,
                 "is_thesis_to_book": (book_mode == "Thesis to Book") if (book_mode and toggles_enabled) else False,
                 "publisher": publisher,
-                "tags": selected_tags
+                "tags": [],  # Placeholder, tags will be generated on save
+                "subject": ""  # Placeholder, subject will be generated on save
             }
 
 
@@ -1904,18 +1989,20 @@ def add_book_dialog(conn):
 
     def book_note_section():
 
-        with st.container(border=True):
-            st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
-            
-            book_note = st.text_area(
-                "Book Note or Instructions",
-                key="book_note",
-                help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
-                max_chars=1000,
-                placeholder="Enter notes or special instructions for the book here...",
-                height=50,
-                label_visibility="collapsed"
-            )
+        with st.popover("Book Note", width="stretch"):
+
+            with st.container(border=False):
+                st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
+                
+                book_note = st.text_area(
+                    "Book Note or Instructions",
+                    key="book_note",
+                    help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
+                    max_chars=1000,
+                    placeholder="Enter notes or special instructions for the book here...",
+                    height=50,
+                    label_visibility="collapsed"
+                )
         
         return book_note
 
@@ -2129,11 +2216,6 @@ def add_book_dialog(conn):
             errors.append("Book date is required.")
         if not book_data["publisher"]:
             errors.append("Publisher is required.")
-        
-        # Add this new check for tags
-        tags = book_data.get("tags", [])
-        if len(tags) < 3:
-            errors.append("At least 3 tags are required.")
             
         # Validation for Authors (Publisher-specific)
         if publisher not in ["AG Kids", "NEET/JEE"]:
@@ -2170,13 +2252,15 @@ def add_book_dialog(conn):
 
     # --- Combined Container Inside Dialog ---
     with st.container():
-        col1, col2 = st.columns([1.1,1])
-
+        col1, col2 = st.columns([1.1, 1])
         with col1:
             publisher = publisher_section()
-            book_data = book_details_section(publisher,conn)
-            #tags = tags_section(conn)
-            syllabus_file = syllabus_upload_section(book_data["is_publish_only"], book_data["is_thesis_to_book"], publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"])
+            book_data = book_details_section(publisher, conn)
+            syllabus_file = syllabus_upload_section(
+                book_data["is_publish_only"],
+                book_data["is_thesis_to_book"],
+                publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
+            )
             book_data["syllabus_file"] = syllabus_file
         with col2:
             author_data = author_details_section(conn, book_data["author_type"], publisher)
@@ -2187,11 +2271,16 @@ def add_book_dialog(conn):
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            errors = validate_form(book_data, author_data, book_data["author_type"], publisher)
-            if errors:
-                st.error("\n".join(errors), icon="🚨")
-            else:
-                with st.spinner("Saving..."):
+            with st.spinner("Saving Book and Generating Tags/Subject..."):
+                # Generate tags and subject when Save is clicked
+                if book_data["title"]:
+                    book_data["tags"] = generate_tags_with_ollama(book_data["title"])
+                    book_data["subject"] = generate_subject_with_ollama(book_data["title"])
+
+                errors = validate_form(book_data, author_data, book_data["author_type"], publisher)
+                if errors:
+                    st.error("\n".join(errors), icon="🚨")
+                else:
                     with conn.session as s:
                         try:
                             # Handle syllabus file upload
@@ -2215,10 +2304,10 @@ def add_book_dialog(conn):
                             # Convert tags list to JSON
                             tags_json = json.dumps(book_data["tags"]) if book_data["tags"] else None
 
-                            # Insert book with book note and tags
+                            # Insert book with book note, tags, and subject
                             s.execute(text("""
-                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path, book_note, tags)
-                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path, :book_note, :tags)
+                                INSERT INTO books (title, date, author_type, is_publish_only, is_thesis_to_book, publisher, syllabus_path, book_note, tags, subject)
+                                VALUES (:title, :date, :author_type, :is_publish_only, :is_thesis_to_book, :publisher, :syllabus_path, :book_note, :tags, :subject)
                             """), params={
                                 "title": book_data["title"],
                                 "date": book_data["date"],
@@ -2228,7 +2317,8 @@ def add_book_dialog(conn):
                                 "publisher": book_data["publisher"],
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_data["book_note"],
-                                "tags": tags_json
+                                "tags": tags_json,
+                                "subject": book_data["subject"]
                             })
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
@@ -2237,10 +2327,8 @@ def add_book_dialog(conn):
                             if publisher not in ["AG Kids", "NEET/JEE"]:
                                 for author in active_authors:
                                     if author["author_id"]:
-                                        # Existing author: use the existing ID
                                         author_id_to_link = author["author_id"]
                                     else:
-                                        # New author: insert and get ID
                                         s.execute(text("""
                                             INSERT INTO authors (name, email, phone)
                                             VALUES (:name, :email, :phone)
@@ -2248,7 +2336,6 @@ def add_book_dialog(conn):
                                         """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
                                     
-                                    # Link author to book (runs for both new and existing authors)
                                     if book_id and author_id_to_link:
                                         s.execute(text("""
                                             INSERT INTO book_authors (book_id, author_id, author_position, corresponding_agent, publishing_consultant)
@@ -2262,25 +2349,28 @@ def add_book_dialog(conn):
                                         })
                             s.commit()
 
-                            # Log save action with specified details
+                            # Log save action
                             log_activity(
                                 conn,
                                 st.session_state.user_id,
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added book",
-                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}, Tags: {tags_json or 'None'}"
+                                f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}, Tags: {tags_json}, Subject: {book_data['subject']}"
                             )
 
-                            st.success("Book and Authors Saved Successfully!", icon="✔️")
-                            st.toast("Book and Authors Saved Successfully!", icon="✔️", duration="long")
+                            st.success(
+                                        f"Book saved successfully! "
+                                        f"Tags: {', '.join(book_data['tags'])}  "
+                                        f"Subject: {book_data['subject']}",
+                                        icon="✔️"
+                                    )
+                            st.toast(f"Book saved successfully with subject {book_data['subject']}!", icon="✔️", duration="long")
                         
                             st.session_state.authors = [
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
                             ]
-                            time.sleep(1)
-                            st.rerun()
                         except Exception as db_error:
                             s.rollback()
                             st.error(f"Database error: {db_error}")
@@ -2302,6 +2392,37 @@ def add_book_dialog(conn):
 ###################################################################################################################################
 
 
+# Inject the hover style once
+st.markdown("""
+    <style>
+    .subject-pill {
+        color:#ea580c; 
+        background: linear-gradient(90deg, #fff0e6, #fff7ed);
+        font-size: 14px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 16px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid #f0b88a; 
+        box-shadow: 0 2px 4px rgba(234, 88, 12, 0.15);
+        margin-right: 10px;
+        transition: all 0.2s ease-in-out;
+    }
+    .subject-pill:hover {
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(234, 88, 12, 0.25);
+        cursor: default;
+    }
+    .tags-pill {
+        display: inline-block;
+        vertical-align: middle;
+        font-size: 14px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 def get_book_image_url(conn, book_id):
     """Fetch the image URL for a given book_id from the database"""
     try:
@@ -2321,7 +2442,7 @@ def get_book_image_url(conn, book_id):
 
 
 from datetime import datetime
-@st.dialog("Manage ISBN and Book Title", width="large")
+@st.dialog("Manage Book Details", width="large", on_dismiss = 'rerun')
 def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     # Fetch current book details
     book_details = fetch_book_details(book_id, conn)
@@ -2337,6 +2458,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     current_publisher = book_details.iloc[0].get('publisher', '')
     current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
     current_tags = book_details.iloc[0].get('tags', '')
+    current_subject = book_details.iloc[0].get('subject', 'N/A')  # Fetch subject, default to 'N/A' if not present
     try:
         current_tags_list = json.loads(current_tags) if current_tags else []
     except json.JSONDecodeError:
@@ -2370,6 +2492,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         st.session_state[f"is_thesis_to_book_{book_id}"] = current_is_thesis_to_book
     if f"tags_{book_id}" not in st.session_state:
         st.session_state[f"tags_{book_id}"] = current_tags_list
+    if f"subject_{book_id}" not in st.session_state:
+        st.session_state[f"subject_{book_id}"] = current_subject
 
 
     def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled, book_id):
@@ -2411,36 +2535,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         )
         return book_note
 
-    # def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled, current_syllabus_path=None, current_book_note=None):
-    #     with st.expander("Syllabus & Book Note", expanded=False):
-    #         st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-    #         syllabus_file = None
-    #         if not is_publish_only and not is_thesis_to_book and toggles_enabled:
-    #             syllabus_file = st.file_uploader(
-    #                 "Upload Book Syllabus",
-    #                 type=["pdf", "docx", "jpg", "jpeg", "png"],
-    #                 key=f"syllabus_upload_{book_id}",
-    #                 help="Upload the book syllabus as a PDF, DOCX, or image file."
-    #             )
-    #         else:
-    #             if is_publish_only:
-    #                 st.info("Syllabus upload is disabled for Publish Only books.")
-    #             if is_thesis_to_book:
-    #                 st.info("Syllabus upload is disabled for Thesis to Book conversions.")
-    #             if not toggles_enabled:
-    #                 st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
-            
-    #         st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
-    #         book_note = st.text_area(
-    #             "Book Note or Instructions",
-    #             value=current_book_note if current_book_note else "",
-    #             key=f"book_note_{book_id}",
-    #             help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
-    #             max_chars=1000,
-    #             placeholder="Enter notes or special instructions for the book here..."
-    #         )
-        
-    #     return syllabus_file, book_note
 
     st.markdown(f"### {book_id} - {current_title}{publisher_badge}", unsafe_allow_html=True)
     publisher = current_publisher
@@ -2558,14 +2652,11 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 st.markdown('</div>', unsafe_allow_html=True)
             
 
-            # Supported colors for badges
-            colors = ["red", "orange", "yellow", "blue", "green", "violet", "primary"]
-
-            # Display existing tags using Streamlit native badges
+            # Display subject and tags side by side
+            badge_markdown = ""
             if st.session_state[f"tags_{book_id}"]:
-                badge_markdown = ""
                 # Create a copy of colors list to ensure unique selection
-                available_colors = colors.copy()
+                available_colors = ["red", "orange", "yellow", "blue", "green", "violet", "primary"]
                 for tag in st.session_state[f"tags_{book_id}"]:
                     # Select a random color and remove it from available colors
                     if available_colors:
@@ -2573,9 +2664,36 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         available_colors.remove(color)
                     else:
                         # Fallback to random choice if we run out of colors
-                        color = random.choice(colors)
+                        color = random.choice(["red", "orange", "yellow", "blue", "green", "violet", "primary"])
                     badge_markdown += f":{color}-badge[#{tag}] "
-                st.markdown(badge_markdown)
+            else:
+                badge_markdown = "None"
+
+            # Display subject and tags side by side
+            badge_markdown = ""
+            if st.session_state[f"tags_{book_id}"]:
+                # Create a copy of colors list to ensure unique selection
+                available_colors = ["red", "orange", "yellow", "blue", "green", "violet", "primary"]
+                for tag in st.session_state[f"tags_{book_id}"]:
+                    # Select a random color and remove it from available colors
+                    if available_colors:
+                        color = random.choice(available_colors)
+                        available_colors.remove(color)
+                    else:
+                        # Fallback to random choice if we run out of colors
+                        color = random.choice(["red", "orange", "yellow", "blue", "green", "violet", "primary"])
+                    badge_markdown += f":{color}-badge[#{tag}] "
+            else:
+                badge_markdown = "None"
+
+            # Render pills
+            st.markdown(
+                f"""
+                <span class="subject-pill">🔭 {current_subject}</span>
+                <span class="tags-pill">{badge_markdown}</span>
+                """,
+                unsafe_allow_html=True
+            )
 
         # Fetch current syllabus and book note for the book
         with conn.session as s:
@@ -2599,6 +2717,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         # ISBN Details Section
         st.markdown("<h5 style='color: #4CAF50;'>ISBN Details</h5>", unsafe_allow_html=True)
         apply_isbn = bool(current_apply_isbn)
+        receive_isbn = bool(pd.notna(current_isbn))
         if not has_open_author_position(conn, book_id):
             with st.container(border=True):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
@@ -2682,7 +2801,27 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
         
-        with st.expander("Manage Tags", expanded=False):
+        with st.expander("Manage Subject & Tags", expanded=False):
+            # Manage Subject
+            st.markdown("<h5 style='color: #4CAF50;'>Manage Subjet</h5>", unsafe_allow_html=True)
+
+            available_subjects = VALID_SUBJECTS  # Assume this function fetches all unique subjects
+            if current_subject and current_subject not in available_subjects:
+                available_subjects.append(current_subject)
+            
+            # Use st.pills for subject selection
+            selected_subject = st.pills(
+                "Select Subject",
+                options=available_subjects,
+                default=current_subject,
+                key=f"manage_subject_{book_id}",
+                help="Select a subject for the book or clear to remove",
+                label_visibility="collapsed"
+            )
+            st.session_state[f"subject_{book_id}"] = selected_subject if selected_subject else ''
+
+            st.markdown("<h5 style='color: #4CAF50;'>Manage Tags</h5>", unsafe_allow_html=True)
+
             # Fetch all unique tags and their counts from the database
             sorted_tags = fetch_tags(conn)
             
@@ -2699,9 +2838,9 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 key=f"manage_tags_{book_id}",
                 accept_new_options=True,
                 max_selections=10,
-                help="Select or deselect tags for the book, or type to add new tags"
+                help="Select or deselect tags for the book, or type to add new tags",
+                label_visibility="collapsed",
             )
-
 
     # Save Button
     if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
@@ -2753,6 +2892,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         changes.append(f"Updated book note to '{book_note[:50] + '...' if book_note else 'None'}'")
                     if new_tags_json != current_tags:
                         changes.append(f"Updated tags to '{new_tags_json}'")
+                    if st.session_state[f"subject_{book_id}"] != current_subject:
+                        changes.append(f"Updated subject to '{st.session_state[f'subject_{book_id}']}'")
 
                     # Update database
                     if apply_isbn and receive_isbn and new_isbn:
@@ -2768,7 +2909,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
                                     book_note = :book_note,
-                                    tags = :tags
+                                    tags = :tags,
+                                    subject = :subject
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2782,6 +2924,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
                                 "tags": new_tags_json,
+                                "subject": st.session_state[f"subject_{book_id}"],
                                 "book_id": book_id
                             }
                         )
@@ -2798,7 +2941,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
                                     book_note = :book_note,
-                                    tags = :tags
+                                    tags = :tags,
+                                    subject = :subject
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2810,6 +2954,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
                                 "tags": new_tags_json,
+                                "subject": st.session_state[f"subject_{book_id}"],
                                 "book_id": book_id
                             }
                         )
@@ -2826,7 +2971,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                     is_thesis_to_book = :is_thesis_to_book,
                                     syllabus_path = :syllabus_path,
                                     book_note = :book_note,
-                                    tags = :tags
+                                    tags = :tags,
+                                    subject = :subject
                                 WHERE book_id = :book_id
                             """),
                             {
@@ -2838,6 +2984,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                 "syllabus_path": syllabus_path,
                                 "book_note": book_note,
                                 "tags": new_tags_json,
+                                "subject": st.session_state[f"subject_{book_id}"],
                                 "book_id": book_id
                             }
                         )
@@ -2857,8 +3004,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 
                     st.success("Book Details Updated Successfully!", icon="✔️")
                     st.toast("Book details updated successfully!", icon="✅", duration="long")
-                    time.sleep(1)
-                    st.rerun()
                 except Exception as db_error:
                     s.rollback()
                     st.error(f"Database error: {db_error}")
@@ -3454,7 +3599,7 @@ MAX_CHAPTERS = 30
 MAX_EDITORS_PER_CHAPTER = 2
 
 # Updated dialog for editing author details with improved UI
-@st.dialog("Edit Author Details", width='large')
+@st.dialog("Edit Author Details", width='large', on_dismiss = 'rerun')
 def edit_author_dialog(book_id, conn):
     # Fetch book details for title, is_single_author, num_copies, and print_status
     book_details = fetch_book_details(book_id, conn)
@@ -3566,9 +3711,7 @@ def edit_author_dialog(book_id, conn):
                             "changed author type",
                             f"Book ID: {book_id}, New Author Type: {selected_author_type}"
                         )
-                        import time
-                        time.sleep(1)
-                        st.rerun()
+
                 except Exception as e:
                     st.error(f"❌ Error updating author type: {e}")
                     st.toast(f"Error updating author type: {e}", icon="❌", duration="long")
@@ -3780,9 +3923,6 @@ def edit_author_dialog(book_id, conn):
                             st.success("✔️ New authors added successfully!")
                             st.toast("New authors added successfully!", icon="✔️", duration="long")
                             del st.session_state.new_authors
-                            import time
-                            time.sleep(2)
-                            st.rerun()
                         else:
                             st.error("❌ No authors were added due to errors.")
                     except Exception as e:
@@ -4083,7 +4223,7 @@ def edit_author_dialog(book_id, conn):
                             # Submit and Remove buttons
                             col_submit, col_remove = st.columns([8, 1])
                             with col_submit:
-                                if st.form_submit_button("💾 Save Changes", use_container_width=True, type="primary"):
+                                if st.form_submit_button("💾 Save Changes", width="stretch", type="primary"):
                                     # Convert boolean values to integers for database
                                     for key in updates:
                                         if isinstance(updates[key], bool):
@@ -4126,7 +4266,7 @@ def edit_author_dialog(book_id, conn):
                                 if confirmation_key not in st.session_state:
                                     st.session_state[confirmation_key] = False
 
-                                if st.form_submit_button("🗑️", use_container_width=True, type="secondary", help=f"Remove {row['name']} from this book"):
+                                if st.form_submit_button("🗑️", width="stretch", type="secondary", help=f"Remove {row['name']} from this book"):
                                     st.session_state[confirmation_key] = True
 
                         # Confirmation form for removal
@@ -4135,7 +4275,7 @@ def edit_author_dialog(book_id, conn):
                                 st.warning(f"Are you sure you want to remove {row['name']} (Author ID: {row['author_id']}) from Book ID: {book_id}?")
                                 col_confirm, col_cancel = st.columns(2)
                                 with col_confirm:
-                                    if st.form_submit_button("Yes, Remove", use_container_width=True, type="primary"):
+                                    if st.form_submit_button("Yes, Remove", width="stretch", type="primary"):
                                         try:
                                             with st.spinner("Removing author..."):
                                                 delete_book_author(row['id'], conn)
@@ -4156,7 +4296,7 @@ def edit_author_dialog(book_id, conn):
                                             st.error(f"❌ Error removing author: {e}")
                                             st.toast(f"Error removing author:", icon="❌", duration="long")
                                 with col_cancel:
-                                    if st.form_submit_button("Cancel", use_container_width=True):
+                                    if st.form_submit_button("Cancel", width="stretch"):
                                         st.session_state[confirmation_key] = False
 
     with tab2:
@@ -4415,7 +4555,6 @@ def edit_author_dialog(book_id, conn):
                                                 st.success("✔️ Chapter updated successfully!")
                                                 st.toast("Chapter updated successfully!", icon="✔️", duration="long")
                                                 st.cache_data.clear()
-                                                st.rerun()
                                             except Exception as e:
                                                 st.error(f"❌ Error updating chapter: {e}")
                                                 st.toast(f"Error updating chapter: {e}", icon="❌", duration="long")
@@ -4443,7 +4582,6 @@ def edit_author_dialog(book_id, conn):
                                             st.success("✔️ Chapter deleted successfully!")
                                             st.toast("Chapter deleted successfully!", icon="✔️", duration="long")
                                             st.cache_data.clear()
-                                            st.rerun()
                                         except Exception as e:
                                             st.error(f"❌ Error deleting chapter: {e}")
                                             st.toast(f"Error deleting chapter: {e}", icon="❌", duration="long")
@@ -4747,7 +4885,6 @@ def edit_author_dialog(book_id, conn):
                                             ]
                                         }
                                     ]
-                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"❌ Error adding chapter/editors: {e}")
                                     with conn.session as s:
@@ -4819,9 +4956,6 @@ def edit_author_dialog(book_id, conn):
                                     "changed author type",
                                     f"Book ID: {book_id}, New Author Type: {selected_author_type}"
                                 )
-                                import time
-                                time.sleep(1)
-                                st.rerun()
                         except Exception as e:
                             st.error(f"❌ Error updating author type: {e}")
                             st.toast(f"Error updating author type: {e}", icon="❌", duration="long")
@@ -5027,9 +5161,6 @@ def edit_author_dialog(book_id, conn):
                                     st.success("✔️ New authors added successfully!")
                                     st.toast("New authors added successfully!", icon="✔️", duration="long")
                                     del st.session_state.new_authors
-                                    import time
-                                    time.sleep(2)
-                                    st.rerun()
                                 else:
                                     st.error("❌ No authors were added due to errors.")
                             except Exception as e:
@@ -5266,7 +5397,7 @@ def edit_operation_dialog(book_id, conn):
 
             # Book Syllabus Section
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-            with st.expander("Book Syllabus", expanded=False):
+            with st.popover("Book Syllabus", use_container_width=True):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 # Syllabus uploader
                 syllabus_file = None
@@ -5285,7 +5416,7 @@ def edit_operation_dialog(book_id, conn):
                 st.markdown('</div>', unsafe_allow_html=True)
 
             # Form submit button
-            if st.form_submit_button("💾 Save Writing", use_container_width=True, disabled=is_publish_only or is_thesis_to_book):
+            if st.form_submit_button("💾 Save Writing", width="stretch", disabled=is_publish_only or is_thesis_to_book, type="primary"):
                 with st.spinner("Saving Writing details..."):
                     os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -5422,7 +5553,7 @@ def edit_operation_dialog(book_id, conn):
                 key=f"book_pages_proofreading_{book_id}"
             )
 
-            if st.form_submit_button("💾 Save Proofreading", use_container_width=True):
+            if st.form_submit_button("💾 Save Proofreading", width="stretch", type="primary"):
                 with st.spinner("Saving Proofreading details..."):
                     import time
                     time.sleep(1)
@@ -5519,7 +5650,7 @@ def edit_operation_dialog(book_id, conn):
                 key=f"book_pages_formatting_{book_id}"
             )
 
-            if st.form_submit_button("💾 Save Formatting", use_container_width=True):
+            if st.form_submit_button("💾 Save Formatting", width="stretch", type="primary"):
                 with st.spinner("Saving Formatting details..."):
                     import time
                     time.sleep(1)
@@ -5609,7 +5740,7 @@ def edit_operation_dialog(book_id, conn):
                     key=f"cover_end_time_{book_id}"
                 )
 
-            if st.form_submit_button("💾 Save Cover Details", use_container_width=True):
+            if st.form_submit_button("💾 Save Cover Details", width="stretch", type="primary"):
                 with st.spinner("Saving Cover details..."):
                     import time
                     time.sleep(1)
@@ -6079,7 +6210,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                 label_visibility="visible"
                             )
 
-                        save_edit = st.button("💾 Save Edited Print Edition", use_container_width=True, key=f"save_edit_print_{book_id}_{selected_print_id}")
+                        save_edit = st.button("💾 Save Edited Print Edition", width="stretch", key=f"save_edit_print_{book_id}_{selected_print_id}")
 
                         if save_edit:
                             with st.spinner("Saving edited print edition..."):
@@ -6193,7 +6324,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                             label_visibility="visible"
                         )
 
-                    save_new_print = st.button("💾 Save New Print Edition", use_container_width=True, key=f"save_print_{book_id}")
+                    save_new_print = st.button("💾 Save New Print Edition", width="stretch", key=f"save_print_{book_id}")
 
                     if save_new_print:
                         with st.spinner("Saving new print edition..."):
@@ -6394,7 +6525,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
                 # Links and Reviews Section (Collapsible)
                 st.markdown('<div class="section-header">Links and Reviews</div>', unsafe_allow_html=True)
-                with st.expander("Links and Reviews", expanded=False):
+                with st.popover("Book Links", use_container_width=True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
                     with col1:
@@ -6429,7 +6560,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 # Submit Button
                 save_inventory = st.form_submit_button(
                     "💾 Save Inventory", 
-                    use_container_width=True,
+                    width="stretch",
                     help="Click to save changes to inventory details."
                 )
 
@@ -6789,7 +6920,6 @@ with srcol1:
 
 
 with srcol3:
-
     # Callback function to update the tags filter in session state
     def update_tags_filter():
         """
@@ -6803,8 +6933,19 @@ with srcol3:
         if widget_key in st.session_state:
             st.session_state.tags_filter = st.session_state[widget_key]
 
+    # Callback function to update the subject filter in session state
+    def update_subject_filter():
+        """
+        This function is called when the subject pills widget changes.
+        It updates 'subject_filter' in the session state with the current value
+        of the widget. The widget's value is accessed via its key.
+        """
+        widget_key = f"subject_pills_{st.session_state.clear_filters_trigger}"
+        if widget_key in st.session_state:
+            st.session_state.subject_filter = st.session_state[widget_key]
+
     # Popover for filtering
-    with st.popover("Filter by Date, Status, Publisher, Author Type & Tags", use_container_width=True):
+    with st.popover("Filter by Date, Status, Publisher, Subject", width="stretch"):
         # Extract unique publishers, years, and author types from the dataset
         unique_publishers = sorted(books['publisher'].dropna().unique())
         unique_years = sorted(books['date'].dt.year.unique())
@@ -6850,11 +6991,13 @@ with srcol3:
             st.session_state.thesis_to_book_filter = None
         if 'tags_filter' not in st.session_state:
             st.session_state.tags_filter = []
+        if 'subject_filter' not in st.session_state:
+            st.session_state.subject_filter = None
         if 'clear_filters_trigger' not in st.session_state:
             st.session_state.clear_filters_trigger = 0
 
         # Reset button at the top
-        if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", use_container_width=True, type="secondary"):
+        if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", width="stretch", type="secondary"):
             st.session_state.year_filter = None
             st.session_state.month_filter = None
             st.session_state.start_date_filter = None
@@ -6867,13 +7010,14 @@ with srcol3:
             st.session_state.publish_only_filter = None
             st.session_state.thesis_to_book_filter = None
             st.session_state.tags_filter = []
+            st.session_state.subject_filter = None
             st.session_state.clear_filters_trigger += 1
             st.rerun()
 
         # Tabs for filter categories
-        tabs = st.tabs(["Status", "Type", "Date"])
+        tabs = st.tabs(["Status", "Subject", "Type", "Date"])
 
-        with tabs[2]:  # Date tab (index 4)
+        with tabs[3]:  # Date tab
             # Date Filters
             year_options = [str(year) for year in unique_years]
             selected_year = st.pills(
@@ -6941,10 +7085,8 @@ with srcol3:
                     st.session_state.start_date_filter = None
                     st.session_state.end_date_filter = None
 
-
         # Status Filters
-        with tabs[0]:  # Status tab (index 0)
-
+        with tabs[0]:  # Status tab
             publisher_options = unique_publishers
             selected_publisher = st.pills(
                 "Publisher:",
@@ -6979,22 +7121,8 @@ with srcol3:
             )
             st.session_state.isbn_filter = selected_isbn
 
-
-            # Tag filter with searchable multiselect
-            selected_tags = st.multiselect(
-                "Filter by Tags:",
-                options=unique_tags,
-                on_change=update_tags_filter,
-                default=st.session_state.tags_filter,
-                key=f"tags_filter_{st.session_state.clear_filters_trigger}",
-                max_selections=5,
-                placeholder="Search or select up to 5 tags",
-                help="Select up to 5 tags to filter books"
-            )
-            st.session_state.tags_filter = selected_tags
-
         # Author Filters
-        with tabs[1]:  # Author tab (index 3)
+        with tabs[2]:  # Author tab
             # Author type filter
             author_type_options = ["Single", "Double", "Triple", "Multiple"]
             selected_author_type = st.pills(
@@ -7038,7 +7166,31 @@ with srcol3:
                 label_visibility='visible'
             )
             st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
-           
+
+        # Subject and Tags Filters
+        with tabs[1]:  # Subject tab
+            # Subject filter
+            selected_subject = st.pills(
+                "Subject:",
+                options=VALID_SUBJECTS,
+                on_change=update_subject_filter,
+                key=f"subject_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility='visible'
+            )
+            st.session_state.subject_filter = selected_subject
+
+            # Tag filter with searchable multiselect
+            selected_tags = st.multiselect(
+                "Filter by Tags:",
+                options=unique_tags,
+                on_change=update_tags_filter,
+                default=st.session_state.tags_filter,
+                key=f"tags_multiselect_{st.session_state.clear_filters_trigger}",
+                max_selections=5,
+                placeholder="Search or select up to 5 tags",
+                help="Select up to 5 tags to filter books"
+            )
+            st.session_state.tags_filter = selected_tags
 
         # Collect applied filters after all selections
         applied_filters = []
@@ -7066,6 +7218,8 @@ with srcol3:
             applied_filters.append(f"Thesis Type={st.session_state.thesis_to_book_filter}")
         if st.session_state.tags_filter:
             applied_filters.append(f"Tags={', '.join(st.session_state.tags_filter)}")
+        if st.session_state.subject_filter:
+            applied_filters.append(f"Subject={st.session_state.subject_filter}")
 
         # Apply filters only if there are any
         if applied_filters:
@@ -7134,16 +7288,20 @@ with srcol3:
                     )
                 ]
 
+            # Apply subject filter
+            if st.session_state.subject_filter:
+                filtered_books = filtered_books[filtered_books['subject'] == st.session_state.subject_filter]
+
             st.success(f"Applied Filters: {', '.join(applied_filters)}")
 
 
 with srcol4:
     # Add Book button
     if is_button_allowed("add_book_dialog"):
-        if st.button(":material/add: Book", type="secondary", help="Add New Book", use_container_width=True):
+        if st.button(":material/add: Book", type="secondary", help="Add New Book", width="stretch"):
             add_book_dialog(conn)
     else:
-        st.button(":material/add: Book", type="secondary", help="Add New Book (Not Authorized)", use_container_width=True, disabled=True)
+        st.button(":material/add: Book", type="secondary", help="Add New Book (Not Authorized)", width="stretch", disabled=True)
 
 with srcol5:
         from urllib.parse import urlencode, quote
@@ -7151,7 +7309,7 @@ with srcol5:
         if "logged_click_ids" not in st.session_state:
             st.session_state.logged_click_ids = set()
 
-        with st.popover("More", use_container_width=True, help="More Options"):
+        with st.popover("More", width="stretch", help="More Options"):
             for key, config in BUTTON_CONFIG.items():
                 label_with_icon = f"{config['icon']} {config['label']}"
                 permission = config.get('permission')
@@ -7173,7 +7331,7 @@ with srcol5:
                             label=label_with_icon,
                             url=full_url,
                             type="tertiary",
-                            use_container_width=False
+                            width="content"
                         )
                     elif config['type'] == "switch_page":
                         if st.button(label_with_icon, key=key, type="tertiary"):
@@ -7358,7 +7516,7 @@ with st.container(border=False):
                     with btn_col1:
                         # ISBN button (manage_isbn_dialog)
                         if is_button_allowed("manage_isbn_dialog"):
-                            if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Title & ISBN"):
+                            if st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Edit Book Details"):
                                 manage_isbn_dialog(conn, row['book_id'], row['apply_isbn'], row['isbn'])
                         else:
                             st.button(isbn_icon, key=f"isbn_{row['book_id']}", help="Not Authorised", disabled=True)
@@ -7398,7 +7556,7 @@ with st.container(border=False):
                                 edit_inventory_delivery_dialog(row['book_id'], conn)
                         else:
                             st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Not Authorised", disabled=True)
-                    # with st.popover("More Options", use_container_width=True):
+                    # with st.popover("More Options", width="stretch"):
                     #     st.write("hello")
                 st.markdown('</div>', unsafe_allow_html=True)
 

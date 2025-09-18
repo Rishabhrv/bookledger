@@ -333,11 +333,11 @@ def render_full_page():
         st.subheader(f"Metrics of {selected_month}")
 
     with col2:
-        if st.button(":material/refresh: Refresh", key="refresh_button", type="tertiary", use_container_width=True):
+        if st.button(":material/refresh: Refresh", key="refresh_button", type="tertiary", width="stretch"):
             st.cache_data.clear()
 
     with col3:
-        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", use_container_width=True):
+        if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
             st.switch_page('app.py')
 
 
@@ -404,16 +404,16 @@ def render_full_page():
                                                             f"{total_books - books_delivered_true} Delivered Remaining"])
         
         with tab1:
-            st.dataframe(books_written_remaining, use_container_width=True, hide_index=True)
+            st.dataframe(books_written_remaining, width="stretch", hide_index=True)
         
         with tab2:
-            st.dataframe(books_proofread_remaining, use_container_width=True, hide_index=True)
+            st.dataframe(books_proofread_remaining, width="stretch", hide_index=True)
 
         with tab3:
-            st.dataframe(books_formatted_remaining, use_container_width=True, hide_index=True)
+            st.dataframe(books_formatted_remaining, width="stretch", hide_index=True)
 
         with tab4:
-            st.dataframe(books_apply_isbn_remaining, use_container_width=True, hide_index=True,column_config = {
+            st.dataframe(books_apply_isbn_remaining, width="stretch", hide_index=True,column_config = {
             "Writing Complete": st.column_config.CheckboxColumn(
                 "Writing Complete",
                 default=False,
@@ -429,10 +429,10 @@ def render_full_page():
         })
         
         with tab5:
-            st.dataframe(books_printed_remaining, use_container_width=True, hide_index=True)
+            st.dataframe(books_printed_remaining, width="stretch", hide_index=True)
 
         with tab6:
-            st.dataframe(books_delivered_remaining, use_container_width=True, hide_index=True)
+            st.dataframe(books_delivered_remaining, width="stretch", hide_index=True)
 
 
     ######################################################################################
@@ -565,7 +565,7 @@ def render_full_page():
             f"<span class='status-badge'>Status: Running</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(status['data'], use_container_width=True, hide_index=True)
+        st.dataframe(status['data'], width="stretch", hide_index=True)
 
     ######################################################################################
     ###############----------- Work done Books on Previous day & Today -------------################
@@ -627,7 +627,7 @@ def render_full_page():
         f"<span class='status-badge'>Status: Done!</span></h5>", 
         unsafe_allow_html=True)
 
-    st.dataframe(work_done_status, use_container_width=False, hide_index=True, column_config={
+    st.dataframe(work_done_status, width="content", hide_index=True, column_config={
         "Writing Complete": st.column_config.CheckboxColumn(
             "Writing Complete",
             default=False,
@@ -726,7 +726,7 @@ def render_full_page():
             f"<span class='status-badge-red'>Status: Remaining</span></h4>", 
             unsafe_allow_html=True
         )
-        st.dataframe(writing_remaining_data, use_container_width=False, hide_index=True)
+        st.dataframe(writing_remaining_data, width="content", hide_index=True)
 
     # Display proofreading remaining data in the second column
     with col2:
@@ -735,7 +735,7 @@ def render_full_page():
             f"<span class='status-badge-red'>Status: Remaining</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(proofread_remaining_data, use_container_width=False, hide_index=True)
+        st.dataframe(proofread_remaining_data, width="content", hide_index=True)
 
 
     col1, col2 = st.columns(2)
@@ -746,7 +746,7 @@ def render_full_page():
             f"<span class='status-badge-red'>Status: Remaining</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(format_remaining_data, use_container_width=False, hide_index=True)
+        st.dataframe(format_remaining_data, width="content", hide_index=True)
 
     with col2:
         st.markdown(
@@ -754,7 +754,7 @@ def render_full_page():
             f"<span class='status-badge-red'>Status: Remaining</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(books_apply_isbn_remaining, use_container_width=False, hide_index=True,column_config = {
+        st.dataframe(books_apply_isbn_remaining, width="content", hide_index=True,column_config = {
             "Writing Complete": st.column_config.CheckboxColumn(
                 "Writing Complete",
                 default=False,
@@ -853,7 +853,7 @@ def render_full_page():
             f"<span class='status-badge'>Status: Done!</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(writing_complete_data_by_month, use_container_width=False, hide_index=True)
+        st.dataframe(writing_complete_data_by_month, width="content", hide_index=True)
 
     with col2:
         st.markdown(
@@ -913,7 +913,7 @@ def render_full_page():
             f"<span class='status-badge'>Status: Done!</span></h5>", 
             unsafe_allow_html=True
         )
-        st.dataframe(proofreading_complete_data_by_month, use_container_width=False, hide_index=True)
+        st.dataframe(proofreading_complete_data_by_month, width="content", hide_index=True)
 
     # Display heading and chart in the second column with proper layout
     with col2:
@@ -1063,7 +1063,7 @@ def render_full_page():
     # # Display DataFrame in the first column
     # with col1:
     #     st.markdown(f"##### 📋 {fortifiveday_status_by_month['Book ID'].nunique()} Books on hold in {fortifiveday_status_selected_month}")
-    #     st.dataframe(styled_df, use_container_width=True, hide_index=True,column_config = {
+    #     st.dataframe(styled_df, width="stretch", hide_index=True,column_config = {
     #         "Send Cover Page and Agreement": st.column_config.CheckboxColumn(
     #             "Send Cover Page and Agreement",
     #             default=False,
@@ -1166,7 +1166,7 @@ def render_full_page():
         f"<h5>📖 {book_count} {heading}", 
         unsafe_allow_html=True
     )
-        st.dataframe(filtered_df,hide_index=True, use_container_width=True)
+        st.dataframe(filtered_df,hide_index=True, width="stretch")
 
     with col2:
         st.altair_chart((line_chart_number_book+text_line_chart_number_book), use_container_width=True,theme="streamlit")
@@ -1203,7 +1203,7 @@ def render_full_page():
         'Formating End Time',]]
 
     st.markdown(f"##### 📋 {len(delivered_books_filter)} Books Delivered in {selected_year}")
-    st.dataframe(delivered_books_filter, use_container_width=True, hide_index=True)
+    st.dataframe(delivered_books_filter, width="stretch", hide_index=True)
 
     ####################################################################################################
     #####################-----------  Line Chart Monthly Books & Authors ----------######################
@@ -1416,7 +1416,7 @@ def render_full_page():
             filtered_data[col] = pd.to_datetime(filtered_data[col], errors='coerce')
             filtered_data[col] = filtered_data[col].dt.strftime('%d %B %Y')
         st.caption(f"{len(filtered_data)} Books by {selected_author}")
-        st.dataframe(filtered_data, use_container_width=True, hide_index=True)
+        st.dataframe(filtered_data, width="stretch", hide_index=True)
 
 
 
