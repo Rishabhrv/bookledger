@@ -6,6 +6,8 @@ import io
 from auth import validate_token
 from constants import log_activity
 from constants import connect_db
+import time
+from sqlalchemy.sql import text
 
 logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
@@ -48,6 +50,7 @@ st.markdown("""
         }
             """, unsafe_allow_html=True)
 
+start_time = time.time()
 
 # Custom CSS
 st.markdown("""
@@ -775,6 +778,7 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
         else:
             st.info("No data available for pie chart.")
 
+
 @st.dialog("Book Pending Work Details", width="large")
 def show_book_details(book_id, book_row, authors_df, printeditions_df):
     # Calculate days since enrolled
@@ -784,9 +788,47 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     # Count authors
     author_count = len(authors_df[authors_df['book_id'] == book_id])
 
-    # Book Title
-    st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
-    
+    # Book Title and Archive Toggle
+    col_title, col_archive = st.columns([5.5, 1], gap = 'large')
+    with col_title:
+        st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
+    with col_archive:
+        is_archived = book_row['is_archived'] == 1
+        toggle_label = "Unarchive Book" if is_archived else "Archive Book"
+        new_archive_status = st.toggle(
+            toggle_label,
+            value=is_archived,
+            key=f"archive_toggle_{book_id}"
+        )
+        if new_archive_status != is_archived:
+            with st.spinner("Updating archive status..."):
+                import time
+                time.sleep(1)
+                try:
+                    conn = connect_db()
+                    with conn.session as s:
+                        s.execute(
+                            text("UPDATE books SET is_archived = :is_archived WHERE book_id = :book_id"),
+                            {"is_archived": 1 if new_archive_status else 0, "book_id": book_id}
+                        )
+                        s.commit()
+                    # Log the change
+                    change_desc = f"Book archive status changed from {'Archived' if is_archived else 'Not Archived'} to {'Archived' if new_archive_status else 'Not Archived'}"
+                    log_activity(
+                        conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "updated book archive status",
+                        f"Book ID: {book_id}, {change_desc}"
+                    )
+                    st.success("Book Archived successfully!", icon="✔️")
+                    st.toast("Archive status updated successfully!", icon="✔️")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to update archive status: {str(e)}")
+                    st.toast(f"Failed to update archive status: {str(e)}", icon="❌", duration="long")
+
     # Book Info in Compact Grid Layout
     st.markdown("<div class='info-grid'>", unsafe_allow_html=True)
     col1, col2, col3, col4 = st.columns(4)
@@ -820,13 +862,13 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         <style>
             .compact-table {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                font-size: 11px;
+                font-size: 12px;
                 color: #1f2937;
                 border-collapse: collapse;
                 width: 100%;
             }
-            .compact-table th, .compact-table td tr {
-                padding: 4px 6px;
+            .compact-table th, .compact-table td {
+                padding: 10px 12px;
                 text-align: center;
                 border-bottom: 1px solid #e2e8f0;
             }
@@ -926,15 +968,19 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
 # Connect to MySQL
 conn = connect_db()
 
-# Fetch books from the database where deliver = 0
+# Fetch books from the database where deliver = 0, including is_archived
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
        proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, is_thesis_to_book ,author_type, is_publish_only,
-         apply_isbn, isbn
+         apply_isbn, isbn, is_archived
 FROM books
 WHERE deliver = 0
 """
 books_data = conn.query(query, show_spinner=False)
+
+# Split into pending and archived
+pending_data = books_data[books_data['is_archived'] == 0]
+archived_data = books_data[books_data['is_archived'] == 1]
 
 # Fetch author and print edition data for initial book_ids
 book_ids = books_data['book_id'].tolist()
@@ -999,8 +1045,8 @@ def sync_selected_reasons():
         st.session_state.selected_isbn_reasons
     )
 
-# Apply Filters and Sorting
-filtered_data = books_data.copy()
+# Apply Filters and Sorting to pending data
+filtered_data = pending_data.copy()
 # Apply Search
 if st.session_state.search_query:
     filtered_data = filtered_data[
@@ -1008,7 +1054,7 @@ if st.session_state.search_query:
         filtered_data['title'].str.contains(st.session_state.search_query, case=False, na=False)
     ]
     if filtered_data.empty:
-        filtered_data = pd.DataFrame(columns=books_data.columns)
+        filtered_data = pd.DataFrame(columns=pending_data.columns)
 
 # Apply Days Filter
 if st.session_state.days_filter > 0:
@@ -1022,18 +1068,18 @@ if st.session_state.selected_publishers:
 # Apply Stuck Reason Filter
 if st.session_state.selected_reasons and not filtered_data.empty:
     book_ids = filtered_data['book_id'].tolist()
-    authors_data = fetch_all_book_authors(book_ids, conn)
-    printeditions_data = fetch_all_printeditions(book_ids, conn)
+    authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
+    printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
     filtered_data['stuck_reason'] = filtered_data['book_id'].apply(
-        lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data, printeditions_data)
+        lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
     )
     filtered_data = filtered_data[filtered_data['stuck_reason'].isin(st.session_state.selected_reasons)]
 
 # Apply Sorting
 if not filtered_data.empty:
     book_ids = filtered_data['book_id'].tolist()
-    authors_data = fetch_all_book_authors(book_ids, conn)
-    printeditions_data = fetch_all_printeditions(book_ids, conn)
+    authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
+    printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
     if st.session_state.sort_by == "Book ID":
         filtered_data = filtered_data.sort_values(by='book_id', ascending=(st.session_state.sort_order == "Ascending"))
     elif st.session_state.sort_by == "Date":
@@ -1043,7 +1089,7 @@ if not filtered_data.empty:
         filtered_data = filtered_data.sort_values(by='days_since', ascending=(st.session_state.sort_order == "Ascending"))
     elif st.session_state.sort_by == "Stuck Reason":
         filtered_data['stuck_reason'] = filtered_data['book_id'].apply(
-            lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data, printeditions_data)
+            lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
         )
         filtered_data = filtered_data.sort_values(by='stuck_reason', ascending=(st.session_state.sort_order == "Ascending"))
 
@@ -1126,7 +1172,7 @@ with st.expander("⚠️ Pending Books Summary", expanded=False):
     else:
         st.info("No Pending Books Found")
 
-# Display Results
+
 with st.container():
     if not filtered_data.empty:
         column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
@@ -1180,3 +1226,62 @@ with st.container():
                         show_book_details(book_id, book, authors_data, printeditions_data)
     else:
         st.info("No Pending Books Found")
+
+
+# Display Archived Results
+st.subheader("Archived Books")
+with st.container():
+    if not archived_data.empty:
+        # Sort archived by Book ID ascending by default
+        archived_data = archived_data.sort_values(by='book_id', ascending=True)
+        column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
+        with st.container(border=True):
+            cols = st.columns(column_widths, vertical_alignment="bottom")
+            cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
+            cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
+            cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+            cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
+            cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
+            cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
+            cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
+
+            for _, book in archived_data.iterrows():
+                book_id = book['book_id']
+                stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
+                author_count = len(authors_data[authors_data['book_id'] == book_id])
+                
+                # Determine days badge class
+                days_since = (date.today() - book["date"]).days if pd.notnull(book["date"]) else None
+                if days_since is not None:
+                    if days_since <= 30:
+                        days_badge_class = "days-badge-green"
+                    elif days_since <= 40:
+                        days_badge_class = "days-badge-orange"
+                    elif days_since <= 50:
+                        days_badge_class = "days-badge-orange"
+                    else:
+                        days_badge_class = "days-badge-red"
+                else:
+                    days_badge_class = "days-badge-red"
+
+                # Determine stuck reason badge class
+                stuck_reason_class = f"stuck-reason-{stuck_reason.lower().replace(' ', '-').replace('/', '-')}"
+                
+                cols = st.columns(column_widths, vertical_alignment="bottom")
+                cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
+                cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
+                cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
+                publisher_class = {
+                    'AGPH': 'publisher-Penguin',
+                    'Cipher': 'publisher-HarperCollins',
+                    'AG Volumes': 'publisher-Macmillan',
+                    'AG Classics': 'publisher-RandomHouse'
+                }.get(book['publisher'], 'publisher-default')
+                cols[3].markdown(f'<div class="table-row"><span class="pill-badge {publisher_class}">{book["publisher"]}</span></div>',unsafe_allow_html=True)
+                cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
+                cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
+                with cols[6]:
+                    if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
+                        show_book_details(book_id, book, authors_data, printeditions_data)
+    else:
+        st.info("No Archived Books Found")

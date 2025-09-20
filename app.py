@@ -129,7 +129,7 @@ st.markdown("""
         }
         /* Ensure the first element has minimal spacing */
         .block-container {
-            padding-top: 10px !important;  /* Small padding for breathing room */
+            padding-top: 0px !important;  /* Small padding for breathing room */
         }
         </style>
             
@@ -295,7 +295,8 @@ if not st.session_state.cleanup_done:
 # Fetch books from the database
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
-"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end, tags, subject FROM books"
+"proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end," \
+"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, images FROM books"
 
 books = conn.query(query,show_spinner = False)
 
@@ -430,49 +431,6 @@ def has_open_author_position(conn, book_id):
     return book_id in df['book_id'].values
 
 
-# # Function to fetch book_author details for multiple book_ids
-# @st.cache_data
-# def fetch_all_book_authors(book_ids, _conn):
-#     if not book_ids:  # Handle empty book_ids
-#         return pd.DataFrame()
-#     query = """
-#     SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
-#            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
-#            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
-#            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
-#            ba.digital_book_sent, 
-#            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
-#            ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
-#            ba.emi1_date, ba.emi2_date, ba.emi3_date,
-#            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-#            ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-#            ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
-#     FROM book_authors ba
-#     JOIN authors a ON ba.author_id = a.author_id
-#     WHERE ba.book_id IN :book_ids
-#     """
-#     return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-
-# @st.cache_data
-# def fetch_all_printeditions(book_ids, _conn):
-#     if not book_ids:  # Handle empty book_ids
-#         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
-    
-#     # SQL query to fetch print editions
-#     query = """
-#     SELECT book_id, print_id, status
-#     FROM printeditions
-#     WHERE book_id IN :book_ids
-#     """
-    
-#     try:
-#         # Execute query using Streamlit's MySQL connection
-#         printeditions_df = conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-#         return printeditions_df
-#     except Exception as e:
-#         print(f"Error fetching print editions: {e}")
-#         return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
-
 
 @st.cache_data
 def fetch_all_book_authors(book_ids, _conn):
@@ -579,180 +537,330 @@ def fetch_all_author_names(book_ids, _conn):
         return {book_id: f"Database error: {str(e)}" for book_id in book_ids}
 
 
-def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
-    # Base pill style with modern design and vertical stacking
-    pill_style = (
-        "padding: 6px 12px; "
-        "border-radius: 10px; "
-        "background: linear-gradient(145deg, #ffffff, #f1f5f9); "
-        "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
-        "display: flex; "
-        "flex-direction: column; "
-        "align-items: flex-start; "
-        "border: 1px solid #e2e8f0; "
-        "box-shadow: 0 2px 4px rgba(0,0,0,0.06); "
-        "line-height: 1.5; "
-        "gap: 4px; "
-        "min-width: 120px; "
-        "width: fit-content; "
-        "transition: all 0.2s;"
-    )
 
-    # Define status configurations
-    operations_sequence = [
-        ("writing", "In Writing", "Writing Complete", "#6b7280", "#dbeafe"),  # Blue shades
-        ("proofreading", "In Proofreading", "Proofreading Complete", "#6b7280", "#ede9fe"),  # Purple shades
-        ("formatting", "In Formatting", "Formatting Complete", "#6b7280", "#fef3c7"),  # Amber shades
-        ("cover", "In Cover Design", "Cover Complete", "#6b7280", "#ccfbf1")  # Teal shades
-    ]
+# # ------------------------------------------------------------------
+# # 1.  Harmonised palette  (light bg → dark text)
+# # ------------------------------------------------------------------
+# PALETTE = {
+#     "grey":  {"bg": "#f1f3f4", "text": "#5f6368", "dot": "#80868b"},
+#     "blue":  {"bg": "#e8f0fe", "text": "#1967d2", "dot": "#1967d2"},
+#     "green": {"bg": "#e6f4ea", "text": "#137333", "dot": "#137333"},
+#     "amber": {"bg": "#fef7e0", "text": "#b06000", "dot": "#f29900"},
+#     "teal":  {"bg": "#e0f2f1", "text": "#00796b", "dot": "#00796b"},
+#     "purple":{"bg": "#f3e5f5", "text": "#8e24aa", "dot": "#8e24aa"},
+# }
 
-    checklist_sequence = [
-        ("welcome_mail_sent", "Welcome Mail", "#dc2626", "#15803d"),  # Red to Green
-        ("cover_agreement_sent", "Cover/Agreement", "#dc2626", "#15803d"),
-        ("author_details_sent", "Author Details", "#dc2626", "#15803d"),
-        ("photo_recive", "Photo", "#dc2626", "#15803d"),
-        ("id_proof_recive", "ID Proof", "#dc2626", "#15803d"),
-        ("agreement_received", "Agreement", "#dc2626", "#15803d"),
-        ("digital_book_sent", "Digital Proof", "#dc2626", "#15803d"),
-        ("printing_confirmation", "Print Confirmation", "#dc2626", "#15803d")
-    ]
+# # ------------------------------------------------------------------
+# # 2.  Emoji map  (one icon per semantic state)
+# # ------------------------------------------------------------------
+# EMOJI = {
+#     "writing":      "✍️",
+#     "proofreading": "🔍",
+#     "formatting":   "📄",
+#     "cover":        "🎨",
+#     "print":        "🖨️",
+#     "dispatch":     "📦",
+#     "live":         "🌐",
+#     "links":        "🔗",
+#     "ready":        "📚",
+#     "complete":     "✅",
+# }
 
-    # Check post-printing statuses
-    if row.get('deliver', 0) == 1:
-        return (
-            f"<div style='{pill_style}'>"
-            f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Delivered ✓</span>"
-            f"</div>"
-        )
+# # ----------------------------------------------------------
+# #  Flat-pill styling (ISBN-style)
+# # ----------------------------------------------------------
+# FLAT_PILL_CSS = (
+#     "color:{text};"
+#     "background-color:{bg};"
+#     "font-size:12px;"
+#     "font-weight:501;"
+#     "padding:3px 8px;"
+#     "border-radius:12px;"
+#     "display:inline-flex;"
+#     "align-items:center;"
+#     "box-shadow:0 1px 2px rgba(0,0,0,0.05);"
+# )
 
-    # Check print editions
-    book_printeditions = printeditions_grouped.get(book_id, pd.DataFrame())
-    if not book_printeditions.empty:
-        latest_print = book_printeditions.sort_values(by='print_id', ascending=False).iloc[0]
-        if latest_print['status'] == "Received":
-            return (
-                f"<div style='{pill_style}'>"
-                f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Dispatch ✓</span>"
-                f"</div>"
-            )
-        elif latest_print['status'] == "In Printing":
-            return (
-                f"<div style='{pill_style}'>"
-                f"<span style='color: #b45309; font-size: 13.5px; font-weight: 600; display: block;'>In Printing</span>"
-                f"</div>"
-            )
+# # ----------------------------------------------------------
+# #  Re-usable flat-pill builder
+# # ----------------------------------------------------------
+# def flat_pill(text: str, colour_key: str, emoji_key: str = "") -> str:
+#     """
+#     Build a single flat pill (ISBN-style).
+#     colour_key must be a key in PALETTE.
+#     emoji_key  must be a key in EMOJI (or "" for no icon).
+#     """
+#     col  = PALETTE[colour_key]
+#     icon = EMOJI.get(emoji_key, "")
+#     prefix = f"{icon} " if icon else ""
+#     return f'<span style="{FLAT_PILL_CSS.format(text=col["text"],bg=col["bg"])}">{prefix}{text}</span>'
 
-    # Check operations status
-    operations_status = "Not Started"
-    operations_color = "#6b7280"
-    operations_checkmark = ""
-    
-    # Check if book is publish-only or thesis-to-book
-    is_publish_only = row.get('is_publish_only', 0) == 1
-    is_thesis_to_book = row.get('is_thesis_to_book', 0) == 1
-    
-    # Check if all operations are complete, excluding writing if publish-only or thesis-to-book
-    all_complete = True
-    for stage, _, _, _, _ in operations_sequence:
-        if stage == "writing" and (is_publish_only or is_thesis_to_book):
-            continue  # Skip writing for publish-only or thesis-to-book
-        end_field = f"{stage}_end"
-        if row.get(end_field) is None or pd.isnull(row.get(end_field)):
-            all_complete = False
-            break
-    
-    if all_complete:
-        operations_status = "Operations Done"
-        operations_color = "#15803d"
-        operations_checkmark = " ✓"
-    else:
-        # Find the first in-progress or completed operation, handling publish-only and thesis-to-book
-        for stage, in_progress, complete, color, _ in operations_sequence:
-            if stage == "writing" and (is_publish_only or is_thesis_to_book):
-                operations_status = "Not Started"
-                operations_color = "#4b5563"  # Neutral gray for Publish Only or Thesis to Book
-                operations_checkmark = ""
-                break
-            start_field = f"{stage}_start"
-            end_field = f"{stage}_end"
-            if row.get(start_field) is not None and pd.notnull(row.get(start_field)):
-                if row.get(end_field) is None or pd.isnull(row.get(end_field)):
-                    operations_status = in_progress
-                    operations_color = color
-                    break
-                else:
-                    operations_status = complete
-                    operations_color = "#6b7280"
-                    operations_checkmark = " ✓"
-                    break
+# # ----------------------------------------------------------
+# #  Main API – identical logic, new visual
+# # ----------------------------------------------------------
+# def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
+#     # ---------- shortcuts ----------
+#     is_publish_only   = row.get("is_publish_only", 0) == 1
+#     is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
+#     skip_writing      = is_publish_only or is_thesis_to_book
 
-    # Check author checklist
-    checklist_status = "No Authors"
-    checklist_color = "#6b7280"
-    book_authors = authors_grouped.get(book_id, pd.DataFrame())
-    if not book_authors.empty:
-        earliest_pending_index = len(checklist_sequence)
-        earliest_pending_step = None
-        for _, author in book_authors.iterrows():
-            for idx, (field, label, pending_color, _) in enumerate(checklist_sequence):
-                if not author[field]:
-                    if idx < earliest_pending_index:
-                        earliest_pending_index = idx
-                        earliest_pending_step = label
-                    break
-        if earliest_pending_index < len(checklist_sequence):
-            checklist_status = earliest_pending_step
-            checklist_color = checklist_sequence[earliest_pending_index][2]
-        else:
-            checklist_status = "Checklist Complete"
-            checklist_color = "#15803d"
+#     # ---------- operations status ----------
+#     operations = [
+#         ("writing",      "Writing",       "Writing Complete",      "blue"),
+#         ("proofreading", "Proofreading",  "Proofreading Complete", "blue"),
+#         ("formatting",   "Formatting",    "Formatting Complete",   "blue"),
+#         ("cover",        "Cover Design",  None,                    "blue"),
+#     ]
 
-    # Check if ready for print
-    if (checklist_status == "Checklist Complete" and
-            all_complete):
-        return (
-            f"<div style='{pill_style}'>"
-            f"<span style='color: #15803d; font-size: 13.5px; font-weight: 600; display: block;'>Ready For Print ✓</span>"
-            f"</div>"
-        )
+#     ops_status, ops_colour, ops_emoji = "⏳Not Started", "grey", ""
+#     name_map = {s: f"{s}_by" for s, _, _, _ in operations}
+#     last_done = None
 
-    # Combine checklist and operations status vertically
-    x_mark = "" if checklist_status in ["Checklist Complete", "No Authors"] else " ✗"
-    primary_style = f"color: {checklist_color}; font-size: 13.5px; font-weight: 600; display: block;"
-    secondary_style = f"color: {operations_color}; font-size: 11px; font-weight: 450; display: block;"
+#     for stage, in_prog, done, col_key in operations:
+#         if stage == "writing" and skip_writing:
+#             continue
+#         start_f, end_f = f"{stage}_start", f"{stage}_end"
+#         started = pd.notnull(row.get(start_f))
+#         ended   = pd.notnull(row.get(end_f))
+
+#         if ended:
+#             if stage == "cover":
+#                 ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
+#                 break
+#             else:
+#                 last_done = done
+#                 continue
+#         if started:
+#             name = row.get(name_map[stage], "Unknown") or "Unknown"
+#             ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
+#             break
+#     else:
+#         if last_done:
+#             ops_status, ops_colour, ops_emoji = last_done, "green", "complete"
+
+#     # ---------- author checklist (INTERNAL ONLY) ----------
+#     checklist_fields = [
+#         ("welcome_mail_sent",    "Welcome Mail",        "amber"),
+#         ("cover_agreement_sent", "Cover / Agreement",   "amber"),
+#         ("author_details_sent",  "Author Details",      "amber"),
+#         ("photo_recive",         "Photo",               "amber"),
+#         ("id_proof_recive",      "ID Proof",            "amber"),
+#         ("agreement_received",   "Agreement",           "amber"),
+#         ("digital_book_sent",    "Digital Proof",       "amber"),
+#         ("printing_confirmation","Print Confirmation",  "amber"),
+#     ]
+
+#     def _author_checklist_complete() -> bool:
+#         book_authors = authors_grouped.get(book_id, pd.DataFrame())
+#         if book_authors.empty:
+#             return True
+#         for _, author in book_authors.iterrows():
+#             for field, _, _ in checklist_fields:
+#                 if not author[field]:
+#                     return False
+#         return True
+
+#     author_ok = _author_checklist_complete()
+
+#     # ---------- ISBN check ----------
+#     _isbn_raw = row.get('isbn')
+#     isbn_ok   = bool(_isbn_raw and str(_isbn_raw).strip() not in ("", "None"))
+
+#     # ---------- early exits ----------
+#     if row.get("deliver") == 1:
+#         links = ["flipkart_link", "agph_link", "amazon_link", "images"]
+#         def _ok(f):
+#             v = str(row.get(f, "")).strip()
+#             return v and v not in ("[]", "null", "None")
+
+#         all_good = all(_ok(f) for f in links)
+#         return flat_pill("Book Live" if all_good else "Online Links Pending",
+#                          "green" if all_good else "amber",
+#                          "live" if all_good else "links")
+
+#     prints = printeditions_grouped.get(book_id, pd.DataFrame())
+#     if not prints.empty:
+#         latest = prints.sort_values("print_id", ascending=False).iloc[0]
+#         if latest["status"] == "Received":
+#             return flat_pill("Ready For Dispatch", "green", "dispatch")
+#         if latest["status"] == "In Printing":
+#             return flat_pill("In Printing", "amber", "print")
+
+#     # ---------- ready-for-print gate ----------
+#     if ops_status == "Operations Complete":
+#         if author_ok and isbn_ok:
+#             return flat_pill("Ready For Print", "green", "ready")
+#         else:
+#             return flat_pill("Operations Complete", "green", "complete")
+
+#     # ---------- default ----------
+#     return flat_pill(ops_status, ops_colour, ops_emoji)
+
+
+
+# ------------------------------------------------------------------
+# 1.  Harmonised palette  (light bg → dark text)
+# ------------------------------------------------------------------
+PALETTE = {
+    "grey":  {"bg": "#f1f3f4", "text": "#5f6368", "dot": "#80868b"},
+    "blue":  {"bg": "#e8f0fe", "text": "#1967d2", "dot": "#1967d2"},
+    "green": {"bg": "#e6f4ea", "text": "#137333", "dot": "#137333"},
+    "amber": {"bg": "#fef7e0", "text": "#b06000", "dot": "#f29900"},
+    "teal":  {"bg": "#e0f2f1", "text": "#00796b", "dot": "#00796b"},
+    "purple":{"bg": "#f3e5f5", "text": "#8e24aa", "dot": "#8e24aa"},
+}
+
+# ------------------------------------------------------------------
+# 2.  Emoji map  (one icon per semantic state)
+# ------------------------------------------------------------------
+EMOJI = {
+    "writing":      "✍️",
+    "proofreading": "🔍",
+    "formatting":   "📄",
+    "cover":        "🎨",
+    "print":        "🖨️",
+    "dispatch":     "📦",
+    "live":         "🌐",
+    "links":        "🔗",
+    "ready":        "📚",
+    "complete":     "✅",
+}
+
+# ------------------------------------------------------------------
+# 3.  Base pill CSS (unchanged mechanics)
+# ------------------------------------------------------------------
+PILL_CSS = (
+    "padding:7px 8px;"
+    "border-radius:10px;"
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;"
+    "display:flex;flex-direction:column;align-items:flex-start;"
+    "border:1px solid {border};"
+    "box-shadow:0 2px 4px rgba(0,0,0,.06);"
+    "line-height:1.5;gap:4px;min-width:120px;width:fit-content;"
+    "transition:transform .15s;"
+    "{{}}"
+)
+
+# ------------------------------------------------------------------
+# 4.  Re-usable pill builder
+# ------------------------------------------------------------------
+def pill(text: str, colour_key: str, emoji_key: str = "") -> str:
+    """
+    Build a single pill.
+    colour_key must be a key in PALETTE.
+    emoji_key  must be a key in EMOJI (or "" for no icon).
+    """
+    col  = PALETTE[colour_key]
+    icon = EMOJI.get(emoji_key, "")
     return (
-        f"<div style='{pill_style}'>"
-        f"<span style='{primary_style}'>{checklist_status}{x_mark}</span>"
-        f"<span style='{secondary_style}'>{operations_status}{operations_checkmark}</span>"
-        f"</div>"
+        f'<div style="{PILL_CSS.format(border=col["bg"])}">'
+        f'<span style="color:{col["text"]};font-size:11.5px;font-weight:500;">'
+        f"{icon}{text}"
+        f"</span></div>"
     )
 
-# @st.cache_data
-# def fetch_author_names(book_id, _conn):
-#     """Fetch author names for a paper, formatted with Material Icons."""
-#     # Validate conn
-#     if not hasattr(conn, 'session'):
-#         return "Database error: Invalid connection"
-    
-#     try:
-#         with conn.session as session:
-#             query = text("""
-#                 SELECT a.name
-#                 FROM authors a
-#                 JOIN book_authors pa ON a.author_id = pa.author_id
-#                 WHERE pa.book_id = :book_id
-#                 ORDER BY pa.author_position IS NULL, pa.author_position ASC
-#             """)
-#             results = session.execute(query, {'book_id': book_id}).fetchall()
-#             author_names = [result.name for result in results]
-#             if author_names:
-#                 return ", ".join(
-#                     f"""<span class="material-symbols-rounded" style="vertical-align: middle; font-size:12px;">person</span> {name}"""
-#                     for name in author_names
-#                 )
-#             return "No authors"
-#     except Exception as e:
-#         return f"Database error: {str(e)}"
+# ------------------------------------------------------------------
+# 5.  Main API – logic untouched, only the return statements change
+# ------------------------------------------------------------------
+def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
+    # ---------- shortcuts ----------
+    is_publish_only   = row.get("is_publish_only", 0) == 1
+    is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
+    skip_writing      = is_publish_only or is_thesis_to_book
+
+    # ---------- operations status ----------
+    operations = [
+        ("writing",      "Writing",       "Writing Complete",      "blue"),
+        ("proofreading", "Proofreading",  "Proofreading Complete", "blue"),
+        ("formatting",   "Formatting",    "Formatting Complete",   "blue"),
+        ("cover",        "Cover Design",  None,                    "blue"),
+    ]
+
+    ops_status, ops_colour, ops_emoji = "⏳Not Started", "grey", ""
+    name_map = {s: f"{s}_by" for s, _, _, _ in operations}
+    last_done = None
+
+    for stage, in_prog, done, col_key in operations:
+        if stage == "writing" and skip_writing:
+            continue
+        start_f, end_f = f"{stage}_start", f"{stage}_end"
+        started = pd.notnull(row.get(start_f))
+        ended   = pd.notnull(row.get(end_f))
+
+        if ended:
+            if stage == "cover":
+                ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
+                break
+            else:
+                last_done = done
+                continue
+        if started:
+            name = row.get(name_map[stage], "Unknown") or "Unknown"
+            ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
+            break
+    else:
+        if last_done:
+            ops_status, ops_colour, ops_emoji = last_done, "green", "complete"
+
+    # ---------- author checklist (INTERNAL ONLY) ----------
+    checklist_fields = [
+        ("welcome_mail_sent",    "Welcome Mail",        "amber"),
+        ("cover_agreement_sent", "Cover / Agreement",   "amber"),
+        ("author_details_sent",  "Author Details",      "amber"),
+        ("photo_recive",         "Photo",               "amber"),
+        ("id_proof_recive",      "ID Proof",            "amber"),
+        ("agreement_received",   "Agreement",           "amber"),
+        ("digital_book_sent",    "Digital Proof",       "amber"),
+        ("printing_confirmation","Print Confirmation",  "amber"),
+    ]
+
+    def _author_checklist_complete() -> bool:
+        book_authors = authors_grouped.get(book_id, pd.DataFrame())
+        if book_authors.empty:
+            return True
+        for _, author in book_authors.iterrows():
+            for field, _, _ in checklist_fields:
+                if not author[field]:
+                    return False
+        return True
+
+    author_ok = _author_checklist_complete()
+
+    # ---------- ISBN check ----------
+    _isbn_raw = row.get('isbn')
+    isbn_ok   = bool(_isbn_raw and str(_isbn_raw).strip() not in ("", "None"))
+
+    # ---------- early exits ----------
+    if row.get("deliver") == 1:
+        links = ["flipkart_link", "agph_link", "amazon_link", "images"]
+        # normalise the field content
+        def _ok(f):
+            v = str(row.get(f, "")).strip()
+            return v and v not in ("[]", "null", "None")
+
+        all_good = all(_ok(f) for f in links)
+        return pill("Book Live" if all_good else "Online Links Pending",
+                    "green" if all_good else "amber",
+                    "live" if all_good else "links")
+
+    prints = printeditions_grouped.get(book_id, pd.DataFrame())
+    if not prints.empty:
+        latest = prints.sort_values("print_id", ascending=False).iloc[0]
+        if latest["status"] == "Received":
+            return pill("Ready For Dispatch", "green", "dispatch")
+        if latest["status"] == "In Printing":
+            return pill("In Printing", "amber", "print")
+
+    # ---------- ready-for-print gate ----------
+    if ops_status == "Operations Complete":
+        if author_ok and isbn_ok:
+            return pill("Ready For Print", "green", "ready")
+        else:
+            # stay on “Operations Complete” – do NOT reveal checklist
+            return pill("Operations Complete", "green", "complete")
+
+    # ---------- default ----------
+    return pill(ops_status, ops_colour, ops_emoji)
     
 
 def send_email(subject, body, attachment_data, filename):
@@ -1407,13 +1515,13 @@ def export_data_dialog(conn):
                         st.error("Failed to send export email")
 
 
+
     def export_filtered_books_pdf(conn):
         st.write("### Export Filtered Books as PDF")
 
         global_col1, global_col2 = st.columns([1,1.5], gap="small")
 
         with global_col1:
-            
             with st.container(border=True):
                 # Publisher filter (Radio button at the top)
                 publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
@@ -1436,25 +1544,34 @@ def export_data_dialog(conn):
                 sorted_tags = fetch_tags(conn)
                 selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
                 
-                # Build query with filters
-                query = "SELECT images, title, isbn, book_mrp FROM books WHERE 1=1"
+                # Build query with filters, joining book_authors and authors to get author names and positions
+                query = """
+                SELECT b.images, b.title, b.isbn, b.book_mrp, b.publisher,
+                    GROUP_CONCAT(CONCAT(a.name, ' (', ba.author_position, ')')) AS authors
+                FROM books b
+                LEFT JOIN book_authors ba ON b.book_id = ba.book_id
+                LEFT JOIN authors a ON ba.author_id = a.author_id
+                WHERE 1=1
+                """
                 params = {}
                 if selected_publisher != "All":
-                    query += " AND publisher = :publisher"
+                    query += " AND b.publisher = :publisher"
                     params["publisher"] = selected_publisher
                 if delivery_status != "All":
-                    query += " AND deliver = :deliver"
+                    query += " AND b.deliver = :deliver"
                     params["deliver"] = 1 if delivery_status == "Delivered" else 0
                 if selected_tags:
-                    query += " AND (" + " OR ".join(["tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
+                    query += " AND (" + " OR ".join(["b.tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
                     for i, tag in enumerate(selected_tags):
                         params[f"tag{i}"] = f"%{tag}%"
                 if selected_author_type != "All":
-                    query += " AND author_type = :author_type"
+                    query += " AND b.author_type = :author_type"
                     params["author_type"] = selected_author_type
                 if selected_subject != "All":
-                    query += " AND subject = :subject"
+                    query += " AND b.subject = :subject"
                     params["subject"] = selected_subject
+                
+                query += " GROUP BY b.book_id, b.publisher, b.images, b.title, b.isbn, b.book_mrp"
                 
                 # Fetch filtered data for preview
                 df = conn.query(query, params=params)
@@ -1464,23 +1581,23 @@ def export_data_dialog(conn):
             with button_col1:
                 # Export button
                 if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
-                    with st.spinner("Generating PDF..."):
+                    with st.spinner("Generating PDF (This may take while)..."):
                         # Generate PDF using reportlab
                         pdf_output = io.BytesIO()
-                        doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+                        doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2.5*cm, leftMargin=2.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
                         elements = []
                         
                         # Styles
                         styles = getSampleStyleSheet()
-                        title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=16, spaceAfter=12)
-                        normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=10, spaceAfter=6)
-                        summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=10, spaceAfter=8)
+                        title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=14, spaceAfter=8)
+                        normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=8, spaceAfter=4, wordWrap='CJK')
+                        summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=8, spaceAfter=6)
                         
                         # Add title
                         elements.append(Paragraph("Exported Books Report", title_style))
-                        elements.append(Spacer(1, 12))
+                        elements.append(Spacer(1, 8))
                         elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
-                        elements.append(Spacer(1, 12))
+                        elements.append(Spacer(1, 8))
                         
                         # Add summary
                         book_count = len(df)
@@ -1491,67 +1608,77 @@ def export_data_dialog(conn):
                         elements.append(Paragraph(f"Subject: {subject_text}", summary_style))
                         elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
                         elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
-                        elements.append(Spacer(1, 12))
+                        elements.append(Spacer(1, 8))
                         
                         # Table data
-                        table_data = [["Image", "Title", "ISBN", "MRP"]]
+                        table_data = [["Image", "Title", "Authors", "ISBN", "MRP", "Publisher"]]
                         for idx, row in df.iterrows():
                             image_url = row['images'] if pd.notna(row['images']) else ''
                             title = row['title'] if pd.notna(row['title']) else ''
+                            authors = row['authors'] if pd.notna(row['authors']) else 'No Authors'
                             isbn = row['isbn'] if pd.notna(row['isbn']) else ''
                             mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
+                            publisher_ = str(row['publisher']) if pd.notna(row['publisher']) else ''
                             
                             # Handle image (fetch from URL and compress/resize)
                             image_element = Paragraph("No Image", normal_style)
                             if image_url and image_url.startswith(('http://', 'https://')):
                                 try:
-                                    response = requests.get(image_url, stream=True, timeout=10)
+                                    response = requests.get(image_url, stream=True, timeout=5)
                                     if response.status_code == 200:
                                         # Load image with PIL
-                                        pil_image = PILImage.open(BytesIO(response.content))
-                                        # Resize to 150x200 pixels (reasonable for book cover thumbnail)
-                                        pil_image.thumbnail((200, 250), PILImage.Resampling.LANCZOS)
+                                        pil_image = PILImage.open(io.BytesIO(response.content))
+                                        # Resize to 100x150 pixels for compactness
+                                        pil_image.thumbnail((100, 150), PILImage.Resampling.LANCZOS)
                                         # Save compressed to BytesIO as JPEG
                                         img_buffer = io.BytesIO()
                                         pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
                                         img_buffer.seek(0)
                                         # Load into reportlab Image
-                                        image_element = Image(img_buffer, width=4*cm, height=5*cm)
+                                        image_element = Image(img_buffer, width=3*cm, height=4*cm)
                                 except Exception:
                                     pass
-                                
-                            table_data.append([image_element, Paragraph(title, normal_style), Paragraph(isbn, normal_style), Paragraph(mrp, normal_style)])
+                                    
+                            table_data.append([
+                                image_element,
+                                Paragraph(title, normal_style),
+                                Paragraph(authors, normal_style),
+                                Paragraph(isbn, normal_style),
+                                Paragraph(mrp, normal_style),
+                                Paragraph(publisher_, normal_style)
+                            ])
                         
                         # Create table with modern styling
-                        table = Table(table_data, colWidths=[4.5*cm, 8*cm, 4*cm, 2*cm])
+                        table = Table(table_data, colWidths=[3*cm, 4.5*cm, 5.5*cm, 2.7*cm, 1.5*cm, 1.5*cm])
                         table.setStyle(TableStyle([
                             # Header
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1F618D')),  # Deep blue header
+                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),  # Dark slate blue header
                             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                             ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                             ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
                             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, 0), 12),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-                            ('TOPPADDING', (0, 0), (-1, 0), 10),
+                            ('FONTSIZE', (0, 0), (-1, 0), 9),
+                            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                            ('TOPPADDING', (0, 0), (-1, 0), 6),
                             # Body
-                            ('ALIGN', (0, 1), (-1, -1), 'CENTER'),
+                            ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Center image
+                            ('ALIGN', (1, 1), (-1, -1), 'LEFT'),   # Left-align text for readability
                             ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
                             ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                            ('FONTSIZE', (0, 1), (-1, -1), 10),
-                            # Alternate row colors (soft grayscale with hint of blue)
+                            ('FONTSIZE', (0, 1), (-1, -1), 8),
+                            # Alternate row colors (clean and minimal)
                             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                                colors.HexColor('#F9FBFC'),  # very light blue-gray
-                                colors.HexColor('#ECF3F9')   # soft gray-blue
+                                colors.HexColor('#FFFFFF'),  # White
+                                colors.HexColor('#F7F9FB')   # Very light gray
                             ]),
                             # Grid & borders
-                            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#BDC3C7')),  # subtle grid
-                            ('BOX', (0, 0), (-1, -1), 0.6, colors.HexColor('#7D8C9E')),   # darker outer border
-                            # Padding for readability
-                            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
-                            ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                            ('TOPPADDING', (0, 1), (-1, -1), 6),
+                            ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#D3D8E0')),  # Subtle gray grid
+                            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#A0A8B3')),   # Clean outer border
+                            # Padding for compactness
+                            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                            ('BOTTOMPADDING', (0, 1), (-1, -1), 3),
+                            ('TOPPADDING', (0, 1), (-1, -1), 3),
                         ]))
                         
                         elements.append(table)
@@ -1582,23 +1709,23 @@ def export_data_dialog(conn):
                 st.markdown(f"**Total Books: <span style='color:red;'>{len(df)}</span>**", unsafe_allow_html=True)
             
         with global_col2:
-            
             # Display preview of filtered data
             if df.empty:
                 st.warning("No books match the selected filters.")
             else:
                 st.dataframe(
-                    df[['images','title', 'isbn', 'book_mrp']],
+                    df[['images', 'title', 'authors', 'isbn', 'book_mrp', 'publisher']],
                     column_config={
                         "images": st.column_config.ImageColumn("Image"),
                         "title": "Book Title",
+                        "authors": "Authors",
                         "isbn": "ISBN",
-                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f")
+                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f"),
+                        "publisher": "Publisher",
                     },
                     width="stretch",
                     hide_index=True,
                 )
-                
 
     tab1, tab2 = st.tabs(["Export as PDF", "Export as Excel"])
 
@@ -2006,74 +2133,6 @@ def add_book_dialog(conn):
         
         return book_note
 
-    # def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled):
-    #     with st.expander("Syllabus & Book Note", expanded=False):
-    #         st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-    #         syllabus_file = None
-    #         if not is_publish_only and not is_thesis_to_book and toggles_enabled:
-    #             syllabus_file = st.file_uploader(
-    #                 "Upload Book Syllabus",
-    #                 type=["pdf", "docx", "jpg", "jpeg", "png"],
-    #                 key="syllabus_upload",
-    #                 help="Upload the book syllabus as a PDF, DOCX, or image file.",
-    #                 label_visibility="collapsed"
-    #             )
-    #         else:
-    #             if is_publish_only:
-    #                 st.info("Syllabus upload is disabled for Publish Only books.")
-    #             if is_thesis_to_book:
-    #                 st.info("Syllabus upload is disabled for Thesis to Book conversions.")
-    #             if not toggles_enabled:
-    #                 st.info("Syllabus upload is disabled for AG Kids and NEET/JEE publishers.")
-            
-    #         st.markdown("<h5 style='color: #4CAF50;'>Book Note</h5>", unsafe_allow_html=True)
-    #         book_note = st.text_area(
-    #             "Book Note or Instructions",
-    #             key="book_note",
-    #             help="Enter any additional notes or instructions for the book (optional, max 1000 characters)",
-    #             max_chars=1000,
-    #             placeholder="Enter notes or special instructions for the book here..."
-    #         )
-            
-    #         return syllabus_file, book_note
-
-    # def tags_section(conn):
-    #     # Initialize session state for tags if not already set
-    #     if "new_book_tags" not in st.session_state:
-    #         st.session_state["new_book_tags"] = []
-
-    #     # Fetch all unique tags and their counts from the database
-    #     with conn.session as s:
-    #         tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
-    #         all_tags = s.execute(tag_query).fetchall()
-    #         tag_counts = {}
-    #         for row in all_tags:
-    #             tags = [tag.strip() for tag in row[0].split(',') if tag.strip()]
-    #             for tag in tags:
-    #                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
-            
-    #         # Sort tags by count (descending) and then alphabetically
-    #         sorted_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
-
-    #     # Add any new tags from session state that aren't in the database yet
-    #     options = sorted_tags + [tag for tag in st.session_state["new_book_tags"] if tag not in sorted_tags]
-
-    #     with st.container(border=True):
-    #         # Tags Section UI
-    #         st.markdown("<h5 style='color: #4CAF50;'>Add Tags</h5>", unsafe_allow_html=True)
-    #         selected_tags = st.multiselect(
-    #             "Add Tags",
-    #             options=options,
-    #             default=st.session_state["new_book_tags"],
-    #             key="new_book_tags",
-    #             accept_new_options=True,
-    #             max_selections=5,
-    #             help="Select existing tags or type to add new tags for the book",
-    #             label_visibility="collapsed",
-    #             placeholder="Select or add up to 5 tags..."
-    #         )
-
-    #     return selected_tags
 
     def author_details_section(conn, author_type, publisher):
         author_section_disabled = publisher in ["AG Kids", "NEET/JEE"]
@@ -2271,7 +2330,7 @@ def add_book_dialog(conn):
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            with st.spinner("Saving Book and Generating Tags/Subject..."):
+            with st.spinner("Saving Book and Generating Tags/Subject with AI..."):
                 # Generate tags and subject when Save is clicked
                 if book_data["title"]:
                     book_data["tags"] = generate_tags_with_ollama(book_data["title"])
@@ -2650,6 +2709,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         st.warning("Publish Only and Thesis to Book options are disabled for AG Kids and NEET/JEE publishers.")
                 
                 st.markdown('</div>', unsafe_allow_html=True)
+
             
 
             # Display subject and tags side by side
@@ -2694,23 +2754,47 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 """,
                 unsafe_allow_html=True
             )
+    
+        with st.expander("Manage Subject & Tags", expanded=False):
+            # Manage Subject
+            st.markdown("<h5 style='color: #4CAF50;'>Manage Subjet</h5>", unsafe_allow_html=True)
 
-        # Fetch current syllabus and book note for the book
-        with conn.session as s:
-            result = s.execute(text("SELECT syllabus_path, book_note FROM books WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
-            current_syllabus_path = result[0] if result else None
-            current_book_note = result[1] if result else None
-
-        
-        with st.expander("Syllabus & Book Note", expanded=False):
-            # Add syllabus and book note section
-            syllabus_file = syllabus_upload_section(
-                new_is_publish_only,
-                new_is_thesis_to_book,
-                publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"],
-                current_syllabus_path
+            available_subjects = VALID_SUBJECTS  # Assume this function fetches all unique subjects
+            if current_subject and current_subject not in available_subjects:
+                available_subjects.append(current_subject)
+            
+            # Use st.pills for subject selection
+            selected_subject = st.pills(
+                "Select Subject",
+                options=available_subjects,
+                default=current_subject,
+                key=f"manage_subject_{book_id}",
+                help="Select a subject for the book or clear to remove",
+                label_visibility="collapsed"
             )
-            book_note = book_note_section(current_book_note, book_id)
+            st.session_state[f"subject_{book_id}"] = selected_subject if selected_subject else ''
+
+            st.markdown("<h5 style='color: #4CAF50;'>Manage Tags</h5>", unsafe_allow_html=True)
+
+            # Fetch all unique tags and their counts from the database
+            sorted_tags = fetch_tags(conn)
+            
+            # Add any new tags from session state that aren't in the database yet
+            for tag in st.session_state[f"tags_{book_id}"]:
+                if tag and tag not in sorted_tags:
+                    sorted_tags.append(tag)
+            
+            # Multiselect for adding/removing tags
+            st.session_state[f"tags_{book_id}"] = st.multiselect(
+                "Manage Tags",
+                options=sorted_tags,
+                default=st.session_state[f"tags_{book_id}"],
+                key=f"manage_tags_{book_id}",
+                accept_new_options=True,
+                max_selections=10,
+                help="Select or deselect tags for the book, or type to add new tags",
+                label_visibility="collapsed",
+            )
 
 
     with dialog_col2:    
@@ -2800,47 +2884,24 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     with col2:
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
+
+        # Fetch current syllabus and book note for the book
+        with conn.session as s:
+            result = s.execute(text("SELECT syllabus_path, book_note FROM books WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+            current_syllabus_path = result[0] if result else None
+            current_book_note = result[1] if result else None
+
         
-        with st.expander("Manage Subject & Tags", expanded=False):
-            # Manage Subject
-            st.markdown("<h5 style='color: #4CAF50;'>Manage Subjet</h5>", unsafe_allow_html=True)
-
-            available_subjects = VALID_SUBJECTS  # Assume this function fetches all unique subjects
-            if current_subject and current_subject not in available_subjects:
-                available_subjects.append(current_subject)
-            
-            # Use st.pills for subject selection
-            selected_subject = st.pills(
-                "Select Subject",
-                options=available_subjects,
-                default=current_subject,
-                key=f"manage_subject_{book_id}",
-                help="Select a subject for the book or clear to remove",
-                label_visibility="collapsed"
+        with st.expander("Syllabus & Book Note", expanded=False):
+            # Add syllabus and book note section
+            syllabus_file = syllabus_upload_section(
+                new_is_publish_only,
+                new_is_thesis_to_book,
+                publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"],
+                current_syllabus_path
             )
-            st.session_state[f"subject_{book_id}"] = selected_subject if selected_subject else ''
-
-            st.markdown("<h5 style='color: #4CAF50;'>Manage Tags</h5>", unsafe_allow_html=True)
-
-            # Fetch all unique tags and their counts from the database
-            sorted_tags = fetch_tags(conn)
-            
-            # Add any new tags from session state that aren't in the database yet
-            for tag in st.session_state[f"tags_{book_id}"]:
-                if tag and tag not in sorted_tags:
-                    sorted_tags.append(tag)
-            
-            # Multiselect for adding/removing tags
-            st.session_state[f"tags_{book_id}"] = st.multiselect(
-                "Manage Tags",
-                options=sorted_tags,
-                default=st.session_state[f"tags_{book_id}"],
-                key=f"manage_tags_{book_id}",
-                accept_new_options=True,
-                max_selections=10,
-                help="Select or deselect tags for the book, or type to add new tags",
-                label_visibility="collapsed",
-            )
+            book_note = book_note_section(current_book_note, book_id)
+        
 
     # Save Button
     if st.button("Save Changes", key=f"save_isbn_{book_id}", type="secondary"):
@@ -3015,7 +3076,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Book Price and Author Payments", width="medium")
+@st.dialog("Manage Book Price and Author Payments", width="medium", on_dismiss='rerun')
 def manage_price_dialog(book_id, current_price, conn):
     # Fetch book details for title
     book_details = fetch_book_details(book_id, conn)
@@ -5185,7 +5246,7 @@ def fetch_unique_names(column):
     query = f"SELECT DISTINCT {column} AS name FROM books WHERE {column} IS NOT NULL AND {column} != ''"
     return sorted(conn.query(query,show_spinner = False)['name'].tolist())
 
-@st.dialog("Edit Operation Details", width='medium')
+@st.dialog("Edit Operation Details", width='medium', on_dismiss='rerun')
 def edit_operation_dialog(book_id, conn):
     # Fetch book details for title, is_publish_only, is_thesis_to_book, and syllabus_path
     book_details = fetch_book_details(book_id, conn)
@@ -5895,7 +5956,7 @@ def get_print_status(book_id, conn):
     return status
 
 
-@st.dialog("Edit Printing & Inventory", width='medium')
+@st.dialog("Edit Printing & Inventory", width='medium', on_dismiss='rerun')
 def edit_inventory_delivery_dialog(book_id, conn):
     # Fetch book details for title
     book_details = fetch_book_details(book_id, conn)
@@ -5940,7 +6001,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
         .print-run-table-header,
         .print-run-table-row {
             display: grid;
-            grid-template-columns: 0.5fr 0.6fr 1.2fr 1.2fr 0.6fr 0.6fr 1.5fr 0.8fr;
+            grid-template-columns: 0.5fr 0.5fr 1.2fr 1.2fr 0.4fr 0.4fr 2fr 0.8fr;
             padding: 4px 6px;
             align-items: center;
             box-sizing: border-box;
@@ -6440,7 +6501,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
                 inventory_color_class = "value-green"
 
             # Display current inventory status at the top
-            st.markdown('<div class="section-header">Inventory Summary</div>', unsafe_allow_html=True)
+            st.write("#### Current Inventory Status")
             st.markdown(f"""
                 <div class="inventory-summary-grid">
                     <div class="inventory-summary-item">
@@ -6468,7 +6529,7 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
             with st.form(key=f"new_inventory_form_{book_id}", border=False):
                 # Pricing Section
-                st.markdown('<div class="section-header">Pricing & Storage</div>', unsafe_allow_html=True)
+                st.write("#### Pricing & Storage")
                 with st.container(border=True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2 = st.columns(2)
@@ -6488,8 +6549,42 @@ def edit_inventory_delivery_dialog(book_id, conn):
                         )
                     st.markdown('</div>', unsafe_allow_html=True)
 
+                # Links and Reviews Section (Collapsible)
+                with st.popover("Book Links", use_container_width=True):
+                    st.write("#### Links and Reviews")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        amazon_link = st.text_input(
+                            "Amazon Link", 
+                            value=current_data.get('amazon_link', ""), 
+                            key=f"amazon_link_{book_id}"
+                        )
+                        flipkart_link = st.text_input(
+                            "Flipkart Link", 
+                            value=current_data.get('flipkart_link', ""), 
+                            key=f"flipkart_link_{book_id}"
+                        )
+                        google_link = st.text_input(
+                            "Google Link", 
+                            value=current_data.get('google_link', ""), 
+                            key=f"google_link_{book_id}"
+                        )
+                    with col2:
+                        agph_link = st.text_input(
+                            "AGPH Link", 
+                            value=current_data.get('agph_link', ""), 
+                            key=f"agph_link_{book_id}"
+                        )
+                        google_review = st.text_input(
+                            "Google Review", 
+                            value=current_data.get('google_review', ""), 
+                            key=f"google_review_{book_id}"
+                        )
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+
                 # Sales Tracking Section
-                st.markdown('<div class="section-header">Sales Tracking</div>', unsafe_allow_html=True)
+                st.write("#### Sales Tracking")
                 with st.container(border=True):
                     st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
                     col1, col2, col3, col4 = st.columns(4)
@@ -6523,46 +6618,13 @@ def edit_inventory_delivery_dialog(book_id, conn):
                         )
                     st.markdown('</div>', unsafe_allow_html=True)
 
-                # Links and Reviews Section (Collapsible)
-                st.markdown('<div class="section-header">Links and Reviews</div>', unsafe_allow_html=True)
-                with st.popover("Book Links", use_container_width=True):
-                    st.markdown('<div class="inventory-box">', unsafe_allow_html=True)
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        amazon_link = st.text_input(
-                            "Amazon Link", 
-                            value=current_data.get('amazon_link', ""), 
-                            key=f"amazon_link_{book_id}"
-                        )
-                        flipkart_link = st.text_input(
-                            "Flipkart Link", 
-                            value=current_data.get('flipkart_link', ""), 
-                            key=f"flipkart_link_{book_id}"
-                        )
-                        google_link = st.text_input(
-                            "Google Link", 
-                            value=current_data.get('google_link', ""), 
-                            key=f"google_link_{book_id}"
-                        )
-                    with col2:
-                        agph_link = st.text_input(
-                            "AGPH Link", 
-                            value=current_data.get('agph_link', ""), 
-                            key=f"agph_link_{book_id}"
-                        )
-                        google_review = st.text_input(
-                            "Google Review", 
-                            value=current_data.get('google_review', ""), 
-                            key=f"google_review_{book_id}"
-                        )
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                # Submit Button
+                                # Submit Button
                 save_inventory = st.form_submit_button(
                     "💾 Save Inventory", 
                     width="stretch",
                     help="Click to save changes to inventory details."
                 )
+
 
                 # Handle form submission
                 if save_inventory:
@@ -6727,12 +6789,24 @@ st.markdown("""
             border: none;
             cursor: pointer;
             transition: background-color 0.2s;
-        }
+        }     
             
-        .author-names {
-            font-size: 12px;
-            color: #555; 
-            margin-bottom: 0px; /* Space between author names */
+        /* A container to hold the lines and control spacing in the cell */
+        .cell-container {
+            display: flex;
+            flex-direction: column;
+            gap: 4px; /* Controls the tight vertical spacing */
+            line-height: 1.4;
+        }
+        /* Style for the top line (book title + badges) */
+        .title-line {
+            font-weight: 500;
+            font-size: 14px;
+        }
+        /* Style for the bottom line (author names) */
+        .authors-line {
+            font-size: 11px;
+            color: #4b5563; /* Muted text color */
         }
         .pagination-button:disabled {
             background-color: #d3d3d3;
@@ -7393,13 +7467,6 @@ AUTHOR_TYPE_STYLES = {
     "Multiple": {"color": "#15803d", "background": "#e5fff3"}  # Red with light red background
 }
 
-# AUTHOR_TYPE_STYLES = {
-#     "Single": {"color": "#b45309", "background": "#fef3c7"},  # Teal with light teal background
-#     "Double": {"color": "#b45309", "background": "#fef3c7"},  # Purple with light purple background
-#     "Triple": {"color": "#b45309", "background": "#fef3c7"},  # Amber with light amber background
-#     "Multiple": {"color": "#b45309", "background": "#fef3c7"}  # Red with light red background
-# }
-
 def generate_badge(content, color, background, extra_styles=None):
     """Generate HTML for a styled badge."""
     styles = {**BASE_BADGE_STYLE, "color": color, "background-color": background}
@@ -7435,6 +7502,85 @@ def get_publisher_badge(publisher):
     return ""
 
 
+def get_author_checklist_pill(book_id, row, authors_grouped):
+
+    # --- Styles for a more compact look ---
+
+    container_style = (
+        "display: flex; "
+        "flex-wrap: wrap; "
+        "gap: 2px; "
+        "padding-top: 1px;"
+    )
+
+    # Base style with smaller font and padding
+    base_pill_style = (
+        "padding: 1px 2px; "          # Reduced padding for a smaller pill
+        "border-radius: 12px; "
+        "font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; "
+        "font-size: 10px; "           # Smaller font size
+        "font-weight: 500; "
+        "display: inline-flex; "
+        "align-items: center; "
+        "gap: 1px; "
+
+    )
+
+    # Style for 'completed' (green with checkmark)
+    complete_style = (
+        f"{base_pill_style} "
+        "background-color: #ffffff; "
+        "color: #166534; "
+    )
+    
+    # NEW: Style for 'pending' (red with cross mark)
+    pending_style = (
+        f"{base_pill_style} "
+        "background-color: #ffffff; "  # Soft red/pink background
+        "color: #b91c1c; "             # Darker red text
+    )
+
+    # --- Checklist Logic ---
+
+    checklist_sequence = [
+        ("welcome_mail_sent", "Welcome"),
+        ("cover_agreement_sent", "Cover/Agr"),
+        ("author_details_sent", "Details"),
+        ("photo_recive", "Photo"),
+        ("id_proof_recive", "ID Proof"),
+        ("agreement_received", "Agreement"),
+        ("digital_book_sent", "Digital"),
+        ("printing_confirmation", "Print")
+    ]
+
+    book_authors = authors_grouped.get(book_id, pd.DataFrame())
+    if book_authors.empty:
+        return (
+            f"<div style='{container_style}'>"
+            f"<span style='font-size: 10px; color: #6b7280; font-style: italic;'>No authors</span>"
+            f"</div>"
+        )
+
+    html_pills = []
+    for field, label in checklist_sequence:
+        all_complete = all(author.get(field) for _, author in book_authors.iterrows())
+
+        if all_complete:
+            # Checkmark icon ✔ for completed items
+            pill_content = f"<span>&#10004;</span><span>{label}</span>"
+            style = complete_style
+            title = f"{label}: Completed"
+        else:
+            # NEW: Cross mark icon ✗ for pending items
+            pill_content = f"<span>&#10007;</span><span>{label}</span>"
+            style = pending_style
+            title = f"{label}: Pending"
+        
+        html_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
+
+    return f"<div style=\"{container_style}\">{''.join(html_pills)}</div>"
+
+
 #actual icons
 price_icon = ":material/currency_rupee:"
 isbn_icon = ":material/edit_document:"
@@ -7460,7 +7606,7 @@ end_idx = min(start_idx + page_size, total_books)
 paginated_books = filtered_books.iloc[start_idx:end_idx]
 
 # Display the table
-column_size = [0.5, 3.8, 1, 0.95, 1.2, 2]
+column_size = [0.5, 3.8, 1, 0.95, 1.3, 2]
 render_start = time.time()
 # Main rendering loop (partial, focusing on col5)
 with st.container(border=False):
@@ -7495,16 +7641,29 @@ with st.container(border=False):
                 with col1:
                     st.write(row['book_id'])
                 with col2:
+                    # --- Get all the data for the cell ---
                     author_count = author_count_dict.get(row['book_id'], 0)
                     author_badge = get_author_badge(row.get('author_type', 'Multiple'), author_count)
                     publish_badge = get_publish_badge(row.get('is_publish_only', 0))
                     thesis_to_book_badge = get_thesis_to_book_badge(row.get('is_thesis_to_book', 0))
                     publisher_badge = get_publisher_badge(row.get('publisher', ''))
-                    html = f"""
-                        {row['title']} {publish_badge}{thesis_to_book_badge}{publisher_badge}
-                        <div class="author-names">{authors_display}{author_badge}</div>
-                        """
-                    st.markdown(html, unsafe_allow_html=True)
+                    checklist_display = get_author_checklist_pill(row['book_id'], row, authors_grouped)
+                    authors_display = author_names_dict.get(row['book_id'], "No authors found")
+
+                    # --- The HTML for each row ---
+                    html_content = f"""
+                    <div class="cell-container">
+                        <div class="title-line">
+                            {row['title']} {publish_badge}{thesis_to_book_badge}{publisher_badge}{author_badge}
+                        </div>
+                        <div class="authors-line">
+                            {authors_display}
+                        </div>
+                        <div>{checklist_display}</div>
+                    </div>
+                    """
+
+                    st.markdown(html_content, unsafe_allow_html=True)
                 with col3:
                     st.write(row['date'].strftime('%Y-%m-%d'))
                 with col4:
@@ -7614,3 +7773,4 @@ with st.container(border=False):
 total_time = time.time() - start_time
 st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
 st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
+
