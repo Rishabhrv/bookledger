@@ -11,7 +11,9 @@ from auth import validate_token
 from constants import log_activity
 from constants import connect_db
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
+from time import sleep
+from sqlalchemy.sql import text
 
 
 # Set page configuration
@@ -419,6 +421,67 @@ st.markdown("""
             margin-top: 20px;
             width: 100%;
         }
+            /* Timeline styles */
+        .timeline {
+            position: relative;
+            padding-left: 40px;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .timeline::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 15px;
+            width: 2px;
+            background: #4CAF50;
+        }
+        .timeline-item {
+            position: relative;
+            margin-bottom: 6px;
+            padding-left: 20px;
+        }
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -25px;
+            top: 5px;
+            width: 10px;
+            height: 10px;
+            background: #fff;
+            border: 2px solid #4CAF50;
+            border-radius: 50%;
+        }
+        .timeline-time {
+            font-weight: bold;
+            color: #333;
+            display: inline-block;
+            min-width: 140px;
+        }
+        .timeline-event {
+            color: #555;
+        }
+        .timeline-notes {
+            color: #777;
+            font-style: italic;
+            font-size: 12px;
+            display: block;
+            margin-top: 2px;
+        }
+        
+        /* Other element styles */
+        .field-label {
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .changed {
+            background-color: #FFF3E0;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -520,7 +583,8 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 b.is_publish_only AS 'Is Publish Only',
                 b.is_thesis_to_book AS 'Is Thesis to Book',
                 h.hold_start AS 'hold_start',
-                h.resume_time AS 'resume_time'
+                h.resume_time AS 'resume_time',
+                h.reason AS 'hold_reason'
             FROM books b
             LEFT JOIN holds h ON b.book_id = h.book_id AND h.section = '{section}'
             WHERE b.date >= '{cutoff_date_str}'
@@ -549,6 +613,24 @@ def fetch_author_details(book_id):
     """
     df = conn.query(query, show_spinner=False)
     return df
+
+def fetch_holds(section: str) -> pd.DataFrame:
+    conn = connect_db()
+    query = """
+        SELECT 
+            book_id,
+            section,
+            hold_start,
+            resume_time
+        FROM holds
+        WHERE section = :section
+    """
+    holds_df = conn.query(query, params={"section": section}, show_spinner=False)
+    holds_df['hold_start'] = pd.to_datetime(holds_df['hold_start'])
+    holds_df['resume_time'] = pd.to_datetime(holds_df['resume_time'])
+    return holds_df
+
+#on_hold_books = fetch_hold_books()
 
 
 @st.dialog("Author Details", width='medium')
@@ -601,62 +683,71 @@ def render_month_selector(books_df):
                              label_visibility='collapsed')
     return selected_month
 
-from datetime import datetime, timedelta
 
-def format_duration(duration):
-    """Convert a timedelta to a human-readable string like '8 Hours' or '1 Day 2 Hours'."""
-    total_seconds = int(duration.total_seconds())
-    if total_seconds < 0:
-        return "Invalid duration"
+
+def calculate_working_duration(start_date, end_date, hold_periods=None):
+    """Calculate duration in working hours (09:30–18:00, Mon–Sat) between two timestamps,
+       excluding hold periods. Returns (total_days, remaining_hours) where 1 day = 8.5 hours, hours rounded."""
     
-    days = total_seconds // (24 * 3600)
-    hours = (total_seconds % (24 * 3600)) // 3600
+    if pd.isna(start_date) or pd.isna(end_date):
+        return (0, 0)
+    if start_date >= end_date:
+        return (0, 0)
     
-    if days > 0 and hours > 0:
-        return f"{days} Day{'s' if days != 1 else ''} {hours} Hour{'s' if hours != 1 else ''}"
-    elif days > 0:
-        return f"{days} Day{'s' if days != 1 else ''}"
-    elif hours > 0:
-        return f"{hours} Hour{'s' if hours != 1 else ''}"
-    else:
-        return "Less than an hour"
+    # Working day limits
+    work_start = time(9, 30)
+    work_end = time(18, 0)
+    work_day_hours = 8.5
 
-def render_worker_completion_graph(books_df, selected_month, section):
-    from datetime import datetime, timedelta, time
-    # Function to compute working duration between two timestamps
-    def compute_working_time(start, end):
-        """Returns (days, hours) using 09:30-18:00 Mon–Sat schedule."""
-        if pd.isna(start) or pd.isna(end) or start >= end:
-            return (0, 0)
+    total_minutes = 0
+    current = start_date
 
-        work_start = time(9, 30)
-        work_end = time(18, 0)
-        work_day_hours = 8.5
+    # Process hold periods
+    if hold_periods is None:
+        hold_periods = []
+    # Filter valid hold periods and ensure they are within start_date and end_date
+    valid_hold_periods = []
+    for hold_start, hold_end in hold_periods:
+        if pd.isna(hold_start) or (hold_end is not None and pd.isna(hold_end)):
+            continue
+        hold_start = max(hold_start, start_date) if pd.notnull(hold_start) else start_date
+        hold_end = min(hold_end, end_date) if pd.notnull(hold_end) else end_date
+        if hold_start < hold_end:
+            valid_hold_periods.append((hold_start, hold_end))
 
-        total_minutes = 0
-        current = start
+    while current.date() <= end_date.date():
+        # Skip Sundays
+        if current.weekday() != 6:
+            day_start = datetime.combine(current.date(), work_start)
+            day_end = datetime.combine(current.date(), work_end)
 
-        while current.date() <= end.date():
-            if current.weekday() != 6:  # skip Sundays
-                day_start = datetime.combine(current.date(), work_start)
-                day_end = datetime.combine(current.date(), work_end)
+            actual_start = max(day_start, start_date)
+            actual_end = min(day_end, end_date)
 
-                actual_start = max(day_start, start)
-                actual_end = min(day_end, end)
+            if actual_start < actual_end:
+                day_minutes = (actual_end - actual_start).total_seconds() / 60
+                for hold_start, hold_end in valid_hold_periods:
+                    hold_start_in_day = max(hold_start, actual_start)
+                    hold_end_in_day = min(hold_end, actual_end)
+                    if hold_start_in_day < hold_end_in_day:
+                        hold_duration = (hold_end_in_day - hold_start_in_day).total_seconds() / 60
+                        day_minutes -= hold_duration
+                if day_minutes > 0:
+                    total_minutes += day_minutes
 
-                if actual_start < actual_end:
-                    worked = (actual_end - actual_start).total_seconds() / 60
-                    total_minutes += worked
+        current += timedelta(days=1)
+        current = current.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            current += timedelta(days=1)
-            current = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    total_hours = total_minutes / 60.0
+    total_days = int(total_hours // work_day_hours)
+    remaining_hours = int(round(total_hours % work_day_hours))
 
-        total_hours = total_minutes / 60.0
-        total_days = int(total_hours // work_day_hours)
-        remaining_hours = int(round(total_hours % work_day_hours))  # rounded hours
+    return (total_days, remaining_hours)
 
-        return total_days, remaining_hours
-
+def render_worker_completion_graph(books_df, selected_month, section, holds_df=None):
+    """Render a graph and table showing completed books for a given section and month, with hold time excluded from time taken and hold time in the last column."""
+    
+    
     # Convert selected_month to year and month for filtering
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
     target_period = pd.Timestamp(selected_month_dt).to_period('M')
@@ -700,19 +791,60 @@ def render_worker_completion_graph(books_df, selected_month, section):
 
         # Create table for book details
         st.write(f"##### {section.capitalize()} Completed in {selected_month} by {selected_worker}")
-        section_columns = [f'{section.capitalize()} By', f'{section.capitalize()} Start', f'{section.capitalize()} End']
-        display_columns = ['Title'] + section_columns if 'Title' in books_df.columns else section_columns
+        display_columns = ['Book ID', 'Title', f'{section.capitalize()} By', 'Time Taken', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Hold Time'] if 'Title' in books_df.columns else ['Book ID', f'{section.capitalize()} By', 'Time Taken', 'Start Date', 'Start Time', 'End Date', 'End Time', 'Hold Time']
 
-        # Calculate time taken using working-hours logic
+        # Calculate time taken (excluding hold periods)
         completed_books = completed_books.copy()  # Avoid modifying original dataframe
         completed_books['Time Taken'] = completed_books.apply(
-            lambda row: compute_working_time(row[start_col], row[end_col]),
+            lambda row: calculate_working_duration(
+                row[start_col],
+                row[end_col],
+                [(h['hold_start'], h['resume_time'] or row[end_col]) for _, h in holds_df[(holds_df['book_id'] == row['Book ID']) & (holds_df['section'] == section)].iterrows()] if holds_df is not None and not holds_df[(holds_df['book_id'] == row['Book ID']) & (holds_df['section'] == section)].empty else []
+            ),
             axis=1
         )
-
-        # Format as "Xd Yh"
         completed_books['Time Taken'] = completed_books['Time Taken'].apply(
             lambda x: f"{x[0]}d {x[1]}h"
+        )
+
+        def calculate_total_hold_time(row, holds_df, end_col, section):
+            """
+            Calculate total hold time for a book in calendar days and hours.
+            Returns (total_days, remaining_hours) where 1 day = 24 hours.
+            """
+            if holds_df is None or holds_df.empty:
+                return (0, 0)
+            
+            # Filter hold periods for this book and section
+            book_holds = holds_df[(holds_df['book_id'] == row['Book ID']) & (holds_df['section'] == section)]
+            if book_holds.empty:
+                return (0, 0)
+            
+            total_minutes = 0
+            hold_periods = [
+                (h['hold_start'], h['resume_time'] if pd.notnull(h['resume_time']) else row[end_col])
+                for _, h in book_holds.iterrows()
+            ]
+            
+            for hold_start, hold_end in hold_periods:
+                if pd.isna(hold_start) or pd.isna(hold_end) or hold_start >= hold_end:
+                    continue
+                # Calculate duration in calendar days (total time, not working hours)
+                duration = (hold_end - hold_start).total_seconds() / 60
+                total_minutes += duration
+            
+            # Convert total minutes to days and hours (1 day = 24 hours)
+            total_hours = total_minutes / 60.0
+            total_days = int(total_hours // 24)
+            remaining_hours = int(round(total_hours % 24))
+            return (total_days, remaining_hours)
+
+        completed_books['Hold Time'] = completed_books.apply(
+            lambda row: calculate_total_hold_time(row, holds_df, end_col, section),
+            axis=1
+        )
+        completed_books['Hold Time'] = completed_books['Hold Time'].apply(
+            lambda x: f"{x[0]}d {x[1]}h" if x != (0, 0) else "0d 0h"
         )
 
         # Split Start and End into Date and Time with AM/PM format
@@ -721,15 +853,11 @@ def render_worker_completion_graph(books_df, selected_month, section):
         completed_books['End Date'] = completed_books[end_col].dt.strftime('%Y-%m-%d')
         completed_books['End Time'] = completed_books[end_col].dt.strftime('%I:%M %p')
         
-        # Reorder columns to include Time Taken and split date/time
-        display_columns = ['Title', 'Date', f'{section.capitalize()} By', 'Time Taken', 'Start Date', 'Start Time', 'End Date', 'End Time'] if 'Title' in books_df.columns else [f'{section.capitalize()} By', 'Time Taken' , 'Start Date', 'Start Time', 'End Date', 'End Time']
-        
         st.dataframe(
             completed_books[display_columns].rename(columns={f'{section.capitalize()} By': 'Team Member'}),
             hide_index=True,
             width="stretch"
         )
-
 
     with col2:
         # Group by worker for the bar chart
@@ -783,7 +911,7 @@ def render_worker_completion_graph(books_df, selected_month, section):
         st.altair_chart(chart, use_container_width=True)
 
 
-def render_metrics(books_df, selected_month, section, user_role):
+def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
 
     # Convert selected_month (e.g., "April 2025") to date range
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
@@ -906,7 +1034,7 @@ def render_metrics(books_df, selected_month, section, user_role):
     # Render worker completion graph for non-Cover sections in an expander using full books_df
     if section != "cover":
         with st.expander(f"Show Completion Graph and Table for {section.capitalize()}, {selected_month}"):
-            render_worker_completion_graph(books_df, selected_month, section)
+            render_worker_completion_graph(books_df, selected_month, section, holds_df=holds_df)
     
     return filtered_books_metrics
 
@@ -934,22 +1062,11 @@ def get_days_since_enrolled(enroll_date, current_date):
         return (current_date - date_enrolled).days
     return None
 
-def get_worker_by(start, worker_by, worker_map=None):
-    if pd.notnull(start) and start != '0000-00-00 00:00:00':
-        worker = worker_by if pd.notnull(worker_by) else "Unknown Worker"
-        if worker_map and worker in worker_map:
-            return worker, worker_map[worker]
-        return worker, None
-    return "Not Assigned", None
-
 
 def fetch_book_details(book_id, conn):
     query = f"SELECT title, book_note FROM books WHERE book_id = {book_id}"
     return conn.query(query, show_spinner=False)
 
-
-from time import sleep
-from sqlalchemy.sql import text
 
 @st.dialog("Rate User", width='medium')
 def rate_user_dialog(book_id, conn):
@@ -970,6 +1087,9 @@ def rate_user_dialog(book_id, conn):
 
 @st.dialog("Correction Details", width='medium')
 def correction_dialog(book_id, conn, section):
+    # IST timezone
+    IST = timezone(timedelta(hours=5, minutes=30))
+    
     # Map section to display name and database columns
     section_config = {
         "writing": {"display": "Writing", "by": "writing_by", "start": "writing_start", "end": "writing_end"},
@@ -992,63 +1112,100 @@ def correction_dialog(book_id, conn, section):
         st.markdown(f"### {display_name} Correction Details for Book ID: {book_id}")
         st.warning("Book title not found.")
 
-    # Fetch current worker (default for new corrections)
-    query = f"SELECT {config['by']} AS worker FROM books WHERE book_id = :book_id"
-    book_data = conn.query(query, params={"book_id": book_id}, show_spinner=False)
-    default_worker = book_data.iloc[0]["worker"] if not book_data.empty and book_data.iloc[0]["worker"] else None
-
-    # Fetch most recent correction
+    # Fetch ongoing correction
     query = """
-        SELECT correction_id, correction_start, correction_end, worker, notes
+        SELECT correction_id, correction_start, worker, notes
         FROM corrections
-        WHERE book_id = :book_id AND section = :section
+        WHERE book_id = :book_id AND section = :section AND correction_end IS NULL
         ORDER BY correction_start DESC
         LIMIT 1
     """
-    recent_correction = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    ongoing_correction = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    is_ongoing = not ongoing_correction.empty
     
-    # Determine if editing an ongoing correction
-    is_ongoing = not recent_correction.empty and pd.isna(recent_correction.iloc[0]["correction_end"])
-    correction_id = recent_correction.iloc[0]["correction_id"] if is_ongoing else None
-    default_start = recent_correction.iloc[0]["correction_start"] if is_ongoing else None
-    default_worker = recent_correction.iloc[0]["worker"] if is_ongoing else default_worker
-    default_notes = recent_correction.iloc[0]["notes"] if is_ongoing and recent_correction.iloc[0]["notes"] else ""
+    if is_ongoing:
+        correction_id = ongoing_correction.iloc[0]["correction_id"]
+        current_start = ongoing_correction.iloc[0]["correction_start"]
+        current_worker = ongoing_correction.iloc[0]["worker"]
+        current_notes = ongoing_correction.iloc[0]["notes"] or ""
+    else:
+        current_start = None
+        current_worker = None
+        current_notes = ""
 
-    # Initialize session state
-    worker_keys = [f"{section}_correction_worker", f"{section}_correction_new_worker"]
-    date_keys = [
-        f"{section}_correction_start_date",
-        f"{section}_correction_start_time",
-        f"{section}_correction_end_date",
-        f"{section}_correction_end_time",
-        f"{section}_correction_notes"
-    ]
-    worker_defaults = {
-        f"{section}_correction_worker": default_worker if default_worker else "Select Team Member",
-        f"{section}_correction_new_worker": ""
-    }
-    date_defaults = {
-        f"{section}_correction_start_date": default_start.date() if default_start else datetime.now().date(),
-        f"{section}_correction_start_time": default_start.time() if default_start else datetime.now().time(),
-        f"{section}_correction_end_date": None,
-        f"{section}_correction_end_time": None,
-        f"{section}_correction_notes": default_notes
-    }
-    for key in worker_keys:
-        if f"{key}_{book_id}" not in st.session_state:
-            st.session_state[f"{key}_{book_id}"] = worker_defaults[key]
-    for key in date_keys:
-        if f"{key}_{book_id}" not in st.session_state:
-            st.session_state[f"{key}_{book_id}"] = date_defaults[key]
+    # Fetch default worker if not ongoing
+    if not is_ongoing:
+        query = f"SELECT {config['by']} AS worker FROM books WHERE book_id = :book_id"
+        book_data = conn.query(query, params={"book_id": book_id}, show_spinner=False)
+        default_worker = book_data.iloc[0]["worker"] if not book_data.empty and book_data.iloc[0]["worker"] else "Select Team Member"
+    else:
+        default_worker = current_worker
 
-    # Fetch unique names for the section
-    def fetch_unique_names(column, conn):
-        query = f"SELECT DISTINCT {column} FROM books WHERE {column} IS NOT NULL"
-        result = conn.query(query, show_spinner=False)
-        return sorted([row[column] for row in result.to_dict('records') if row[column]])
-    
-    names = fetch_unique_names(config["by"], conn)
-    options = ["Select Team Member"] + names + ["Add New..."]
+    # Fetch hold and resume status from holds table
+    hold_query = """
+        SELECT hold_start, resume_time, reason
+        FROM holds 
+        WHERE book_id = :book_id AND section = :section
+    """
+    hold_data = conn.query(hold_query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    hold_start = hold_data.iloc[0]['hold_start'] if not hold_data.empty else None
+    resume_time = hold_data.iloc[0]['resume_time'] if not hold_data.empty else None
+    hold_reason = hold_data.iloc[0]['reason'] if not hold_data.empty and 'reason' in hold_data.columns else "-"
+    is_on_hold = hold_start is not None and resume_time is None
+
+    # Fetch section start and end from books
+    query = f"SELECT {config['start']}, {config['end']}, {config['by']} AS worker FROM books WHERE book_id = :book_id"
+    section_data = conn.query(query, params={"book_id": book_id}, show_spinner=False)
+    section_start = section_data.iloc[0][config['start']] if not section_data.empty else None
+    section_end = section_data.iloc[0][config['end']] if not section_data.empty else None
+    section_worker = section_data.iloc[0]['worker'] if not section_data.empty and section_data.iloc[0]['worker'] else "-"
+
+    # Collect full history events
+    events = []
+    if section_start:
+        events.append({"Time": section_start, "Event": f"{display_name} Started by {section_worker}", "Notes": "-"})
+    if hold_start:
+        events.append({"Time": hold_start, "Event": "Placed on Hold", "Notes": hold_reason})
+    if resume_time:
+        events.append({"Time": resume_time, "Event": "Resumed", "Notes": "-"})
+
+    # Fetch all corrections for history
+    query = """
+        SELECT correction_start AS Start, correction_end AS End, worker, notes
+        FROM corrections
+        WHERE book_id = :book_id AND section = :section
+        ORDER BY correction_start
+    """
+    corrections = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    for idx, row in corrections.iterrows():
+        events.append({
+            "Time": row["Start"],
+            "Event": f"Correction Started by {row['worker']}",
+            "Notes": row['notes'] if pd.notnull(row['notes']) else "-"
+        })
+        if pd.notnull(row["End"]):
+            events.append({"Time": row["End"], "Event": "Correction Ended", "Notes": "-"})
+
+    if section_end:
+        events.append({"Time": section_end, "Event": f"{display_name} Ended", "Notes": "-"})
+
+    # Sort events by time
+    events.sort(key=lambda x: x["Time"])
+
+    # Display history in a timeline-like format
+    st.markdown(f'<div class="field-label">Full {display_name} History</div>', unsafe_allow_html=True)
+    if events:
+        for event in events:
+            time_str = event["Time"].strftime('%d %B %Y, %I:%M %p') if pd.notnull(event["Time"]) else "-"
+            event_str = event["Event"]
+            notes = event["Notes"]
+            # Use st.info for a clean, boxed appearance
+            if notes != "-":
+                st.info(f"**{time_str}**: {event_str}  \n**Reason**: {notes}")
+            else:
+                st.info(f"**{time_str}**: {event_str}")
+    else:
+        st.info("No history available.")
 
     # Custom CSS
     st.markdown("""
@@ -1065,49 +1222,36 @@ def correction_dialog(book_id, conn, section):
         </style>
     """, unsafe_allow_html=True)
 
-    # Display correction history
-    st.markdown(f'<div class="field-label">{display_name} Correction History</div>', unsafe_allow_html=True)
-    query = """
-        SELECT correction_id, correction_start, correction_end, worker, notes
-        FROM corrections
-        WHERE book_id = :book_id AND section = :section
-        ORDER BY correction_start DESC
-    """
-    history_data = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
-    if not history_data.empty:
-        history_df = history_data.rename(columns={
-            "correction_id": "ID",
-            "correction_start": "Start",
-            "correction_end": "End",
-            "worker": "Worker",
-            "notes": "Notes"
-        })
-        history_df["Start"] = history_df["Start"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
-        history_df["End"] = history_df["End"].apply(lambda x: x.strftime('%Y-%m-%d %H:%M') if pd.notnull(x) else "-")
-        history_df["Notes"] = history_df["Notes"].apply(lambda x: x if pd.notnull(x) else "-")
-        st.dataframe(history_df, width="stretch", hide_index=True)
-    else:
-        st.info("No correction history available.")
+    # Fetch unique names
+    names = fetch_unique_names(config["by"], conn)
+    options = ["Select Team Member"] + names + ["Add New..."]
 
-    # Form header
-    form_title = "Edit Ongoing Correction" if is_ongoing else f"Add New {display_name} Correction"
-    st.markdown(f"<h4 style='color:#4CAF50;'>{form_title}</h4>", unsafe_allow_html=True)
+    # Initialize session state for new worker and notes
+    if f"{section}_correction_new_worker_{book_id}" not in st.session_state:
+        st.session_state[f"{section}_correction_new_worker_{book_id}"] = ""
+    if f"{section}_correction_notes_{book_id}" not in st.session_state:
+        st.session_state[f"{section}_correction_notes_{book_id}"] = current_notes
 
-    # Form for adding/updating correction
-    with st.form(key=f"correction_form_{book_id}_{section}", border=False):
-        st.markdown(f'<div class="field-label">{display_name} Team Member</div>', unsafe_allow_html=True)
-        disabled = is_ongoing
+    # Show warning if on hold
+    if is_on_hold:
+        st.warning(f"⚠️ This section is currently on hold. Placed on hold: {hold_start.strftime('%d %B %Y, %I:%M %p IST')}")
+
+    if not is_ongoing:
+        # Pending: Start new correction
+        form_title = f"Start New {display_name} Correction"
+        st.markdown(f"<h4 style='color:#4CAF50;'>{form_title}</h4>", unsafe_allow_html=True)
+        
         selected_worker = st.selectbox(
             "Team Member",
             options,
-            index=options.index(st.session_state[f"{section}_correction_worker_{book_id}"]) if st.session_state[f"{section}_correction_worker_{book_id}"] in options else 0,
+            index=options.index(default_worker) if default_worker in options else 0,
             key=f"{section}_correction_select_{book_id}",
             label_visibility="collapsed",
             help=f"Select an existing {display_name.lower()} worker or add a new one.",
-            disabled=disabled
+            disabled=is_on_hold
         )
         
-        if selected_worker == "Add New..." and not disabled:
+        if selected_worker == "Add New..." and not is_on_hold:
             st.session_state[f"{section}_correction_new_worker_{book_id}"] = st.text_input(
                 "New Team Member",
                 value=st.session_state[f"{section}_correction_new_worker_{book_id}"],
@@ -1116,51 +1260,86 @@ def correction_dialog(book_id, conn, section):
                 label_visibility="collapsed"
             )
             if st.session_state[f"{section}_correction_new_worker_{book_id}"].strip():
-                st.session_state[f"{section}_correction_worker_{book_id}"] = st.session_state[f"{section}_correction_new_worker_{book_id}"].strip()
-        elif selected_worker != "Select Team Member" and not disabled:
-            st.session_state[f"{section}_correction_worker_{book_id}"] = selected_worker
+                worker = st.session_state[f"{section}_correction_new_worker_{book_id}"].strip()
+        elif selected_worker != "Select Team Member" and not is_on_hold:
+            worker = selected_worker
             st.session_state[f"{section}_correction_new_worker_{book_id}"] = ""
-        elif not disabled:
-            st.session_state[f"{section}_correction_worker_{book_id}"] = None
-            st.session_state[f"{section}_correction_new_worker_{book_id}"] = ""
+        else:
+            worker = None
 
-        worker = st.session_state[f"{section}_correction_worker_{book_id}"]
-        if disabled:
-            worker = default_worker
+        notes = st.text_area(
+            "Correction Notes",
+            value=st.session_state[f"{section}_correction_notes_{book_id}"],
+            key=f"{section}_correction_notes_{book_id}",
+            placeholder=f"Enter notes about this {display_name.lower()} correction...",
+            label_visibility="collapsed",
+            help=f"Optional notes about the {display_name.lower()} correction",
+            disabled=is_on_hold
+        )
 
-        col1, col2 = st.columns(2, gap="medium")
-        with col1:
-            st.markdown(f'<div class="field-label">Correction Start Date & Time</div>', unsafe_allow_html=True)
-            start_date = st.date_input(
-                "Start Date",
-                value=st.session_state[f"{section}_correction_start_date_{book_id}"],
-                key=f"{section}_correction_start_date_{book_id}",
-                label_visibility="collapsed",
-                help=f"When {display_name.lower()} correction began",
-                disabled=disabled
-            )
-            start_time = st.time_input(
-                "Start Time",
-                value=st.session_state[f"{section}_correction_start_time_{book_id}"],
-                key=f"{section}_correction_start_time_{book_id}",
-                label_visibility="collapsed",
-                disabled=disabled
-            )
+        col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            st.markdown(f'<div class="field-label">Correction End Date & Time</div>', unsafe_allow_html=True)
-            end_date = st.date_input(
-                "End Date",
-                value=st.session_state[f"{section}_correction_end_date_{book_id}"],
-                key=f"{section}_correction_end_date_{book_id}",
-                label_visibility="collapsed",
-                help=f"When {display_name.lower()} correction was completed (leave blank if ongoing)"
-            )
-            end_time = st.time_input(
-                "End Time",
-                value=st.session_state[f"{section}_correction_end_time_{book_id}"],
-                key=f"{section}_correction_end_time_{book_id}",
-                label_visibility="collapsed"
-            )
+            if is_on_hold:
+                st.button("▶️ Start Correction Now", type="primary", disabled=True, use_container_width=True)
+                st.caption("Resume the section first.")
+            elif worker:
+                if st.button("▶️ Start Correction Now", type="primary", use_container_width=True):
+                    with st.spinner(f"Starting {display_name} correction..."):
+                        sleep(1)
+                        now = datetime.now(IST)
+                        updates = {
+                            "book_id": book_id,
+                            "section": section,
+                            "correction_start": now,
+                            "worker": worker,
+                            "notes": notes if notes.strip() else None
+                        }
+                        updates = {k: v for k, v in updates.items() if v is not None}
+                        insert_fields = ", ".join(updates.keys())
+                        insert_placeholders = ", ".join([f":{key}" for key in updates.keys()])
+                        with conn.session as s:
+                            query = f"""
+                                INSERT INTO corrections ({insert_fields})
+                                VALUES ({insert_placeholders})
+                            """
+                            s.execute(text(query), updates)
+                            s.commit()
+                        details = (
+                            f"Book ID: {book_id}, Start: {now}, "
+                            f"Worker: {worker or 'None'}, Notes: {notes or 'None'}"
+                        )
+                        try:
+                            log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                f"started {section} correction",
+                                details
+                            )
+                        except Exception as e:
+                            st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
+                        st.success(f"✔️ Started {display_name} correction")
+                        st.toast(f"✔️ Started {display_name} correction", icon="✔️", duration="long")
+                        st.session_state.pop(f"{section}_correction_new_worker_{book_id}", None)
+                        st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
+                        sleep(1)
+                        st.rerun()
+            else:
+                st.button("▶️ Start Correction Now", type="primary", disabled=True, use_container_width=True)
+
+    else:
+        # Ongoing correction
+        form_title = f"Ongoing {display_name} Correction"
+        st.markdown(f"<h4 style='color:#4CAF50;'>{form_title}</h4>", unsafe_allow_html=True)
+        
+        col_start, col_assigned = st.columns(2)
+        with col_start:
+            st.markdown("**Started At**")
+            st.info(current_start.strftime('%d %B %Y, %I:%M %p IST') if current_start else 'None')
+        with col_assigned:
+            st.markdown("**Assigned To**")
+            st.info(current_worker or 'None')
 
         st.markdown(f'<div class="field-label">Correction Notes</div>', unsafe_allow_html=True)
         notes = st.text_area(
@@ -1172,88 +1351,50 @@ def correction_dialog(book_id, conn, section):
             help=f"Optional notes about the {display_name.lower()} correction"
         )
 
-        col_save, col_cancel = st.columns([1, 1])
-        with col_save:
-            submit = st.form_submit_button("💾 Save and Close", width="stretch")
-        with col_cancel:
-            cancel = st.form_submit_button("Cancel", width="stretch", type="secondary")
-
-        if submit:
-            if not worker:
-                st.error("Please select or add a team member.")
-                return
-            if not start_date or not start_time:
-                st.error("Please provide a start date and time.")
-                return
-            start = datetime.combine(start_date, start_time)
-            end = datetime.combine(end_date, end_time) if end_date and end_time else None
-            if start and end and start > end:
-                st.error("Start must be before End.")
-                return
-            with st.spinner(f"Saving {display_name} correction details..."):
-                sleep(2)
-                updates = {
-                    "book_id": book_id,
-                    "section": section,
-                    "correction_start": start,
-                    "correction_end": end,
-                    "worker": worker,
-                    "notes": notes if notes.strip() else None
-                }
-                updates = {k: v for k, v in updates.items() if v is not None}
-                insert_fields = ", ".join(updates.keys())
-                insert_placeholders = ", ".join([f":{key}" for key in updates.keys()])
-                
-                with conn.session as s:
-                    if is_ongoing:
-                        # Update existing ongoing correction
-                        update_clause = ", ".join([f"{key} = :{key}" for key in updates.keys() if key != "book_id" and key != "section"])
+        col_end, col_cancel = st.columns(2)
+        with col_end:
+            if st.button(f"⏹️ End {display_name} Correction Now", type="primary", use_container_width=True):
+                with st.spinner(f"Ending {display_name} correction..."):
+                    sleep(1)
+                    now = datetime.now(IST)
+                    updates = {
+                        "correction_end": now,
+                        "notes": notes if notes.strip() else None
+                    }
+                    updates = {k: v for k, v in updates.items() if v is not None}
+                    update_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                    with conn.session as s:
                         query = f"""
                             UPDATE corrections
                             SET {update_clause}
                             WHERE correction_id = :correction_id
                         """
                         updates["correction_id"] = correction_id
-                        action = "updated"
-                    else:
-                        # Insert new correction
-                        query = f"""
-                            INSERT INTO corrections ({insert_fields})
-                            VALUES ({insert_placeholders})
-                        """
-                        action = "added"
-                    
-                    s.execute(text(query), updates)
-                    s.commit()
-                
-                # Log the form submission
-                details = (
-                    f"Book ID: {book_id}, {display_name} Team Member: {worker or 'None'}, "
-                    f"Start: {start or 'None'}, End: {end or 'None'}, Notes: {notes or 'None'}"
-                )
-                try:
-                    log_activity(
-                        conn,
-                        st.session_state.user_id,
-                        st.session_state.username,
-                        st.session_state.session_id,
-                        f"{action} {section} correction",
-                        details
+                        s.execute(text(query), updates)
+                        s.commit()
+                    details = (
+                        f"Book ID: {book_id}, End: {now}, Notes: {notes or 'None'}"
                     )
-                except Exception as e:
-                    st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
-                
-                st.success(f"✔️ {action.capitalize()} {display_name} correction")
-                st.toast(f"✔️ {action.capitalize()} {display_name} correction", icon="✔️", duration="long")
-                for key in worker_keys + date_keys:
-                    st.session_state.pop(f"{key}_{book_id}", None)
-                sleep(1)
+                    try:
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            f"ended {section} correction",
+                            details
+                        )
+                    except Exception as e:
+                        st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
+                    st.success(f"✔️ Ended {display_name} correction")
+                    st.toast(f"Ended {display_name} correction", icon="✔️", duration="long")
+                    st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
+                    sleep(1)
+                    st.rerun()
+        with col_cancel:
+            if st.button("Cancel", type="secondary", use_container_width=True):
+                st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
                 st.rerun()
-
-        elif cancel:
-            for key in worker_keys + date_keys:
-                st.session_state.pop(f"{key}_{book_id}", None)
-            st.rerun()
 
 
 
@@ -1299,13 +1440,14 @@ def edit_section_dialog(book_id, conn, section):
 
     # Fetch hold and resume status from holds table
     hold_query = """
-        SELECT hold_start, resume_time 
+        SELECT hold_start, resume_time, reason 
         FROM holds 
         WHERE book_id = :book_id AND section = :section
     """
     hold_data = conn.query(hold_query, params={"book_id": book_id, "section": section}, show_spinner=False)
     hold_start = hold_data.iloc[0]['hold_start'] if not hold_data.empty else None
     resume_time = hold_data.iloc[0]['resume_time'] if not hold_data.empty else None
+    hold_reason = hold_data.iloc[0].get('reason', None) if not hold_data.empty else None
     is_on_hold = hold_start is not None and resume_time is None
 
     # Check if book is running (any section has start without end)
@@ -1314,7 +1456,7 @@ def edit_section_dialog(book_id, conn, section):
             CASE 
                 WHEN writing_start IS NOT NULL AND writing_end IS NULL THEN 1 
                 WHEN proofreading_start IS NOT NULL AND proofreading_end IS NULL THEN 1 
-                WHEN formatting_start IS NOT NULL AND formatting_end IS NULL THEN 1 
+                WHEN formatting_start IS NOT NULL AND formatting_start IS NULL THEN 1 
                 WHEN cover_start IS NOT NULL AND cover_end IS NULL THEN 1 
                 ELSE 0 
             END AS is_running
@@ -1327,6 +1469,9 @@ def edit_section_dialog(book_id, conn, section):
     # Book-level hold info (warning and hold start if on hold)
     if is_on_hold:
         st.warning(f"⚠️ This book is currently on hold for {display_name}. Placed on hold: {hold_start.strftime('%d %B %Y, %I:%M %p IST')}")
+        if hold_reason:
+            st.markdown("**Reason for Hold**")
+            st.info(hold_reason)
 
     # Fetch current section data
     if section == "cover":
@@ -1375,6 +1520,10 @@ def edit_section_dialog(book_id, conn, section):
     for key in keys:
         if f"{key}_{book_id}" not in st.session_state:
             st.session_state[f"{key}_{book_id}"] = defaults[key]
+
+    # Initialize session state for showing hold form
+    if f"show_hold_form_{book_id}_{section}" not in st.session_state:
+        st.session_state[f"show_hold_form_{book_id}_{section}"] = False
 
     if pending:
         # For pending: Team member selector, then centered Start button
@@ -1527,6 +1676,10 @@ def edit_section_dialog(book_id, conn, section):
                     label_visibility="collapsed"
                 )
 
+            # Initialize session state for hold reason
+            if f"hold_reason_{book_id}_{section}" not in st.session_state:
+                st.session_state[f"hold_reason_{book_id}_{section}"] = ""
+
             # End and Hold buttons side by side
             col_end, col_hold = st.columns(2)
             with col_end:
@@ -1574,38 +1727,66 @@ def edit_section_dialog(book_id, conn, section):
 
             with col_hold:
                 if st.button("⏸️ Hold Book", type="secondary", use_container_width=True):
-                    with st.spinner("Holding book..."):
-                        sleep(1)
-                        try:
-                            now = datetime.now(IST)
-                            with conn.session as s:
-                                query = """
-                                    INSERT INTO holds (book_id, section, hold_start)
-                                    VALUES (:book_id, :section, :hold_start)
-                                    ON DUPLICATE KEY UPDATE hold_start = :hold_start, resume_time = NULL
-                                """
-                                params = {"book_id": int(book_id), "section": section, "hold_start": now}
-                                s.execute(text(query), params)
-                                s.commit()
-                            # Log the hold action
-                            try:
-                                log_activity(
-                                    conn,
-                                    st.session_state.user_id,
-                                    st.session_state.username,
-                                    st.session_state.session_id,
-                                    "held book",
-                                    f"Book ID: {book_id}, Hold Time: {now}"
-                                )
-                            except Exception as e:
-                                st.warning(f"Warning: Book held but failed to log activity: {str(e)}")
-                            st.success("✔️ Book held")
-                            st.toast(f"Held Book ID {book_id}", icon="⏸️", duration='long')
-                            sleep(2)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Failed to hold book: {str(e)}")
-                            st.toast(f"Error holding Book ID {book_id}", icon="🚫", duration='long')
+                    st.session_state[f"show_hold_form_{book_id}_{section}"] = True
+            
+            # Render hold reason form full-width below buttons
+            if st.session_state[f"show_hold_form_{book_id}_{section}"]:
+                with st.form(key=f"hold_form_{book_id}_{section}"):
+                    st.markdown("**Reason for Hold**")
+                    hold_reason = st.text_area(
+                        "",
+                        value=st.session_state[f"hold_reason_{book_id}_{section}"],
+                        placeholder="Enter the reason for placing this book on hold...",
+                        help="Provide a brief reason for holding the book (e.g., waiting for author feedback, resource constraints).",
+                        key=f"hold_reason_input_{book_id}_{section}",
+                        label_visibility="collapsed"
+                    )
+                    submit_hold = st.form_submit_button("Confirm Hold", type="primary", use_container_width=True)
+                    if submit_hold:
+                        if hold_reason.strip():
+                            with st.spinner("Holding book..."):
+                                sleep(1)
+                                try:
+                                    now = datetime.now(IST)
+                                    with conn.session as s:
+                                        query = """
+                                            INSERT INTO holds (book_id, section, hold_start, reason)
+                                            VALUES (:book_id, :section, :hold_start, :reason)
+                                            ON DUPLICATE KEY UPDATE hold_start = :hold_start, reason = :reason, resume_time = NULL
+                                        """
+                                        params = {
+                                            "book_id": int(book_id),
+                                            "section": section,
+                                            "hold_start": now,
+                                            "reason": hold_reason.strip()
+                                        }
+                                        s.execute(text(query), params)
+                                        s.commit()
+                                    # Log the hold action
+                                    details = f"Book ID: {book_id}, Hold Time: {now}, Reason: {hold_reason.strip()}"
+                                    try:
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "held book",
+                                            details
+                                        )
+                                    except Exception as e:
+                                        st.warning(f"Warning: Book held but failed to log activity: {str(e)}")
+                                    st.success("✔️ Book held")
+                                    st.toast(f"Held Book ID {book_id}", icon="⏸️", duration='long')
+                                    # Clear hold reason and hide form
+                                    st.session_state[f"hold_reason_{book_id}_{section}"] = ""
+                                    st.session_state[f"show_hold_form_{book_id}_{section}"] = False
+                                    sleep(2)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"❌ Failed to hold book: {str(e)}")
+                                    st.toast(f"Error holding Book ID {book_id}", icon="🚫", duration='long')
+                        else:
+                            st.error("❌ Please provide a reason for holding the book.")
 
     else:  # completed
         # For completed: Show start, end, worker, pages
@@ -1619,49 +1800,6 @@ def edit_section_dialog(book_id, conn, section):
             current_pages = current_data.get("book_pages", 0)
             st.markdown("**Total Book Pages**")
             st.info(current_pages)
-
-def calculate_working_duration(start_date, end_date):
-    """Calculate duration in working hours (09:30–18:00, Mon–Sat) between two timestamps.
-       Returns (total_days, remaining_hours) where 1 day = 8.5 hours, hours rounded."""
-    
-    if pd.isna(start_date) or pd.isna(end_date):
-        return None
-    if start_date >= end_date:
-        return (0, 0)
-    
-    from datetime import datetime, timedelta, time
-
-    # Working day limits
-    work_start = time(9, 30)
-    work_end = time(18, 0)
-    work_day_hours = 8.5
-
-    total_minutes = 0
-    current = start_date
-
-    while current.date() <= end_date.date():
-        # Skip Sundays
-        if current.weekday() != 6:
-            day_start = datetime.combine(current.date(), work_start)
-            day_end = datetime.combine(current.date(), work_end)
-
-            actual_start = max(day_start, start_date)
-            actual_end = min(day_end, end_date)
-
-            if actual_start < actual_end:
-                worked = (actual_end - actual_start).total_seconds() / 60
-                total_minutes += worked
-
-        current += timedelta(days=1)
-        current = current.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    total_hours = total_minutes / 60.0
-
-    # Split into full workdays + leftover (hours rounded)
-    total_days = int(total_hours // work_day_hours)
-    remaining_hours = int(round(total_hours % work_day_hours))  # round to nearest hour
-
-    return (total_days, remaining_hours)
 
 
 def render_table(books_df, title, column_sizes, color, section, role, is_running=False):
@@ -2155,10 +2293,12 @@ sections = {
     "cover": {"role": "cover_designer", "color": "unused"}
 }
 
+
 for section, config in sections.items():
     if user_role == config["role"] or user_role == "admin":
         st.session_state['section'] = section
         books_df = fetch_books(months_back=4, section=section)
+        holds_df = fetch_holds(section=section)  # Fetch holds_df for the section
         
         # Fetch books with ongoing corrections
         query = """
@@ -2296,7 +2436,8 @@ for section, config in sections.items():
         if selected_month is None:
             st.warning("Please select a month to view metrics.")
             st.stop()
-        render_metrics(books_df, selected_month, section, config["role"])
+        # Pass holds_df to render_metrics
+        render_metrics(books_df, selected_month, section, config["role"], holds_df=holds_df)
         render_table(running_books, f"{section.capitalize()} Running", column_sizes_running, config["color"], section, config["role"], is_running=True)
         render_table(on_hold_books, f"{section.capitalize()} Hold", column_sizes_on_hold, config["color"], section, config["role"], is_running=True)
         render_table(pending_books, f"{section.capitalize()} Pending", column_sizes_pending, config["color"], section, config["role"], is_running=False)

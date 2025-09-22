@@ -142,6 +142,11 @@ def fetch_data():
         b.title,
         b.isbn,
         b.isbn_receive_date AS publication_date,
+        b.flipkart_link,
+        b.agph_link,
+        b.amazon_link,
+        b.google_link,
+        b.deliver,
         i.rack_number,
         COALESCE(
             (SELECT SUM(ba.number_of_books) 
@@ -248,7 +253,7 @@ if "reset_trigger" not in st.session_state:
 df = fetch_data()
 
 numeric_columns = ['books_sent_to_authors', 'website_sales', 'amazon_sales', 
-                      'flipkart_sales', 'direct_sales', 'total_printed_books']
+                  'flipkart_sales', 'direct_sales', 'total_printed_books']
 df[numeric_columns] = df[numeric_columns].fillna(0)
 
 # Calculate In Stock
@@ -657,6 +662,10 @@ if 'sort_order' not in st.session_state:
     st.session_state['sort_order'] = 'Descending'
 if 'current_page' not in st.session_state:
     st.session_state['current_page'] = 1
+if 'no_links' not in st.session_state:
+    st.session_state['no_links'] = False
+if 'delivered' not in st.session_state:
+    st.session_state['delivered'] = True  # Set to True by default
 
 # Search and Cell No. filter layout
 filcol1, filcol2, filcol3, filcol4 = st.columns([1.6, 4.5, 3.1, 0.6], vertical_alignment="bottom", gap="small")
@@ -693,9 +702,47 @@ with filcol3:
                 'stock_value': 0,
                 'sort_column': 'Book Title',
                 'sort_order': 'Ascending',
-                'current_page': 1
+                'current_page': 1,
+                'no_links': False,
+                'delivered': True  # Reset to default (True)
             })
             st.rerun()
+        
+        st.checkbox(
+            "Show Out of Stock Books",
+            value=st.session_state['out_of_stock'],
+            key="out_of_stock_widget",
+            on_change=lambda: (
+                st.session_state.update({
+                    'out_of_stock': st.session_state['out_of_stock_widget'],
+                    'current_page': 1
+                })
+            )
+        )
+
+        st.checkbox(
+            "Show Books with No Links",
+            value=st.session_state['no_links'],
+            key="no_links_widget",
+            on_change=lambda: (
+                st.session_state.update({
+                    'no_links': st.session_state['no_links_widget'],
+                    'current_page': 1
+                })
+            )
+        )
+
+        st.checkbox(
+            "Show Delivered Books",
+            value=st.session_state['delivered'],
+            key="delivered_widget",
+            on_change=lambda: (
+                st.session_state.update({
+                    'delivered': st.session_state['delivered_widget'],
+                    'current_page': 1
+                })
+            )
+        )
 
         cell_options = [x for x in df['Cell No.'].unique() if pd.notnull(x)]
         st.multiselect(
@@ -703,7 +750,6 @@ with filcol3:
             options=cell_options,
             default=st.session_state['cell_nos'],
             key="cell_nos_widget",
-            
             placeholder="Filter by Cell",
             on_change=lambda: (
                 st.session_state.update({
@@ -717,7 +763,6 @@ with filcol3:
             "Stock Filter",
             [None, "Greater than", "Equal to", "Less than"],
             index=[None, "Greater than", "Equal to", "Less than"].index(st.session_state['stock_condition']),
-
             key="stock_condition_widget",
             on_change=lambda: (
                 st.session_state.update({
@@ -753,17 +798,6 @@ with filcol3:
             )
         )
 
-        st.checkbox(
-            "Show Out of Stock Books",
-            value=st.session_state['out_of_stock'],
-            key="out_of_stock_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'out_of_stock': st.session_state['out_of_stock_widget'],
-                    'current_page': 1
-                })
-            )
-        )
         col1, col2 = st.columns([3, 1.2], gap="small", vertical_alignment="bottom")
         with col1:
             st.radio(
@@ -792,6 +826,8 @@ with filcol3:
 
 # Apply filters
 filtered_df = df.copy()
+if st.session_state['delivered']:
+    filtered_df = filtered_df[filtered_df['deliver'] == 1]
 if st.session_state['search_term']:
     filtered_df = filtered_df[
         filtered_df['Book Title'].str.contains(st.session_state['search_term'], case=False, na=False) |
@@ -808,6 +844,14 @@ elif st.session_state['stock_condition'] is not None:
         filtered_df = filtered_df[filtered_df['In Stock'] > st.session_state['stock_value']]
     elif st.session_state['stock_condition'] == "Less than":
         filtered_df = filtered_df[filtered_df['In Stock'] < st.session_state['stock_value']]
+if st.session_state['no_links']:
+    filtered_df = filtered_df[
+        filtered_df['flipkart_link'].isna() &
+        filtered_df['agph_link'].isna() &
+        filtered_df['amazon_link'].isna() &
+        filtered_df['google_link'].isna()
+    ]
+
 
 with filcol1:
     st.markdown(f'<div class="status-badge-red">All Books <span class="badge-count">{len(filtered_df)}</span></div>', unsafe_allow_html=True)
