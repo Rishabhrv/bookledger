@@ -968,6 +968,17 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
 # Connect to MySQL
 conn = connect_db()
 
+# Automatically archive books older than 200 days
+cutoff_date = date.today() - timedelta(days=250)
+archive_query = """
+UPDATE books
+SET is_archived = 1
+WHERE deliver = 0 AND is_archived = 0 AND date <= :cutoff_date
+"""
+with conn.session as s:
+    s.execute(text(archive_query), {"cutoff_date": cutoff_date})
+    s.commit()
+
 # Fetch books from the database where deliver = 0, including is_archived
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
@@ -1045,53 +1056,78 @@ def sync_selected_reasons():
         st.session_state.selected_isbn_reasons
     )
 
-# Apply Filters and Sorting to pending data
-filtered_data = pending_data.copy()
-# Apply Search
-if st.session_state.search_query:
-    filtered_data = filtered_data[
-        filtered_data['book_id'].astype(str).str.contains(st.session_state.search_query, case=False, na=False) |
-        filtered_data['title'].str.contains(st.session_state.search_query, case=False, na=False)
-    ]
-    if filtered_data.empty:
-        filtered_data = pd.DataFrame(columns=pending_data.columns)
+# Apply Filters and Sorting to pending and archived data
+filtered_pending_data = pending_data.copy()
+filtered_archived_data = archived_data.copy()
 
-# Apply Days Filter
+# Apply Search to both datasets
+if st.session_state.search_query:
+    filtered_pending_data = filtered_pending_data[
+        filtered_pending_data['book_id'].astype(str).str.contains(st.session_state.search_query, case=False, na=False) |
+        filtered_pending_data['title'].str.contains(st.session_state.search_query, case=False, na=False)
+    ]
+    filtered_archived_data = filtered_archived_data[
+        filtered_archived_data['book_id'].astype(str).str.contains(st.session_state.search_query, case=False, na=False) |
+        filtered_archived_data['title'].str.contains(st.session_state.search_query, case=False, na=False)
+    ]
+    if filtered_pending_data.empty:
+        filtered_pending_data = pd.DataFrame(columns=pending_data.columns)
+    if filtered_archived_data.empty:
+        filtered_archived_data = pd.DataFrame(columns=archived_data.columns)
+
+# Apply Days Filter to both datasets
 if st.session_state.days_filter > 0:
     cutoff_date = date.today() - timedelta(days=st.session_state.days_filter)
-    filtered_data = filtered_data[filtered_data['date'].apply(lambda x: pd.to_datetime(x).date() <= cutoff_date if pd.notnull(x) else False)]
+    filtered_pending_data = filtered_pending_data[filtered_pending_data['date'].apply(lambda x: pd.to_datetime(x).date() <= cutoff_date if pd.notnull(x) else False)]
+    filtered_archived_data = filtered_archived_data[filtered_archived_data['date'].apply(lambda x: pd.to_datetime(x).date() <= cutoff_date if pd.notnull(x) else False)]
 
-# Apply Publisher Filter
+# Apply Publisher Filter to both datasets
 if st.session_state.selected_publishers:
-    filtered_data = filtered_data[filtered_data['publisher'].isin(st.session_state.selected_publishers)]
+    filtered_pending_data = filtered_pending_data[filtered_pending_data['publisher'].isin(st.session_state.selected_publishers)]
+    filtered_archived_data = filtered_archived_data[filtered_archived_data['publisher'].isin(st.session_state.selected_publishers)]
 
-# Apply Stuck Reason Filter
-if st.session_state.selected_reasons and not filtered_data.empty:
-    book_ids = filtered_data['book_id'].tolist()
-    authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
-    printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
-    filtered_data['stuck_reason'] = filtered_data['book_id'].apply(
-        lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
-    )
-    filtered_data = filtered_data[filtered_data['stuck_reason'].isin(st.session_state.selected_reasons)]
-
-# Apply Sorting
-if not filtered_data.empty:
-    book_ids = filtered_data['book_id'].tolist()
-    authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
-    printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
-    if st.session_state.sort_by == "Book ID":
-        filtered_data = filtered_data.sort_values(by='book_id', ascending=(st.session_state.sort_order == "Ascending"))
-    elif st.session_state.sort_by == "Date":
-        filtered_data = filtered_data.sort_values(by='date', ascending=(st.session_state.sort_order == "Ascending"))
-    elif st.session_state.sort_by == "Since Enrolled":
-        filtered_data['days_since'] = filtered_data['date'].apply(lambda x: (date.today() - x).days if pd.notnull(x) else float('inf'))
-        filtered_data = filtered_data.sort_values(by='days_since', ascending=(st.session_state.sort_order == "Ascending"))
-    elif st.session_state.sort_by == "Stuck Reason":
-        filtered_data['stuck_reason'] = filtered_data['book_id'].apply(
-            lambda x: get_stuck_reason(x, filtered_data[filtered_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
+# Apply Stuck Reason Filter to both datasets
+if st.session_state.selected_reasons:
+    if not filtered_pending_data.empty:
+        book_ids = filtered_pending_data['book_id'].tolist()
+        authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
+        printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
+        filtered_pending_data['stuck_reason'] = filtered_pending_data['book_id'].apply(
+            lambda x: get_stuck_reason(x, filtered_pending_data[filtered_pending_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
         )
-        filtered_data = filtered_data.sort_values(by='stuck_reason', ascending=(st.session_state.sort_order == "Ascending"))
+        filtered_pending_data = filtered_pending_data[filtered_pending_data['stuck_reason'].isin(st.session_state.selected_reasons)]
+    
+    if not filtered_archived_data.empty:
+        book_ids = filtered_archived_data['book_id'].tolist()
+        authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
+        printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
+        filtered_archived_data['stuck_reason'] = filtered_archived_data['book_id'].apply(
+            lambda x: get_stuck_reason(x, filtered_archived_data[filtered_archived_data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
+        )
+        filtered_archived_data = filtered_archived_data[filtered_archived_data['stuck_reason'].isin(st.session_state.selected_reasons)]
+
+# Apply Sorting to both datasets
+def apply_sorting(data):
+    if not data.empty:
+        book_ids = data['book_id'].tolist()
+        authors_data_filtered = authors_data[authors_data['book_id'].isin(book_ids)]
+        printeditions_data_filtered = printeditions_data[printeditions_data['book_id'].isin(book_ids)]
+        if st.session_state.sort_by == "Book ID":
+            data = data.sort_values(by='book_id', ascending=(st.session_state.sort_order == "Ascending"))
+        elif st.session_state.sort_by == "Date":
+            data = data.sort_values(by='date', ascending=(st.session_state.sort_order == "Ascending"))
+        elif st.session_state.sort_by == "Since Enrolled":
+            data['days_since'] = data['date'].apply(lambda x: (date.today() - x).days if pd.notnull(x) else float('inf'))
+            data = data.sort_values(by='days_since', ascending=(st.session_state.sort_order == "Ascending"))
+        elif st.session_state.sort_by == "Stuck Reason":
+            data['stuck_reason'] = data['book_id'].apply(
+                lambda x: get_stuck_reason(x, data[data['book_id'] == x].iloc[0], authors_data_filtered, printeditions_data_filtered)
+            )
+            data = data.sort_values(by='stuck_reason', ascending=(st.session_state.sort_order == "Ascending"))
+    return data
+
+filtered_pending_data = apply_sorting(filtered_pending_data)
+filtered_archived_data = apply_sorting(filtered_archived_data)
 
 col1, col2, col3 = st.columns([8, 0.7, 1], vertical_alignment="bottom")
 with col1:
@@ -1107,7 +1143,7 @@ with col3:
 with st.container():
     col1, col2, col3 = st.columns([3, 7, 6], vertical_alignment="bottom", gap="small")
     with col1:
-        st.markdown(f'<div class="status-badge-red">Overdue Books<span class="badge-count">{len(filtered_data)}</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="status-badge-red">Overdue Books<span class="badge-count">{len(filtered_pending_data)}</span></div>', unsafe_allow_html=True)
     with col2:
         st.text_input("Search by Book ID or Title", key="search_query", placeholder="Enter Book ID or Title", 
                       label_visibility="collapsed")
@@ -1167,14 +1203,14 @@ with st.container():
                     st.rerun()
 
 with st.expander("⚠️ Pending Books Summary", expanded=False):
-    if not filtered_data.empty:
-        show_stuck_reason_summary(filtered_data, authors_data, printeditions_data)
+    if not filtered_pending_data.empty:
+        show_stuck_reason_summary(filtered_pending_data, authors_data, printeditions_data)
     else:
         st.info("No Pending Books Found")
 
-
+# Display Pending Books
 with st.container():
-    if not filtered_data.empty:
+    if not filtered_pending_data.empty:
         column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
         with st.container(border=True):
             cols = st.columns(column_widths, vertical_alignment="bottom")
@@ -1186,7 +1222,7 @@ with st.container():
             cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
             cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
 
-            for _, book in filtered_data.iterrows():
+            for _, book in filtered_pending_data.iterrows():
                 book_id = book['book_id']
                 stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
                 author_count = len(authors_data[authors_data['book_id'] == book_id])
@@ -1227,13 +1263,11 @@ with st.container():
     else:
         st.info("No Pending Books Found")
 
-
-# Display Archived Results
-st.subheader("Archived Books")
+# Display Archived Books
+st.markdown(f'<div class="status-badge-red">Archived Books<span class="badge-count">{len(filtered_archived_data)}</span></div>', unsafe_allow_html=True)
+#st.subheader(f"Archived Books ({len(filtered_archived_data)})")
 with st.container():
-    if not archived_data.empty:
-        # Sort archived by Book ID ascending by default
-        archived_data = archived_data.sort_values(by='book_id', ascending=True)
+    if not filtered_archived_data.empty:
         column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
         with st.container(border=True):
             cols = st.columns(column_widths, vertical_alignment="bottom")
@@ -1245,7 +1279,7 @@ with st.container():
             cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
             cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
 
-            for _, book in archived_data.iterrows():
+            for _, book in filtered_archived_data.iterrows():
                 book_id = book['book_id']
                 stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
                 author_count = len(authors_data[authors_data['book_id'] == book_id])
