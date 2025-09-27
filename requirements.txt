@@ -10,3 +10,4 @@ streamlit==1.49.0
 mysqlclient
 XlsxWriter
 reportlab
+ollama

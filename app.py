@@ -30,7 +30,6 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.lib import colors
 from PIL import Image as PILImage
-from io import BytesIO
 import requests
 import ollama
 import difflib
@@ -103,9 +102,22 @@ user_app = st.session_state.get("app", "Unknown")
 user_access = st.session_state.get("access", [])
 user_id = st.session_state.get("user_id", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
+start_date = st.session_state.get("start_date", None)
+level = st.session_state.get("level", "Unknown")
+report_to = st.session_state.get("report_to", "Unknown")
 token = st.session_state.token
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
+
+
+st.write(user_role)
+st.write(user_app)
+st.write(user_access)
+st.write(user_id)
+st.write(user_name)
+st.write(start_date)
+st.write(level)
+st.write(report_to)
 
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
@@ -129,7 +141,7 @@ st.markdown("""
         }
         /* Ensure the first element has minimal spacing */
         .block-container {
-            padding-top: 0px !important;  /* Small padding for breathing room */
+            padding-top: 100px !important;  /* Small padding for breathing room */
         }
         </style>
             

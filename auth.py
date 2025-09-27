@@ -31,28 +31,27 @@ handler.addFilter(NoWatchdogFilter())
 logger.addHandler(handler)
 
 
-#Secrets and constants
+# Secrets and constants
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
-VALID_APPS = {"main", "operations", 'ijisem'}
+VALID_APPS = {"main", "operations", "ijisem", "tasks"}
 
-
-# # Configuration
+# Configuration
 FLASK_AUTH_URL = st.secrets["general"]["FLASK_AUTH_URL"]
 FLASK_LOGIN_URL = st.secrets["general"]["FLASK_LOGIN_URL"]
 FLASK_LOGOUT_URL = st.secrets["general"]["FLASK_LOGOUT_URL"]
 
-
 def clear_auth_session():
     # Clear all session state related to authentication
-    for key in ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'username', 'exp', 'user_details']:
+    for key in ['token', 'user_id', 'email', 'role', 'app', 'access', 'start_date', 'username', 'exp', 
+                'user_details', 'level', 'report_to', 'associate_id', 'designation']:
         if key in st.session_state:
             del st.session_state[key]
 
-@st.dialog("Authentication Failed", dismissible = False)
+@st.dialog("Authentication Failed", dismissible=False)
 def error_dialog(error_message):
     st.error(error_message)
-    if st.link_button("Login:material/open_in_new:", url=FLASK_LOGIN_URL, type = "tertiary"):
+    if st.link_button("Login:material/open_in_new:", url=FLASK_LOGIN_URL, type="tertiary"):
         clear_auth_session()
         st.stop()
 
@@ -96,6 +95,10 @@ def validate_token():
         email = user_details.get('email', '')
         start_date = user_details.get('start_date', '')
         username = user_details.get('username', '')
+        level = user_details.get('level', None)
+        report_to = user_details.get('report_to', None)
+        associate_id = user_details.get('associate_id', None)
+        designation = user_details.get('designation', None)
 
         # Convert access to list if it's a string or None
         if isinstance(access, str):
@@ -128,7 +131,6 @@ def validate_token():
                     raise jwt.InvalidTokenError(f"Invalid access for ijisem app: {access}")
 
         # Cache user details
-        st.session_state.user_details = user_details
         st.session_state.user_id = decoded['user_id']
         st.session_state.email = email
         st.session_state.role = role
@@ -137,15 +139,15 @@ def validate_token():
         st.session_state.start_date = start_date
         st.session_state.username = username
         st.session_state.exp = decoded['exp']
+        st.session_state.level = level
+        st.session_state.report_to = report_to
+        st.session_state.associate_id = associate_id
+        st.session_state.designation = designation
         logger.info(f"Token validated successfully for user: {email}")
 
     except jwt.ExpiredSignatureError as e:
         logger.error(f"Token expired: {str(e)}", exc_info=True)
         error_dialog("Access denied: Token expired. Please log in again.")
-        #st.error("Access denied: Token expired. Please log in again.")
-        #st.markdown(f"[Go to Login]({FLASK_LOGIN_URL})")
-        #clear_auth_session()
-        #st.stop()
     except jwt.InvalidSignatureError as e:
         logger.error(f"Invalid token signature: {str(e)}", exc_info=True)
         error_dialog("Access denied: Invalid token signature. Please log in again.")
@@ -160,4 +162,4 @@ def validate_token():
         error_dialog(f"Access denied: Unable to contact authentication server.")
     except Exception as e:
         logger.error(f"Unexpected error in validate_token: {str(e)}", exc_info=True)
-        error_dialog(f"Unexpected error in validate_token: {str(e)}", exc_info=True)
+        error_dialog(f"Unexpected error in validate_token: {str(e)}")
