@@ -1309,7 +1309,7 @@ def manage_users(conn):
                                         "Access Level",
                                         options=["Worker", "Reporting Manager", "Both"],
                                         format_func=lambda x: x.replace("_", " ").title(),
-                                        index=["Worker", "Reporting Manager", "Both"].index(current_level.capitalize()) if current_level in ["worker", "reporting_manager", "both"] else 0,
+                                        index=["Worker", "Reporting Manager", "Both"].index(current_level.capitalize()) if current_level in ["Worker", "Reporting Manager", "Both"] else 0,
                                         key=f"level_select_{selected_user.id}",
                                         help="Select access level for tasks"
                                     )
