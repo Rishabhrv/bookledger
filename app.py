@@ -897,26 +897,6 @@ def fetch_tags(conn):
 ###################################################################################################################################
 
 
-# Assuming ACCESS_TO_BUTTON is defined as provided
-ACCESS_TO_BUTTON = {
-    "ISBN": "manage_isbn_dialog",
-    "Payment": "manage_price_dialog",
-    "Authors": "edit_author_dialog",
-    "Operations": "edit_operation_dialog",
-    "Printing & Delivery": "edit_inventory_delivery_dialog",
-    "DatadashBoard": "datadashoard",
-    "Advance Search": "advance_search",
-    "Team Dashboard": "team_dashboard",
-    "Print Management": "print_management",
-    "Inventory": "inventory",
-    "Open Author Positions": "open_author_positions",
-    "Pending Work": "pending_books",
-    "IJISEM": "ijisem",
-    "Tasks": "tasks",
-    "Add Book": "add_book_dialog",
-    "Authors Edit": "edit_author_detail"
-}
-
 @st.dialog("Manage Users", width="large", on_dismiss='rerun')
 def manage_users(conn):
     # Check if user is admin
@@ -953,7 +933,7 @@ def manage_users(conn):
                 SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
                        GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
                        GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
-                       GROUP_CONCAT(CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') 
+                       GROUP_CONCAT(CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') AND uaa.report_to IS NOT NULL 
                                     THEN (SELECT username FROM userss WHERE id = uaa.report_to) 
                                     ELSE NULL END) as report_to
                 FROM userss u
@@ -1265,9 +1245,20 @@ def manage_users(conn):
                             st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_{selected_user.id}")
                         new_start_date = st.date_input("Start Date", value=None, disabled=True, key=f"start_date_{selected_user.id}")
                     else:
+                        with conn.session as s:
+                            # Fetch user_app_access details for the selected user
+                            uaa = s.execute(
+                                text("""
+                                    SELECT app, access_type, level, report_to, start_date
+                                    FROM user_app_access
+                                    WHERE user_id = :user_id
+                                """),
+                                {"user_id": selected_user.id}
+                            ).fetchone()
+
                         with col3:
                             new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", key=f"associate_id_{selected_user.id}", placeholder="Enter associate ID")
-                            current_app = selected_user.apps.split(",")[0].capitalize() if selected_user.apps and isinstance(selected_user.apps, str) else "Main"
+                            current_app = uaa.app.capitalize() if uaa and uaa.app else "Main"
                             new_app = st.selectbox("Application", options=["Main", "Operations", "IJISEM", "Tasks"], format_func=lambda x: x.capitalize(), index=["Main", "Operations", "IJISEM", "Tasks"].index(current_app) if current_app in ["Main", "Operations", "IJISEM", "Tasks"] else 0, key=f"app_select_{selected_user.id}")
                         with col4:
                             new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
@@ -1276,7 +1267,7 @@ def manage_users(conn):
                                 else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
                                 else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
                             )
-                            current_access = selected_user.access_types.split(",") if selected_user.access_types and isinstance(selected_user.access_types, str) else []
+                            current_access = uaa.access_type.split(",") if uaa and uaa.access_type and isinstance(uaa.access_type, str) else []
                             current_access = [acc for acc in current_access if acc in ACCESS_TO_BUTTON.keys() or acc in access_options]
                             if new_app == "Main":
                                 new_access_type = st.multiselect(
@@ -1286,7 +1277,7 @@ def manage_users(conn):
                                     key=f"access_type_select_{selected_user.id}"
                                 )
                             elif new_app in ["IJISEM", "Tasks"]:
-                                default_access = "Full Access" if "Full Access" in current_access else access_options[0]
+                                default_access = uaa.access_type if uaa and uaa.access_type in access_options else "Full Access"
                                 new_access_type = st.selectbox(
                                     "Access Permissions",
                                     options=access_options,
@@ -1295,7 +1286,7 @@ def manage_users(conn):
                                     help=f"{new_app} users have full access by default"
                                 )
                             else:
-                                default_access = current_access[0] if current_access and current_access[0] in access_options else access_options[0]
+                                default_access = uaa.access_type if uaa and uaa.access_type in access_options else access_options[0]
                                 new_access_type = st.selectbox(
                                     "Access Permissions",
                                     options=access_options,
@@ -1304,12 +1295,12 @@ def manage_users(conn):
                                 )
                             if new_app in ["Tasks", "Operations"] or (new_app == "Main" and new_access_type and "Tasks" in new_access_type):
                                 with col5:
-                                    current_level = selected_user.levels.split(",")[0] if selected_user.levels and isinstance(selected_user.levels, str) else "worker"
+                                    current_level = uaa.level if uaa and uaa.level in ["worker", "reporting_manager", "both"] else "worker"
                                     new_level = st.selectbox(
                                         "Access Level",
                                         options=["Worker", "Reporting Manager", "Both"],
                                         format_func=lambda x: x.replace("_", " ").title(),
-                                        index=["Worker", "Reporting Manager", "Both"].index(current_level.capitalize()) if current_level in ["Worker", "Reporting Manager", "Both"] else 0,
+                                        index=["worker", "reporting_manager", "both"].index(current_level) if current_level in ["worker", "reporting_manager", "both"] else 0,
                                         key=f"level_select_{selected_user.id}",
                                         help="Select access level for tasks"
                                     )
@@ -1317,11 +1308,17 @@ def manage_users(conn):
                                 with col6:
                                     if new_level in ["worker", "both"]:
                                         report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
-                                        current_report_to = selected_user.report_to or "None"
+                                        current_report_to = None
+                                        if uaa and uaa.report_to:
+                                            report_to_user = s.execute(
+                                                text("SELECT username FROM userss WHERE id = :report_to_id"),
+                                                {"report_to_id": uaa.report_to}
+                                            ).fetchone()
+                                            current_report_to = f"{report_to_user.username} (ID: {uaa.report_to})" if report_to_user else "None"
                                         new_report_to = st.selectbox(
                                             "Reports To",
                                             options=["None"] + report_to_options,
-                                            index=0 if current_report_to == "None" else report_to_options.index(current_report_to) + 1 if current_report_to in report_to_options else 0,
+                                            index=report_to_options.index(current_report_to) + 1 if current_report_to and current_report_to in report_to_options else 0,
                                             key=f"report_to_select_{selected_user.id}",
                                             help="Select the user this person reports to"
                                         )
@@ -1335,7 +1332,12 @@ def manage_users(conn):
                                     st.selectbox("Access Level", options=["None"], disabled=True, key=f"level_select_{selected_user.id}")
                                 with col6:
                                     st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_select_{selected_user.id}")
-                        new_start_date = st.date_input("Start Date", value=selected_user.start_date, key=f"start_date_{selected_user.id}", disabled=new_app != "Main")
+                        new_start_date = st.date_input(
+                            "Start Date", 
+                            value=uaa.start_date if uaa and uaa.start_date else None, 
+                            key=f"start_date_{selected_user.id}", 
+                            disabled=new_app != "Main"
+                        )
 
                     btn_col1, btn_col2 = st.columns([3, 1])
                     with btn_col1:
@@ -1362,16 +1364,16 @@ def manage_users(conn):
                                     changes.append(f"Updated associate_id from '{selected_user.associate_id or ''}' to '{new_associate_id or ''}'")
                                 if new_designation != (selected_user.designation or ""):
                                     changes.append(f"Updated designation from '{selected_user.designation or ''}' to '{new_designation or ''}'")
-                                if new_app != (selected_user.apps.split(",")[0].capitalize() if selected_user.apps and isinstance(selected_user.apps, str) else ""):
-                                    changes.append(f"Updated app from '{selected_user.apps.split(',')[0] if selected_user.apps else ''}' to '{new_app}'")
-                                if access_value != (selected_user.access_types or None):
-                                    changes.append(f"Updated access_type from '{selected_user.access_types or ''}' to '{access_value or ''}'")
-                                if new_level != (selected_user.levels.split(",")[0] if selected_user.levels and isinstance(selected_user.levels, str) else None):
-                                    changes.append(f"Updated level from '{selected_user.levels.split(',')[0] if selected_user.levels else ''}' to '{new_level or ''}'")
-                                if new_report_to != (selected_user.report_to or None):
-                                    changes.append(f"Updated report_to from '{selected_user.report_to or ''}' to '{new_report_to or ''}'")
-                                if new_start_date != selected_user.start_date:
-                                    changes.append(f"Updated start_date from '{selected_user.start_date or ''}' to '{new_start_date or ''}'")
+                                if new_app != (uaa.app.capitalize() if uaa and uaa.app else ""):
+                                    changes.append(f"Updated app from '{uaa.app if uaa else ''}' to '{new_app}'")
+                                if access_value != (uaa.access_type if uaa else None):
+                                    changes.append(f"Updated access_type from '{uaa.access_type if uaa else ''}' to '{access_value or ''}'")
+                                if new_level != (uaa.level if uaa else None):
+                                    changes.append(f"Updated level from '{uaa.level if uaa else ''}' to '{new_level or ''}'")
+                                if new_report_to != (uaa.report_to if uaa else None):
+                                    changes.append(f"Updated report_to from '{uaa.report_to if uaa else ''}' to '{new_report_to or ''}'")
+                                if new_start_date != (uaa.start_date if uaa else None):
+                                    changes.append(f"Updated start_date from '{uaa.start_date if uaa else ''}' to '{new_start_date or ''}'")
 
                                 with st.spinner("Saving changes..."):
                                     with conn.session as s:

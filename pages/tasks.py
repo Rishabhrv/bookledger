@@ -10,7 +10,7 @@ from auth import validate_token
 
 # --- Initial Imports and Setup ---
 # This part is assumed to be at the top of your script.
-st.set_page_config(layout="wide", page_title="Timesheet App")
+st.set_page_config(layout="wide", page_title="Timesheet App", initial_sidebar_state="collapsed")
 st.markdown("<style> .main > div { padding-top: 0rem !important; } .block-container { padding-top: 2rem !important; }</style>", unsafe_allow_html=True)
 
 validate_token()
