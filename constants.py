@@ -18,10 +18,13 @@ ACCESS_TO_BUTTON = {
     "Open Author Positions": "open_author_positions",
     "Pending Work": "pending_books",
     "IJISEM": "ijisem",
+    "Tasks": "tasks",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
 }
+
+BASE_URL  = st.secrets["general"]["BASE_URL"]
 
 # Predefined list of educational subjects
 VALID_SUBJECTS = [
@@ -49,6 +52,10 @@ def connect_db():
 
 from datetime import datetime
 import pytz
+
+def get_page_url(page_path, token):
+    """Generate a URL with the token as a query parameter."""
+    return f"{BASE_URL}/{page_path}?token={token}"
 
 def log_activity(conn, user_id, username, session_id, action, details):
     try:

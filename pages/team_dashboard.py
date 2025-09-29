@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone, timedelta, time
 from time import sleep
 from sqlalchemy.sql import text
+from constants import get_page_url
 
 
 # Set page configuration
@@ -63,6 +64,7 @@ role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
+token = st.session_state.token
 # if "session_id" not in st.session_state:
 #     st.session_state.session_id = str(uuid.uuid4())
 
@@ -911,8 +913,9 @@ def render_worker_completion_graph(books_df, selected_month, section, holds_df=N
         st.altair_chart(chart, use_container_width=True)
 
 
-def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
+from urllib.parse import urlencode, quote
 
+def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
     # Convert selected_month (e.g., "April 2025") to date range
     selected_month_dt = datetime.strptime(selected_month, '%B %Y')
     month_start = selected_month_dt.replace(day=1).date()
@@ -940,19 +943,26 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
         ])
 
     # Render UI
-    col1, col2, col3 = st.columns([10, 1, 1], vertical_alignment="bottom")
+    col1, col2, col3 = st.columns([8, 1, 1], vertical_alignment="bottom")
     with col1:
         st.subheader(f"Metrics of {selected_month}")
-        st.caption(f"Welcome {user_name}!")
+        st.caption(f"Welcome {st.session_state.username}!")
     with col2:
         if st.button(":material/refresh: Refresh", key=f"refresh_{section}", type="tertiary"):
             st.cache_data.clear()
-
-    # Go Back Button - Same Access as Pills
-    if user_role == "admin" or (user_role == "user" and user_app == "main" and "Team Dashboard" in user_access):
-        with col3:
-            if st.button(":material/arrow_back: Go Back", key="back_button", type="tertiary", width="stretch"):
-                st.switch_page('app.py')
+    with col3:
+        if st.session_state.role == "user":
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            tasks_url = get_page_url('tasks', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                ":material/checklist: Tasks",
+                url=tasks_url,
+                type="tertiary"
+            )
 
     # Metrics rendering
     if section == "writing":
@@ -1018,7 +1028,7 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
                     st.metric(
                         label=metric["label"],
                         value=metric["value"],
-                        delta= metric["delta"],
+                        delta=metric["delta"],
                         delta_color=delta_color
                     )
     else:

@@ -16,6 +16,7 @@ from constants import log_activity
 from constants import connect_db
 from constants import clean_old_logs
 from constants import VALID_SUBJECTS
+from constants import get_page_url
 import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -110,15 +111,6 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
 
-st.write(user_role)
-st.write(user_app)
-st.write(user_access)
-st.write(user_id)
-st.write(user_name)
-st.write(start_date)
-st.write(level)
-st.write(report_to)
-
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
 UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
@@ -141,7 +133,7 @@ st.markdown("""
         }
         /* Ensure the first element has minimal spacing */
         .block-container {
-            padding-top: 100px !important;  /* Small padding for breathing room */
+            padding-top: 0px !important;  /* Small padding for breathing room */
         }
         </style>
             
@@ -169,18 +161,11 @@ BUTTON_CONFIG = {
         "permission": "advance_search",
         "type": "new_tab",
     },
-    "IJISEM": {
-        "label": "IJISEM",
-        "icon": "🧾",
-        "page_path": "ijisem",
-        "permission": "ijisem",
-        "type": "new_tab",
-    },
-    "dashboard": {
-        "label": "Dashboard",
-        "icon": "📊",
-        "page_path": "dashboard",
-        "permission": "datadashoard",
+    "tasks": {
+        "label": "Tasks",
+        "icon": "🕒",
+        "page_path": "tasks",
+        "permission": "tasks",
         "type": "new_tab",
     },
     "team_dashboard": {
@@ -195,6 +180,20 @@ BUTTON_CONFIG = {
         "icon": "⚠️",
         "page_path": "pending_books",
         "permission": "pending_books",
+        "type": "new_tab",
+    },
+    "dashboard": {
+        "label": "Dashboard",
+        "icon": "📊",
+        "page_path": "dashboard",
+        "permission": "datadashoard",
+        "type": "new_tab",
+    },
+    "IJISEM": {
+        "label": "IJISEM",
+        "icon": "🧾",
+        "page_path": "ijisem",
+        "permission": "ijisem",
         "type": "new_tab",
     },
     "print_management": {
@@ -353,9 +352,6 @@ def fetch_book_details(book_id, conn):
 if not pd.api.types.is_datetime64_any_dtype(books['date']):
     books['date'] = pd.to_datetime(books['date'])
 
-def get_page_url(page_path, token):
-    """Generate a URL with the token as a query parameter."""
-    return f"{BASE_URL}/{page_path}?token={token}"
 
 def get_isbn_display(book_id, isbn, apply_isbn):
     if has_open_author_position(conn, book_id):
@@ -547,166 +543,6 @@ def fetch_all_author_names(book_ids, _conn):
     except Exception as e:
         st.error(f"Error fetching author names: {e}")
         return {book_id: f"Database error: {str(e)}" for book_id in book_ids}
-
-
-
-# # ------------------------------------------------------------------
-# # 1.  Harmonised palette  (light bg → dark text)
-# # ------------------------------------------------------------------
-# PALETTE = {
-#     "grey":  {"bg": "#f1f3f4", "text": "#5f6368", "dot": "#80868b"},
-#     "blue":  {"bg": "#e8f0fe", "text": "#1967d2", "dot": "#1967d2"},
-#     "green": {"bg": "#e6f4ea", "text": "#137333", "dot": "#137333"},
-#     "amber": {"bg": "#fef7e0", "text": "#b06000", "dot": "#f29900"},
-#     "teal":  {"bg": "#e0f2f1", "text": "#00796b", "dot": "#00796b"},
-#     "purple":{"bg": "#f3e5f5", "text": "#8e24aa", "dot": "#8e24aa"},
-# }
-
-# # ------------------------------------------------------------------
-# # 2.  Emoji map  (one icon per semantic state)
-# # ------------------------------------------------------------------
-# EMOJI = {
-#     "writing":      "✍️",
-#     "proofreading": "🔍",
-#     "formatting":   "📄",
-#     "cover":        "🎨",
-#     "print":        "🖨️",
-#     "dispatch":     "📦",
-#     "live":         "🌐",
-#     "links":        "🔗",
-#     "ready":        "📚",
-#     "complete":     "✅",
-# }
-
-# # ----------------------------------------------------------
-# #  Flat-pill styling (ISBN-style)
-# # ----------------------------------------------------------
-# FLAT_PILL_CSS = (
-#     "color:{text};"
-#     "background-color:{bg};"
-#     "font-size:12px;"
-#     "font-weight:501;"
-#     "padding:3px 8px;"
-#     "border-radius:12px;"
-#     "display:inline-flex;"
-#     "align-items:center;"
-#     "box-shadow:0 1px 2px rgba(0,0,0,0.05);"
-# )
-
-# # ----------------------------------------------------------
-# #  Re-usable flat-pill builder
-# # ----------------------------------------------------------
-# def flat_pill(text: str, colour_key: str, emoji_key: str = "") -> str:
-#     """
-#     Build a single flat pill (ISBN-style).
-#     colour_key must be a key in PALETTE.
-#     emoji_key  must be a key in EMOJI (or "" for no icon).
-#     """
-#     col  = PALETTE[colour_key]
-#     icon = EMOJI.get(emoji_key, "")
-#     prefix = f"{icon} " if icon else ""
-#     return f'<span style="{FLAT_PILL_CSS.format(text=col["text"],bg=col["bg"])}">{prefix}{text}</span>'
-
-# # ----------------------------------------------------------
-# #  Main API – identical logic, new visual
-# # ----------------------------------------------------------
-# def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
-#     # ---------- shortcuts ----------
-#     is_publish_only   = row.get("is_publish_only", 0) == 1
-#     is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
-#     skip_writing      = is_publish_only or is_thesis_to_book
-
-#     # ---------- operations status ----------
-#     operations = [
-#         ("writing",      "Writing",       "Writing Complete",      "blue"),
-#         ("proofreading", "Proofreading",  "Proofreading Complete", "blue"),
-#         ("formatting",   "Formatting",    "Formatting Complete",   "blue"),
-#         ("cover",        "Cover Design",  None,                    "blue"),
-#     ]
-
-#     ops_status, ops_colour, ops_emoji = "⏳Not Started", "grey", ""
-#     name_map = {s: f"{s}_by" for s, _, _, _ in operations}
-#     last_done = None
-
-#     for stage, in_prog, done, col_key in operations:
-#         if stage == "writing" and skip_writing:
-#             continue
-#         start_f, end_f = f"{stage}_start", f"{stage}_end"
-#         started = pd.notnull(row.get(start_f))
-#         ended   = pd.notnull(row.get(end_f))
-
-#         if ended:
-#             if stage == "cover":
-#                 ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
-#                 break
-#             else:
-#                 last_done = done
-#                 continue
-#         if started:
-#             name = row.get(name_map[stage], "Unknown") or "Unknown"
-#             ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
-#             break
-#     else:
-#         if last_done:
-#             ops_status, ops_colour, ops_emoji = last_done, "green", "complete"
-
-#     # ---------- author checklist (INTERNAL ONLY) ----------
-#     checklist_fields = [
-#         ("welcome_mail_sent",    "Welcome Mail",        "amber"),
-#         ("cover_agreement_sent", "Cover / Agreement",   "amber"),
-#         ("author_details_sent",  "Author Details",      "amber"),
-#         ("photo_recive",         "Photo",               "amber"),
-#         ("id_proof_recive",      "ID Proof",            "amber"),
-#         ("agreement_received",   "Agreement",           "amber"),
-#         ("digital_book_sent",    "Digital Proof",       "amber"),
-#         ("printing_confirmation","Print Confirmation",  "amber"),
-#     ]
-
-#     def _author_checklist_complete() -> bool:
-#         book_authors = authors_grouped.get(book_id, pd.DataFrame())
-#         if book_authors.empty:
-#             return True
-#         for _, author in book_authors.iterrows():
-#             for field, _, _ in checklist_fields:
-#                 if not author[field]:
-#                     return False
-#         return True
-
-#     author_ok = _author_checklist_complete()
-
-#     # ---------- ISBN check ----------
-#     _isbn_raw = row.get('isbn')
-#     isbn_ok   = bool(_isbn_raw and str(_isbn_raw).strip() not in ("", "None"))
-
-#     # ---------- early exits ----------
-#     if row.get("deliver") == 1:
-#         links = ["flipkart_link", "agph_link", "amazon_link", "images"]
-#         def _ok(f):
-#             v = str(row.get(f, "")).strip()
-#             return v and v not in ("[]", "null", "None")
-
-#         all_good = all(_ok(f) for f in links)
-#         return flat_pill("Book Live" if all_good else "Online Links Pending",
-#                          "green" if all_good else "amber",
-#                          "live" if all_good else "links")
-
-#     prints = printeditions_grouped.get(book_id, pd.DataFrame())
-#     if not prints.empty:
-#         latest = prints.sort_values("print_id", ascending=False).iloc[0]
-#         if latest["status"] == "Received":
-#             return flat_pill("Ready For Dispatch", "green", "dispatch")
-#         if latest["status"] == "In Printing":
-#             return flat_pill("In Printing", "amber", "print")
-
-#     # ---------- ready-for-print gate ----------
-#     if ops_status == "Operations Complete":
-#         if author_ok and isbn_ok:
-#             return flat_pill("Ready For Print", "green", "ready")
-#         else:
-#             return flat_pill("Operations Complete", "green", "complete")
-
-#     # ---------- default ----------
-#     return flat_pill(ops_status, ops_colour, ops_emoji)
 
 
 
@@ -1061,7 +897,33 @@ def fetch_tags(conn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Users", width="large", on_dismiss = 'rerun')
+
+import streamlit as st
+import pandas as pd
+from sqlalchemy.sql import text
+import re
+
+# Assuming ACCESS_TO_BUTTON is defined as provided
+ACCESS_TO_BUTTON = {
+    "ISBN": "manage_isbn_dialog",
+    "Payment": "manage_price_dialog",
+    "Authors": "edit_author_dialog",
+    "Operations": "edit_operation_dialog",
+    "Printing & Delivery": "edit_inventory_delivery_dialog",
+    "DatadashBoard": "datadashoard",
+    "Advance Search": "advance_search",
+    "Team Dashboard": "team_dashboard",
+    "Print Management": "print_management",
+    "Inventory": "inventory",
+    "Open Author Positions": "open_author_positions",
+    "Pending Work": "pending_books",
+    "IJISEM": "ijisem",
+    "Tasks": "tasks",
+    "Add Book": "add_book_dialog",
+    "Authors Edit": "edit_author_detail"
+}
+
+@st.dialog("Manage Users", width="large", on_dismiss='rerun')
 def manage_users(conn):
     # Check if user is admin
     if st.session_state.get("role", None) != "admin":
@@ -1073,14 +935,38 @@ def manage_users(conn):
         st.session_state.show_passwords = False
     if "confirm_delete_user_id" not in st.session_state:
         st.session_state.confirm_delete_user_id = None
-    # Track previous show_passwords state for logging
     if "show_passwords_prev" not in st.session_state:
         st.session_state.show_passwords_prev = st.session_state.show_passwords
 
-    # Fetch all users from database
+    # One-time database cleanup to fix casing in user_app_access
+    with conn.session as s:
+        for correct_access in ACCESS_TO_BUTTON.keys():
+            s.execute(
+                text("""
+                    UPDATE user_app_access 
+                    SET access_type = :correct_access 
+                    WHERE LOWER(access_type) = LOWER(:correct_access)
+                    AND access_type != :correct_access
+                """),
+                {"correct_access": correct_access}
+            )
+        s.commit()
+
+    # Fetch all users and their app access from database
     with conn.session as s:
         users = s.execute(
-            text("SELECT id, username, email, password, role, app, access, start_date FROM users ORDER BY username")
+            text("""
+                SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
+                       GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
+                       GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
+                       GROUP_CONCAT(CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') 
+                                    THEN (SELECT username FROM userss WHERE id = uaa.report_to) 
+                                    ELSE NULL END) as report_to
+                FROM userss u
+                LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
+                GROUP BY u.id
+                ORDER BY u.username
+            """)
         ).fetchall()
     
     # Tabs for user management
@@ -1091,7 +977,6 @@ def manage_users(conn):
         if not users:
             st.error("❌ No users found in database.")
         else:
-            #st.markdown("### Users Overview", unsafe_allow_html=True)
             # Show Password checkbox with logging
             show_passwords = st.checkbox(
                 "Show Passwords",
@@ -1121,11 +1006,15 @@ def manage_users(conn):
                     "ID": user.id,
                     "Username": user.username,
                     "Email": user.email or "",
+                    "Associate ID": user.associate_id or "",
+                    "Designation": user.designation or "",
                     "Password": user.password if st.session_state.show_passwords else "••••••••",
                     "Real_Password": user.password,  # Hidden column
                     "Role": user.role,
-                    "App": user.app or "",
-                    "Access": user.access or "",
+                    "Apps": user.apps or "",
+                    "Access Types": user.access_types or "",
+                    "Levels": user.levels or "",
+                    "Reports To": user.report_to or "",
                     "Start Date": user.start_date
                 }
                 for user in users
@@ -1137,25 +1026,29 @@ def manage_users(conn):
                 df,
                 width="stretch",
                 hide_index=True,
-                disabled=["ID", "Username", "Email", "Password", "Real_Password", "Role", "App", "Access", "Start Date"],
+                disabled=["ID", "Username", "Email", "Associate ID", "Designation", "Password", "Real_Password", "Role", "Apps", "Access Types", "Levels", "Reports To", "Start Date"],
                 column_config={
                     "ID": st.column_config.NumberColumn("ID", help="Unique user ID", disabled=True),
                     "Username": st.column_config.TextColumn("Username", help="User's username"),
                     "Email": st.column_config.TextColumn("Email", help="User's email address"),
+                    "Associate ID": st.column_config.TextColumn("Associate ID", help="User's associate ID"),
+                    "Designation": st.column_config.TextColumn("Designation", help="User's designation"),
                     "Password": st.column_config.TextColumn("Password", help="Password (masked by default)"),
                     "Real_Password": None,  # Hide this column
                     "Role": st.column_config.TextColumn("Role", help="User's role"),
-                    "App": st.column_config.TextColumn("App", help="User's app assignment"),
-                    "Access": st.column_config.TextColumn("Access", help="User's access permissions"),
+                    "Apps": st.column_config.TextColumn("Apps", help="User's app assignments"),
+                    "Access Types": st.column_config.TextColumn("Access Types", help="User's access permissions"),
+                    "Levels": st.column_config.TextColumn("Levels", help="User's level for tasks app"),
+                    "Reports To": st.column_config.TextColumn("Reports To", help="User this person reports to"),
                     "Start Date": st.column_config.DateColumn("Start Date", help="Data access start date")
                 },
-                column_order=["ID", "Username", "Email", "Role", "App", "Access", "Start Date", "Password"],
+                column_order=["ID", "Username", "Email", "Associate ID", "Designation", "Role", "Apps", "Access Types", "Levels", "Reports To", "Start Date", "Password"],
                 num_rows="fixed",
                 key="user_table"
             )
     
     with tab2:
-        edit_user_col, add_user_col  = st.columns(2)
+        edit_user_col, add_user_col = st.columns(2)
 
         with add_user_col:
             st.write("#### Add New User")
@@ -1166,89 +1059,148 @@ def manage_users(conn):
                     new_email = st.text_input("Email", key="new_email", placeholder="Enter email")
                 with col2:
                     new_password = st.text_input("Password", key="new_password", type="password", placeholder="Enter password")
-                    new_role = st.selectbox("Role", options=["admin", "user"], key="new_role")
+                    new_role = st.selectbox("Role", options=["Admin", "User"], format_func=lambda x: x.capitalize(), key="new_role")
 
-                col3, col4 = st.columns([1,3])
-                if new_role == "admin":
+                col3, col4 = st.columns(2)
+                col5, col6 = st.columns(2)
+                new_associate_id = None
+                new_designation = None
+                new_app = None
+                new_access_type = None
+                new_level = None
+                new_report_to = None
+                new_start_date = None
+
+                if new_role == "Admin":
                     new_app = "main"
-                    new_access = None
-                    new_start_date = None
                     with col3:
-                        st.text_input("App", value=new_app, disabled=True, key="new_app")
+                        new_associate_id = st.text_input("Associate ID", key="new_associate_id", disabled=True)
+                        st.selectbox("Application", options=["Main"], disabled=True, key="new_app")
                     with col4:
-                        st.text_input("Access", value="", disabled=True, key="new_access")
-                    st.date_input("Data From", value=None, disabled=True, key="new_start_date")
+                        new_designation = st.text_input("Designation", key="new_designation", placeholder="Enter designation")
+                        st.text_input("Access Permissions", value="", disabled=True, key="new_access_type")
+                    with col5:
+                        st.selectbox("Access Level", options=["None"], disabled=True, key="new_level")
+                    with col6:
+                        st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to")
+                    new_start_date = st.date_input("Start Date", value=None, disabled=True, key="new_start_date")
                 else:
                     with col3:
-                        new_app = st.selectbox("App", options=["main", "operations", "ijisem"], key="new_app_select")
+                        new_associate_id = st.text_input("Associate ID", key="new_associate_id", placeholder="Enter associate ID")
+                        new_app = st.selectbox("Application", options=["Main", "Operations", "IJISEM", "Tasks"], format_func=lambda x: x.capitalize(), key="new_app_select")
                     with col4:
+                        new_designation = st.text_input("Designation", key="new_designation", placeholder="Enter designation")
                         access_options = (
-                            list(ACCESS_TO_BUTTON.keys())
-                            if new_app == "main"
-                            else ["writer", "proofreader", "formatter", "cover_designer"]
+                            list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
+                            else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
+                            else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
                         )
-                        if new_app == "main":
-                            new_access = st.multiselect(
-                                "Access",
+                        if new_app == "Main":
+                            new_access_type = st.multiselect(
+                                "Access Permissions",
                                 options=access_options,
                                 default=[],
-                                key="new_access_select",
-                                help="Select one or more access permissions",
-                                disabled=new_app != "main"
+                                key="new_access_type_select",
+                                help="Select one or more access permissions"
                             )
-                        elif new_app == "ijisem":
-                            new_access = st.selectbox(
-                                "Access",
-                                options=["Full Access"],
-                                key="new_access_select_ijisem",
-                                help="IJISEM users have full access by default",
-                                disabled=new_app != "ijisem"
+                        elif new_app in ["IJISEM", "Tasks"]:
+                            new_access_type = st.selectbox(
+                                "Access Permissions",
+                                options=access_options,
+                                key=f"new_access_type_select_{new_app.lower()}",
+                                help=f"{new_app} users have full access by default"
                             )
                         else:
-                            new_access = st.selectbox(
-                                "Access",
+                            new_access_type = st.selectbox(
+                                "Access Permissions",
                                 options=access_options,
-                                key="new_access_select_operations",
-                                help="Select one access permission",
-                                disabled=new_app != "operations"
+                                key="new_access_type_select_operations",
+                                help="Select one access permission"
                             )
+                            
+                        if new_app in ["Tasks", "Operations"] or (new_app == "Main" and new_access_type and "Tasks" in new_access_type):
+                            with col5:
+                                new_level = st.selectbox(
+                                    "Access Level",
+                                    options=["Worker", "Reporting Manager", "Both"],
+                                    format_func=lambda x: x.replace("_", " ").title(),
+                                    key="new_level_select",
+                                    help="Select access level for tasks"
+                                )
+                                new_level = new_level.lower().replace(" ", "_")
+                            with col6:
+                                if new_level in ["worker", "both"]:
+                                    report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
+                                    new_report_to = st.selectbox(
+                                        "Reports To",
+                                        options=["None"] + report_to_options,
+                                        key="new_report_to_select",
+                                        help="Select the user this person reports to"
+                                    )
+                                    new_report_to = new_report_to.split(" (ID: ")[1][:-1] if new_report_to != "None" else None
+                                else:
+                                    new_report_to = None
+                                    st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to_select")
+                        else:
+                            new_level = None
+                            with col5:
+                                st.selectbox("Access Level", options=["None"], disabled=True, key="new_level_select")
+                            with col6:
+                                st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to_select")
                     new_start_date = st.date_input(
-                        "Data From",
+                        "Start Date",
                         value=None,
                         key="new_start_date",
-                        help="Select data access start date" if new_app == "main" else None,
-                        disabled=new_app != "main"
+                        help="Select data access start date" if new_app == "Main" else None,
+                        disabled=new_app != "Main"
                     )
 
-                if st.button("Add User", key="add_user", type="primary", width="stretch"):
+                if st.button("Add User", key="add_user", type="primary"):
                     if not new_username or not new_password:
                         st.error("❌ Username and password are required.")
                     elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                         st.error("❌ Invalid email format.")
                     else:
-                        access_value = None if new_role == "admin" else (
-                            ",".join(new_access) if new_app == "main" and new_access else
-                            new_access if new_app in ("operations", "ijisem") and new_access else None
-                        )
-
                         with st.spinner("Adding user..."):
                             with conn.session as s:
+                                # Insert into userss table
                                 s.execute(
                                     text("""
-                                        INSERT INTO users (username, email, password, role, app, access, start_date)
-                                        VALUES (:username, :email, :password, :role, :app, :access, :start_date)
+                                        INSERT INTO userss (username, email, associate_id, designation, password, role)
+                                        VALUES (:username, :email, :associate_id, :designation, :password, :role)
                                     """),
                                     {
                                         "username": new_username,
                                         "email": new_email if new_email else None,
+                                        "associate_id": new_associate_id if new_associate_id else None,
+                                        "designation": new_designation if new_designation else None,
                                         "password": new_password,
-                                        "role": new_role,
-                                        "app": new_app,
-                                        "access": access_value,
-                                        "start_date": new_start_date
+                                        "role": new_role.lower()
                                     }
                                 )
                                 new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+                                
+                                # Insert into user_app_access table
+                                if new_role != "Admin":
+                                    access_value = (
+                                        ",".join(new_access_type) if new_app == "Main" and new_access_type
+                                        else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
+                                        else None
+                                    )
+                                    s.execute(
+                                        text("""
+                                            INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                            VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                        """),
+                                        {
+                                            "user_id": new_user_id,
+                                            "app": new_app.lower(),
+                                            "access_type": access_value,
+                                            "level": new_level,
+                                            "report_to": new_report_to,
+                                            "start_date": new_start_date
+                                        }
+                                    )
                                 s.commit()
                             # Log the add user action
                             log_activity(
@@ -1257,11 +1209,10 @@ def manage_users(conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "added user",
-                                f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
+                                f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}, Associate ID: {new_associate_id}, Designation: {new_designation}, Level: {new_level}, Reports To: {new_report_to}"
                             )
                             st.success("User Added Successfully!", icon="✔️")
                             st.toast("User Added Successfully!", icon="✔️", duration="long")
-
 
         # Tab 2: Edit Users
         with edit_user_col:
@@ -1270,11 +1221,9 @@ def manage_users(conn):
             else:
                 st.write("#### Edit Existing User")
                 with st.container(border=True):
-                    #st.markdown("### Select User", unsafe_allow_html=True)
                     user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
                     selected_user_name = st.selectbox("Select User", options=list(user_dict.keys()), key="user_select")
                     selected_user = user_dict[selected_user_name]
-                    #st.markdown(f"**ID:** <span style='color: #2196F3'>{selected_user.id}</span>", unsafe_allow_html=True)
 
                 with st.container(border=True):
                     st.markdown(f"### Editing: <span style='color: #4CAF50'>{selected_user.username}</span>", unsafe_allow_html=True)
@@ -1288,57 +1237,122 @@ def manage_users(conn):
                         new_email = st.text_input("Email", value=selected_user.email or "", key=f"email_{selected_user.id}")
                     with col2:
                         new_password = st.text_input("Password", value=selected_user.password or "", key=f"password_{selected_user.id}", type="password")
-                        valid_roles = ["admin", "user"]
-                        current_role = selected_user.role if selected_user.role in valid_roles else "user"
-                        if selected_user.role not in valid_roles:
-                            st.warning(f"⚠️ Invalid role '{selected_user.role}' detected. Defaulting to 'user'.")
+                        valid_roles = ["Admin", "User"]
+                        current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
+                        if selected_user.role not in ["admin", "user"]:
+                            st.warning(f"⚠️ Invalid role '{selected_user.role}' detected. Defaulting to 'User'.")
                         if selected_user.id == 1:
-                            st.selectbox("Role", options=["admin"], index=0, disabled=True, key=f"role_{selected_user.id}")
-                            new_role = "admin"
+                            st.selectbox("Role", options=["Admin"], index=0, disabled=True, key=f"role_{selected_user.id}")
+                            new_role = "Admin"
                         else:
                             new_role = st.selectbox("Role", options=valid_roles, index=valid_roles.index(current_role), key=f"role_{selected_user.id}")
 
-                    col3, col4 = st.columns([1,3])
-                    if new_role == "admin":
-                        new_app = "main"
-                        new_access = None
-                        new_start_date = None
+                    col3, col4 = st.columns(2)
+                    col5, col6 = st.columns(2)
+                    new_associate_id = None
+                    new_designation = None
+                    new_app = None
+                    new_access_type = None
+                    new_level = None
+                    new_report_to = None
+                    new_start_date = None
+
+                    if new_role == "Admin":
+                        new_app = "Main"
                         with col3:
-                            st.text_input("App", value=new_app, disabled=True, key=f"app_{selected_user.id}")
+                            new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", disabled=True, key=f"associate_id_{selected_user.id}")
+                            st.selectbox("Application", options=["Main"], disabled=True, key=f"app_{selected_user.id}")
                         with col4:
-                            st.text_input("Access", value="", disabled=True, key=f"access_{selected_user.id}")
-                        st.date_input("Data From", value=None, disabled=True, key=f"start_date_{selected_user.id}")
+                            new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
+                            st.text_input("Access Permissions", value="", disabled=True, key=f"access_type_{selected_user.id}")
+                        with col5:
+                            st.selectbox("Access Level", options=["None"], disabled=True, key=f"level_{selected_user.id}")
+                        with col6:
+                            st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_{selected_user.id}")
+                        new_start_date = st.date_input("Start Date", value=None, disabled=True, key=f"start_date_{selected_user.id}")
                     else:
                         with col3:
-                            new_app = st.selectbox("App", options=["main", "operations", "ijisem"], index=["main", "operations", "ijisem"].index(selected_user.app) if selected_user.app in ["main", "operations", "ijisem"] else 0, key=f"app_select_{selected_user.id}")
+                            new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", key=f"associate_id_{selected_user.id}", placeholder="Enter associate ID")
+                            current_app = selected_user.apps.split(",")[0].capitalize() if selected_user.apps and isinstance(selected_user.apps, str) else "Main"
+                            new_app = st.selectbox("Application", options=["Main", "Operations", "IJISEM", "Tasks"], format_func=lambda x: x.capitalize(), index=["Main", "Operations", "IJISEM", "Tasks"].index(current_app) if current_app in ["Main", "Operations", "IJISEM", "Tasks"] else 0, key=f"app_select_{selected_user.id}")
                         with col4:
-                            access_options = list(ACCESS_TO_BUTTON.keys()) if new_app == "main" else ["writer", "proofreader", "formatter", "cover_designer"]
-                            if new_app == "main":
-                                default_access = [access.strip() for access in selected_user.access.split(",") if access.strip() in access_options] if selected_user.access and isinstance(selected_user.access, str) else []
-                                new_access = st.multiselect("Access", options=access_options, default=default_access, key=f"access_select_{selected_user.id}", disabled=new_app != "main")
-                            elif new_app == "ijisem":
-                                new_access = st.selectbox(
-                                    "Access",
-                                    options=["Full Access"],
-                                    index=0 if selected_user.access == "Full Access" else 0,
-                                    key=f"access_select_ijisem_{selected_user.id}",
-                                    help="IJISEM users have full access by default",
-                                    disabled=new_app != "ijisem"
+                            new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
+                            access_options = (
+                                list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
+                                else ["Writer", "Proofreader", "Formatter", "Cover Designer"] if new_app == "Operations"
+                                else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
+                            )
+                            current_access = selected_user.access_types.split(",") if selected_user.access_types and isinstance(selected_user.access_types, str) else []
+                            current_access = [acc for acc in current_access if acc in ACCESS_TO_BUTTON.keys() or acc in access_options]
+                            if new_app == "Main":
+                                new_access_type = st.multiselect(
+                                    "Access Permissions",
+                                    options=access_options,
+                                    default=current_access,
+                                    key=f"access_type_select_{selected_user.id}"
+                                )
+                            elif new_app in ["IJISEM", "Tasks"]:
+                                default_access = "Full Access" if "Full Access" in current_access else access_options[0]
+                                new_access_type = st.selectbox(
+                                    "Access Permissions",
+                                    options=access_options,
+                                    index=access_options.index(default_access) if default_access in access_options else 0,
+                                    key=f"access_type_select_{new_app.lower()}_{selected_user.id}",
+                                    help=f"{new_app} users have full access by default"
                                 )
                             else:
-                                default_access = selected_user.access if selected_user.access in access_options else access_options[0]
-                                new_access = st.selectbox("Access", options=access_options, index=access_options.index(default_access), key=f"access_select_operations_{selected_user.id}", disabled=new_app != "operations")
-                        new_start_date = st.date_input("Data From", value=selected_user.start_date, key=f"start_date_{selected_user.id}", disabled=new_app != "main")
+                                default_access = current_access[0] if current_access and current_access[0] in access_options else access_options[0]
+                                new_access_type = st.selectbox(
+                                    "Access Permissions",
+                                    options=access_options,
+                                    index=access_options.index(default_access) if default_access in access_options else 0,
+                                    key=f"access_type_select_operations_{selected_user.id}"
+                                )
+                            if new_app in ["Tasks", "Operations"] or (new_app == "Main" and new_access_type and "Tasks" in new_access_type):
+                                with col5:
+                                    current_level = selected_user.levels.split(",")[0] if selected_user.levels and isinstance(selected_user.levels, str) else "worker"
+                                    new_level = st.selectbox(
+                                        "Access Level",
+                                        options=["Worker", "Reporting Manager", "Both"],
+                                        format_func=lambda x: x.replace("_", " ").title(),
+                                        index=["Worker", "Reporting Manager", "Both"].index(current_level.capitalize()) if current_level in ["worker", "reporting_manager", "both"] else 0,
+                                        key=f"level_select_{selected_user.id}",
+                                        help="Select access level for tasks"
+                                    )
+                                    new_level = new_level.lower().replace(" ", "_")
+                                with col6:
+                                    if new_level in ["worker", "both"]:
+                                        report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
+                                        current_report_to = selected_user.report_to or "None"
+                                        new_report_to = st.selectbox(
+                                            "Reports To",
+                                            options=["None"] + report_to_options,
+                                            index=0 if current_report_to == "None" else report_to_options.index(current_report_to) + 1 if current_report_to in report_to_options else 0,
+                                            key=f"report_to_select_{selected_user.id}",
+                                            help="Select the user this person reports to"
+                                        )
+                                        new_report_to = new_report_to.split(" (ID: ")[1][:-1] if new_report_to != "None" else None
+                                    else:
+                                        new_report_to = None
+                                        st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_select_{selected_user.id}")
+                            else:
+                                new_level = None
+                                with col5:
+                                    st.selectbox("Access Level", options=["None"], disabled=True, key=f"level_select_{selected_user.id}")
+                                with col6:
+                                    st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_select_{selected_user.id}")
+                        new_start_date = st.date_input("Start Date", value=selected_user.start_date, key=f"start_date_{selected_user.id}", disabled=new_app != "Main")
 
                     btn_col1, btn_col2 = st.columns([3, 1])
                     with btn_col1:
-                        if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary", width="stretch"):
+                        if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary"):
                             if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                                 st.error("❌ Invalid email format.")
                             else:
-                                access_value = None if new_role == "admin" else (
-                                    ",".join(new_access) if new_app == "main" and new_access else
-                                    new_access if new_app in ["operations", "ijisem"] and new_access else None
+                                access_value = (
+                                    ",".join(new_access_type) if new_app == "Main" and new_access_type
+                                    else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
+                                    else None
                                 )
                                 # Track changes for logging
                                 changes = []
@@ -1348,35 +1362,68 @@ def manage_users(conn):
                                     changes.append(f"Updated email from '{selected_user.email or ''}' to '{new_email}'")
                                 if new_password and new_password != selected_user.password:
                                     changes.append("Updated password")
-                                if new_role != selected_user.role:
+                                if new_role != selected_user.role.capitalize():
                                     changes.append(f"Updated role from '{selected_user.role}' to '{new_role}'")
-                                if new_app != (selected_user.app or ""):
-                                    changes.append(f"Updated app from '{selected_user.app or ''}' to '{new_app}'")
-                                if new_access != (selected_user.access or None):
-                                    changes.append(f"Updated access from '{selected_user.access or ''}' to '{access_value or ''}'")
+                                if new_associate_id != (selected_user.associate_id or ""):
+                                    changes.append(f"Updated associate_id from '{selected_user.associate_id or ''}' to '{new_associate_id or ''}'")
+                                if new_designation != (selected_user.designation or ""):
+                                    changes.append(f"Updated designation from '{selected_user.designation or ''}' to '{new_designation or ''}'")
+                                if new_app != (selected_user.apps.split(",")[0].capitalize() if selected_user.apps and isinstance(selected_user.apps, str) else ""):
+                                    changes.append(f"Updated app from '{selected_user.apps.split(',')[0] if selected_user.apps else ''}' to '{new_app}'")
+                                if access_value != (selected_user.access_types or None):
+                                    changes.append(f"Updated access_type from '{selected_user.access_types or ''}' to '{access_value or ''}'")
+                                if new_level != (selected_user.levels.split(",")[0] if selected_user.levels and isinstance(selected_user.levels, str) else None):
+                                    changes.append(f"Updated level from '{selected_user.levels.split(',')[0] if selected_user.levels else ''}' to '{new_level or ''}'")
+                                if new_report_to != (selected_user.report_to or None):
+                                    changes.append(f"Updated report_to from '{selected_user.report_to or ''}' to '{new_report_to or ''}'")
                                 if new_start_date != selected_user.start_date:
                                     changes.append(f"Updated start_date from '{selected_user.start_date or ''}' to '{new_start_date or ''}'")
 
                                 with st.spinner("Saving changes..."):
                                     with conn.session as s:
+                                        # Update userss table
                                         s.execute(
                                             text("""
-                                                UPDATE users 
-                                                SET username = :username, email = :email, password = :password,
-                                                    role = :role, app = :app, access = :access, start_date = :start_date
+                                                UPDATE userss 
+                                                SET username = :username, email = :email, associate_id = :associate_id, 
+                                                    designation = :designation, password = :password, role = :role
                                                 WHERE id = :id
                                             """),
                                             {
                                                 "username": new_username,
                                                 "email": new_email if new_email else None,
+                                                "associate_id": new_associate_id if new_associate_id else None,
+                                                "designation": new_designation if new_designation else None,
                                                 "password": new_password if new_password else None,
-                                                "role": new_role,
-                                                "app": new_app,
-                                                "access": access_value,
-                                                "start_date": new_start_date,
+                                                "role": new_role.lower(),
                                                 "id": selected_user.id
                                             }
                                         )
+                                        # Update or insert into user_app_access table
+                                        if new_role != "Admin":
+                                            s.execute(
+                                                text("DELETE FROM user_app_access WHERE user_id = :user_id"),
+                                                {"user_id": selected_user.id}
+                                            )
+                                            s.execute(
+                                                text("""
+                                                    INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                    VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                """),
+                                                {
+                                                    "user_id": selected_user.id,
+                                                    "app": new_app.lower(),
+                                                    "access_type": access_value,
+                                                    "level": new_level,
+                                                    "report_to": new_report_to,
+                                                    "start_date": new_start_date
+                                                }
+                                            )
+                                        else:
+                                            s.execute(
+                                                text("DELETE FROM user_app_access WHERE user_id = :user_id"),
+                                                {"user_id": selected_user.id}
+                                            )
                                         s.commit()
                                     # Log changes if any
                                     if changes:
@@ -1391,12 +1438,10 @@ def manage_users(conn):
                                         )
                                     st.success("User Updated Successfully!", icon="✔️")
                                     st.toast("User Updated Successfully!", icon="✔️", duration="long")
-                                    import time
-
 
                     with btn_col2:
                         if selected_user.id != 1:
-                            if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary", width="stretch"):
+                            if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary"):
                                 st.session_state.confirm_delete_user_id = selected_user.id
 
                     if st.session_state.confirm_delete_user_id == selected_user.id:
@@ -1409,7 +1454,8 @@ def manage_users(conn):
                             if st.button("✔️ Confirm", key=f"confirm_delete_{selected_user.id}"):
                                 with st.spinner("Deleting user..."):
                                     with conn.session as s:
-                                        s.execute(text("DELETE FROM users WHERE id = :id"), {"id": selected_user.id})
+                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
+                                        s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
                                         s.commit()
                                     # Log the delete action
                                     log_activity(

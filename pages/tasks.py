@@ -128,7 +128,12 @@ def get_or_create_timesheet(conn, user_id, fiscal_week):
         if not df.empty:
             return df.iloc[0]['id'], df.iloc[0]['status'], df.iloc[0]['review_notes']
 
-        manager_id = st.session_state.report_to
+        # --- CHANGE 1: Handle case where user has no manager ---
+        # If report_to is "Unknown" or not a valid ID, set manager_id to None.
+        manager_id = st.session_state.get("report_to")
+        if manager_id == "Unknown" or not manager_id:
+            manager_id = None
+
         with conn.session as s:
             s.execute(text("INSERT INTO timesheets (user_id, manager_id, fiscal_week, status) VALUES (:user_id, :manager_id, :fiscal_week, 'draft')"),
                       {"user_id": user_id, "manager_id": manager_id, "fiscal_week": fiscal_week})
@@ -183,7 +188,7 @@ def get_user_timesheet_history(conn, user_id):
 # FIXED: This function now correctly gets the manager from the timesheets table.
 def get_all_users_with_managers(conn):
     """
-    Fetches all users (excluding admin) and their most recent manager 
+    Fetches all users (excluding admin) and their most recent manager
     from the timesheets table.
     """
     try:
@@ -273,7 +278,7 @@ def get_late_submitters_for_manager(conn, manager_id):
     """
     ist = pytz.timezone('Asia/Kolkata')
     today = datetime.now(ist).date()
-    
+
     # This check is most relevant on Monday and Tuesday
     if today.weekday() not in [0, 1]: # 0=Monday, 1=Tuesday
         return []
@@ -420,6 +425,7 @@ def render_work_entry(conn, work_row, is_editable):
                 work_id = work_row['id']
                 st.button("🗑️", key=f"del_{work_row['id']}", on_click=delete_work_entry,
                           args=(conn, work_id), use_container_width=True, help="Delete this entry")
+
 
 def render_weekly_work_grid(conn, work_df, start_of_week_date, is_editable=False):
     """Displays work entries in a 6-column grid (Mon-Sat)."""
