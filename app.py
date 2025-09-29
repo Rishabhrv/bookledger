@@ -897,12 +897,6 @@ def fetch_tags(conn):
 ###################################################################################################################################
 
 
-
-import streamlit as st
-import pandas as pd
-from sqlalchemy.sql import text
-import re
-
 # Assuming ACCESS_TO_BUTTON is defined as provided
 ACCESS_TO_BUTTON = {
     "ISBN": "manage_isbn_dialog",
@@ -1279,7 +1273,7 @@ def manage_users(conn):
                             new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
                             access_options = (
                                 list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
-                                else ["Writer", "Proofreader", "Formatter", "Cover Designer"] if new_app == "Operations"
+                                else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
                                 else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
                             )
                             current_access = selected_user.access_types.split(",") if selected_user.access_types and isinstance(selected_user.access_types, str) else []
