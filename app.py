@@ -913,35 +913,45 @@ def manage_users(conn):
         st.session_state.show_passwords_prev = st.session_state.show_passwords
 
     # One-time database cleanup to fix casing in user_app_access
-    with conn.session as s:
-        for correct_access in ACCESS_TO_BUTTON.keys():
-            s.execute(
-                text("""
-                    UPDATE user_app_access 
-                    SET access_type = :correct_access 
-                    WHERE LOWER(access_type) = LOWER(:correct_access)
-                    AND access_type != :correct_access
-                """),
-                {"correct_access": correct_access}
-            )
-        s.commit()
+    try:
+        with conn.session as s:
+            for correct_access in ACCESS_TO_BUTTON.keys():
+                s.execute(
+                    text("""
+                        UPDATE user_app_access 
+                        SET access_type = :correct_access 
+                        WHERE LOWER(access_type) = LOWER(:correct_access)
+                        AND access_type != :correct_access
+                    """),
+                    {"correct_access": correct_access}
+                )
+            s.commit()
+    except Exception as e:
+        st.error(f"❌ Database error during cleanup: {str(e)}")
+        return
 
     # Fetch all users and their app access from database
-    with conn.session as s:
-        users = s.execute(
-            text("""
-                SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
-                       GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
-                       GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
-                       GROUP_CONCAT(CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') AND uaa.report_to IS NOT NULL 
+    try:
+        with conn.session as s:
+            users = s.execute(
+                text("""
+                    SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
+                           GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
+                           GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
+                           GROUP_CONCAT(DISTINCT 
+                               CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') AND uaa.report_to IS NOT NULL 
                                     THEN (SELECT username FROM userss WHERE id = uaa.report_to) 
-                                    ELSE NULL END) as report_to
-                FROM userss u
-                LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
-                GROUP BY u.id
-                ORDER BY u.username
-            """)
-        ).fetchall()
+                                    ELSE NULL END
+                           ) as report_to
+                    FROM userss u
+                    LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
+                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role
+                    ORDER BY u.username
+                """)
+            ).fetchall()
+    except Exception as e:
+        st.error(f"❌ Database error while fetching users: {str(e)}")
+        return
     
     # Tabs for user management
     tab1, tab2 = st.tabs(["Users", "Edit or Add"])
@@ -963,16 +973,19 @@ def manage_users(conn):
 
             # Log checkbox toggle
             if show_passwords != st.session_state.show_passwords_prev:
-                log_activity(
-                    conn,
-                    st.session_state.user_id,
-                    st.session_state.username,
-                    st.session_state.session_id,
-                    "toggled checkbox",
-                    f"Show Passwords changed to '{show_passwords}'"
-                )
-                st.session_state.show_passwords = show_passwords
-                st.session_state.show_passwords_prev = show_passwords
+                try:
+                    log_activity(
+                        conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "toggled checkbox",
+                        f"Show Passwords changed to '{show_passwords}'"
+                    )
+                    st.session_state.show_passwords = show_passwords
+                    st.session_state.show_passwords_prev = show_passwords
+                except Exception as e:
+                    st.error(f"❌ Error logging activity: {str(e)}")
 
             # Prepare data for st.data_editor
             user_data = [
@@ -1135,58 +1148,74 @@ def manage_users(conn):
                     elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                         st.error("❌ Invalid email format.")
                     else:
-                        with st.spinner("Adding user..."):
-                            with conn.session as s:
-                                # Insert into userss table
-                                s.execute(
-                                    text("""
-                                        INSERT INTO userss (username, email, associate_id, designation, password, role)
-                                        VALUES (:username, :email, :associate_id, :designation, :password, :role)
-                                    """),
-                                    {
-                                        "username": new_username,
-                                        "email": new_email if new_email else None,
-                                        "associate_id": new_associate_id if new_associate_id else None,
-                                        "designation": new_designation if new_designation else None,
-                                        "password": new_password,
-                                        "role": new_role.lower()
-                                    }
-                                )
-                                new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
-                                
-                                # Insert into user_app_access table
-                                if new_role != "Admin":
-                                    access_value = (
-                                        ",".join(new_access_type) if new_app == "Main" and new_access_type
-                                        else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
-                                        else None
-                                    )
+                        try:
+                            with st.spinner("Adding user..."):
+                                with conn.session as s:
+                                    # Insert into userss table
                                     s.execute(
                                         text("""
-                                            INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
-                                            VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                            INSERT INTO userss (username, email, associate_id, designation, password, role)
+                                            VALUES (:username, :email, :associate_id, :designation, :password, :role)
                                         """),
                                         {
-                                            "user_id": new_user_id,
-                                            "app": new_app.lower(),
-                                            "access_type": access_value,
-                                            "level": new_level,
-                                            "report_to": new_report_to,
-                                            "start_date": new_start_date
+                                            "username": new_username,
+                                            "email": new_email if new_email else None,
+                                            "associate_id": new_associate_id if new_associate_id else None,
+                                            "designation": new_designation if new_designation else None,
+                                            "password": new_password,
+                                            "role": new_role.lower()
                                         }
                                     )
-                                s.commit()
-                            # Log the add user action
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "added user",
-                                f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}, Associate ID: {new_associate_id}, Designation: {new_designation}, Level: {new_level}, Reports To: {new_report_to}"
-                            )
-                            st.success("User Added Successfully!", icon="✔️")
-                            st.toast("User Added Successfully!", icon="✔️", duration="long")
+                                    new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+                                    
+                                    # Insert into user_app_access table
+                                    if new_role != "Admin":
+                                        access_value = (
+                                            ",".join(new_access_type) if new_app == "Main" and new_access_type
+                                            else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
+                                            else None
+                                        )
+                                        s.execute(
+                                            text("""
+                                                INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                            """),
+                                            {
+                                                "user_id": new_user_id,
+                                                "app": new_app.lower(),
+                                                "access_type": access_value,
+                                                "level": new_level,
+                                                "report_to": new_report_to,
+                                                "start_date": new_start_date
+                                            }
+                                        )
+                                    s.commit()
+                                # Log the add user action
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "added user",
+                                    f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}, Associate ID: {new_associate_id}, Designation: {new_designation}, Level: {new_level}, Reports To: {new_report_to}"
+                                )
+                                st.success("User Added Successfully!", icon="✔️")
+                                st.toast("User Added Successfully!", icon="✔️", duration="long")
+                        except Exception as e:
+                            error_message = str(e).lower()
+                            if "duplicate entry" in error_message:
+                                if "'username'" in error_message:
+                                    st.error("❌ Username already exists.")
+                                elif "'email'" in error_message:
+                                    st.error("❌ Email already exists.")
+                                elif "'associate_id'" in error_message:
+                                    st.error("❌ Associate ID already exists.")
+                                else:
+                                    st.error(f"❌ Duplicate entry error: {str(e)}")
+                            elif "foreign key" in error_message:
+                                st.error("❌ Invalid 'Reports To' user ID.")
+                            else:
+                                st.error(f"❌ Database error: {str(e)}")
 
         # Tab 2: Edit Users
         with edit_user_col:
@@ -1231,6 +1260,21 @@ def manage_users(conn):
                     new_report_to = None
                     new_start_date = None
 
+                    try:
+                        with conn.session as s:
+                            # Fetch user_app_access details for the selected user
+                            uaa = s.execute(
+                                text("""
+                                    SELECT app, access_type, level, report_to, start_date
+                                    FROM user_app_access
+                                    WHERE user_id = :user_id
+                                """),
+                                {"user_id": selected_user.id}
+                            ).fetchone()
+                    except Exception as e:
+                        st.error(f"❌ Database error while fetching user access: {str(e)}")
+                        return
+
                     if new_role == "Admin":
                         new_app = "Main"
                         with col3:
@@ -1245,17 +1289,6 @@ def manage_users(conn):
                             st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_{selected_user.id}")
                         new_start_date = st.date_input("Start Date", value=None, disabled=True, key=f"start_date_{selected_user.id}")
                     else:
-                        with conn.session as s:
-                            # Fetch user_app_access details for the selected user
-                            uaa = s.execute(
-                                text("""
-                                    SELECT app, access_type, level, report_to, start_date
-                                    FROM user_app_access
-                                    WHERE user_id = :user_id
-                                """),
-                                {"user_id": selected_user.id}
-                            ).fetchone()
-
                         with col3:
                             new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", key=f"associate_id_{selected_user.id}", placeholder="Enter associate ID")
                             current_app = uaa.app.capitalize() if uaa and uaa.app else "Main"
@@ -1375,65 +1408,81 @@ def manage_users(conn):
                                 if new_start_date != (uaa.start_date if uaa else None):
                                     changes.append(f"Updated start_date from '{uaa.start_date if uaa else ''}' to '{new_start_date or ''}'")
 
-                                with st.spinner("Saving changes..."):
-                                    with conn.session as s:
-                                        # Update userss table
-                                        s.execute(
-                                            text("""
-                                                UPDATE userss 
-                                                SET username = :username, email = :email, associate_id = :associate_id, 
-                                                    designation = :designation, password = :password, role = :role
-                                                WHERE id = :id
-                                            """),
-                                            {
-                                                "username": new_username,
-                                                "email": new_email if new_email else None,
-                                                "associate_id": new_associate_id if new_associate_id else None,
-                                                "designation": new_designation if new_designation else None,
-                                                "password": new_password if new_password else None,
-                                                "role": new_role.lower(),
-                                                "id": selected_user.id
-                                            }
-                                        )
-                                        # Update or insert into user_app_access table
-                                        if new_role != "Admin":
-                                            s.execute(
-                                                text("DELETE FROM user_app_access WHERE user_id = :user_id"),
-                                                {"user_id": selected_user.id}
-                                            )
+                                try:
+                                    with st.spinner("Saving changes..."):
+                                        with conn.session as s:
+                                            # Update userss table
                                             s.execute(
                                                 text("""
-                                                    INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
-                                                    VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                    UPDATE userss 
+                                                    SET username = :username, email = :email, associate_id = :associate_id, 
+                                                        designation = :designation, password = :password, role = :role
+                                                    WHERE id = :id
                                                 """),
                                                 {
-                                                    "user_id": selected_user.id,
-                                                    "app": new_app.lower(),
-                                                    "access_type": access_value,
-                                                    "level": new_level,
-                                                    "report_to": new_report_to,
-                                                    "start_date": new_start_date
+                                                    "username": new_username,
+                                                    "email": new_email if new_email else None,
+                                                    "associate_id": new_associate_id if new_associate_id else None,
+                                                    "designation": new_designation if new_designation else None,
+                                                    "password": new_password if new_password else None,
+                                                    "role": new_role.lower(),
+                                                    "id": selected_user.id
                                                 }
                                             )
-                                        else:
-                                            s.execute(
-                                                text("DELETE FROM user_app_access WHERE user_id = :user_id"),
-                                                {"user_id": selected_user.id}
+                                            # Update or insert into user_app_access table
+                                            if new_role != "Admin":
+                                                s.execute(
+                                                    text("DELETE FROM user_app_access WHERE user_id = :user_id"),
+                                                    {"user_id": selected_user.id}
+                                                )
+                                                s.execute(
+                                                    text("""
+                                                        INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                        VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                    """),
+                                                    {
+                                                        "user_id": selected_user.id,
+                                                        "app": new_app.lower(),
+                                                        "access_type": access_value,
+                                                        "level": new_level,
+                                                        "report_to": new_report_to,
+                                                        "start_date": new_start_date
+                                                    }
+                                                )
+                                            else:
+                                                s.execute(
+                                                    text("DELETE FROM user_app_access WHERE user_id = :user_id"),
+                                                    {"user_id": selected_user.id}
+                                                )
+                                            s.commit()
+                                        # Log changes if any
+                                        if changes:
+                                            details = f"User ID: {selected_user.id}, {', '.join(changes)}"
+                                            log_activity(
+                                                conn,
+                                                st.session_state.user_id,
+                                                st.session_state.username,
+                                                st.session_state.session_id,
+                                                "updated user",
+                                                details
                                             )
-                                        s.commit()
-                                    # Log changes if any
-                                    if changes:
-                                        details = f"User ID: {selected_user.id}, {', '.join(changes)}"
-                                        log_activity(
-                                            conn,
-                                            st.session_state.user_id,
-                                            st.session_state.username,
-                                            st.session_state.session_id,
-                                            "updated user",
-                                            details
-                                        )
-                                    st.success("User Updated Successfully!", icon="✔️")
-                                    st.toast("User Updated Successfully!", icon="✔️", duration="long")
+                                        st.success("User Updated Successfully!", icon="✔️")
+                                        st.toast("User Updated Successfully!", icon="✔️", duration="long")
+                                except Exception as e:
+                                    error_message = str(e).lower()
+                                    if "duplicate entry" in error_message:
+                                        if "'username'" in error_message:
+                                            st.error("❌ Username already exists.")
+                                        elif "'email'" in error_message:
+                                            st.error("❌ Email already exists.")
+                                        elif "'associate_id'" in error_message:
+                                            st.error("❌ Associate ID already exists.")
+                                        else:
+                                            st.error(f"❌ Duplicate entry error: {str(e)}")
+                                    elif "foreign key" in error_message:
+                                        st.error("❌ Invalid 'Reports To' user ID.")
+                                    else:
+                                        st.error(f"❌ Database error: {str(e)}")
 
                     with btn_col2:
                         if selected_user.id != 1:
@@ -1448,23 +1497,26 @@ def manage_users(conn):
                                 st.session_state.confirm_delete_user_id = None
                         with confirm_col2:
                             if st.button("✔️ Confirm", key=f"confirm_delete_{selected_user.id}"):
-                                with st.spinner("Deleting user..."):
-                                    with conn.session as s:
-                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
-                                        s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
-                                        s.commit()
-                                    # Log the delete action
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        "deleted user",
-                                        f"User ID: {selected_user.id}, Username: {selected_user.username}"
-                                    )
-                                    st.success("User Deleted Successfully!", icon="✔️")
-                                    st.toast("User Deleted Successfully!", icon="✔️", duration="long")
-                                    st.session_state.confirm_delete_user_id = None
+                                try:
+                                    with st.spinner("Deleting user..."):
+                                        with conn.session as s:
+                                            s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
+                                            s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
+                                            s.commit()
+                                        # Log the delete action
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "deleted user",
+                                            f"User ID: {selected_user.id}, Username: {selected_user.username}"
+                                        )
+                                        st.success("User Deleted Successfully!", icon="✔️")
+                                        st.toast("User Deleted Successfully!", icon="✔️", duration="long")
+                                        st.session_state.confirm_delete_user_id = None
+                                except Exception as e:
+                                    st.error(f"❌ Database error while deleting user: {str(e)}")
 
         
 

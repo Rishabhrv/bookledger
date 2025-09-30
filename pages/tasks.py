@@ -300,34 +300,178 @@ def get_late_submitters_for_manager(conn, manager_id):
         st.error(f"Error fetching late submitters: {e}")
         return []
 
-# --- Dialogs ---
-@st.dialog("➕ Add New Entry")
+
+@st.dialog("⚙️ Manage Entry", width="small")
+def manage_work_entry(conn, work_entry_row, start_date, end_date):
+    """A single dialog for both editing and deleting a work entry, including new types."""
+    entry_type_map = {
+        "work": "Work", "holiday": "Holiday", "leave": "Leave", "half_day": "Half Day",
+        "no_internet": "No Internet", "power_cut": "Power Cut", "other": "Other"
+    }
+    entry_types = list(entry_type_map.values())
+    current_entry_type = entry_type_map.get(work_entry_row['entry_type'], "Work")
+
+    try:
+        default_index = entry_types.index(current_entry_type)
+    except ValueError:
+        default_index = 0
+
+    # --- Edit Form ---
+    with st.form(f"edit_entry_form_{work_entry_row['id']}"):
+        st.subheader("Edit Entry Details")
+
+        entry_type_selection = st.selectbox(
+            "Entry Type",
+            entry_types,
+            index=default_index,
+            key=f"entry_type_edit_{work_entry_row['id']}"
+        )
+
+        work_date = st.date_input(
+            "Date",
+            value=pd.to_datetime(work_entry_row['work_date']).date(),
+            min_value=start_date,
+            max_value=end_date
+        )
+
+        # Logic to display correct fields based on selected entry type
+        if entry_type_selection == "Work":
+            work_name = st.text_input("Work Title", value=work_entry_row.get('work_name', ''), placeholder="e.g., Developed login page")
+            work_description = st.text_area("Description", value=work_entry_row.get('work_description', '') or '', placeholder="e.g., Implemented frontend and backend...")
+            work_duration = st.number_input("Time (hours)", min_value=0.25, max_value=8.0, value=float(work_entry_row.get('work_duration', 1.0)), step=0.25)
+            reason = None
+        elif entry_type_selection == "Holiday":
+            work_name = entry_type_selection
+            work_description = None
+            reason = st.text_input("Holiday Name", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Independence Day")
+            work_duration = 8.0
+        elif entry_type_selection == "Leave":
+            work_name = entry_type_selection
+            work_description = None
+            reason = st.text_area("Reason for Leave", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Personal reason")
+            work_duration = 8.0
+        elif entry_type_selection == "Half Day":
+            work_name = entry_type_selection
+            work_description = None
+            reason = st.text_area("Reason for Half Day", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Doctor's appointment")
+            work_duration = 4.0
+        elif entry_type_selection in ("No Internet", "Power Cut"):
+            work_name = entry_type_selection
+            work_description = None
+            reason = entry_type_selection
+            st.text_input("Reason", value=entry_type_selection, disabled=True)
+            work_duration = st.number_input("Downtime (hours)", min_value=0.25, max_value=8.0, value=float(work_entry_row.get('work_duration', 1.0)), step=0.25)
+        elif entry_type_selection == "Other":
+            work_name = entry_type_selection
+            work_description = None
+            reason = st.text_area("Reason", value=work_entry_row.get('reason', '') or '', placeholder="Please specify the reason for the downtime.")
+            work_duration = st.number_input("Downtime (hours)", min_value=0.25, max_value=8.0, value=float(work_entry_row.get('work_duration', 1.0)), step=0.25)
+
+
+        col1, col2 = st.columns([1.5, 1])
+        with col1:
+            submit_button = st.form_submit_button("💾 Update Entry", type="primary", use_container_width=True)
+        with col2:
+            delete_button = st.form_submit_button("🗑️ Delete Entry", type="secondary", use_container_width=True)
+
+
+        if submit_button:
+            is_valid = False
+            if entry_type_selection == "Work":
+                is_valid = work_name and work_name.strip()
+            elif entry_type_selection in ("Holiday", "Leave", "Half Day", "Other"):
+                is_valid = reason and reason.strip()
+            elif entry_type_selection in ("No Internet", "Power Cut"):
+                is_valid = True
+
+            if not is_valid:
+                st.warning("A title or reason is required.")
+                return
+
+            try:
+                with conn.session as s:
+                    s.execute(text("""
+                        UPDATE work SET
+                            work_date = :w_date, work_name = :w_name, work_description = :w_desc,
+                            work_duration = :w_dur, entry_type = :e_type, reason = :reason
+                        WHERE id = :work_id
+                    """), {
+                        "work_id": work_entry_row['id'], "w_date": work_date, "w_name": work_name.strip(),
+                        "w_desc": work_description.strip() if work_description else None, "w_dur": work_duration,
+                        "e_type": entry_type_selection.lower().replace(" ", "_"), "reason": reason.strip() if reason else None
+                    })
+                    s.commit()
+                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "UPDATE_ENTRY", f"Updated entry ID: {work_entry_row['id']}")
+                st.toast("Entry updated successfully! ✨")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error updating entry: {e}")
+
+        if delete_button:
+            try:
+                with conn.session as s:
+                    s.execute(text("DELETE FROM work WHERE id = :work_id"), {"work_id": work_entry_row['id']})
+                    s.commit()
+                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "DELETE_ENTRY", f"Deleted work entry ID: {work_entry_row['id']}")
+                st.toast("Entry deleted successfully.", icon="🗑️")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error deleting entry: {e}")
+
+
+@st.dialog("➕ Add New Entry", width="small")
 def add_work_dialog(conn, timesheet_id, start_date, end_date):
-    """Dialog for adding a new work/leave/holiday entry."""
-    entry_type = st.selectbox("Entry Type", ("Work", "Holiday", "Leave", "Half Day"), key="entry_type_modal")
+    """Dialog for adding a new entry, including downtime reasons."""
+    entry_options = ("Work", "Holiday", "Leave", "Half Day", "No Internet", "Power Cut", "Other")
+    entry_type = st.selectbox("Entry Type", entry_options, key="entry_type_modal")
+
     with st.form("new_entry_form"):
         work_date = st.date_input("Date", value=datetime.now(pytz.timezone('Asia/Kolkata')).date(), min_value=start_date, max_value=end_date)
+
+        # Initialize variables
+        work_name = None
+        work_description = None
+        work_duration = 0.0
+        reason = None
+
         if entry_type == "Work":
             work_name = st.text_input("Work Title", placeholder="e.g., Developed login page")
             work_description = st.text_area("Description", placeholder="e.g., Implemented frontend and backend...")
             work_duration = st.number_input("Time (hours)", min_value=0.25, max_value=8.0, value=1.0, step=0.25)
             reason = None
-        else:
-            work_description = None
-            if entry_type == "Holiday":
-                reason = st.text_input("Holiday Name", placeholder="e.g., Independence Day")
-                work_duration = 8.0
-            elif entry_type == "Leave":
-                reason = st.text_area("Reason for Leave", placeholder="e.g., Personal reason")
-                work_duration = 8.0
-            else: # Half Day
-                reason = st.text_area("Reason for Half Day", placeholder="e.g., Doctor's appointment")
-                work_duration = 4.0
+        elif entry_type == "Holiday":
+            reason = st.text_input("Holiday Name", placeholder="e.g., Independence Day")
+            work_duration = 8.0
             work_name = entry_type
+        elif entry_type == "Leave":
+            reason = st.text_area("Reason for Leave", placeholder="e.g., Personal reason")
+            work_duration = 8.0
+            work_name = entry_type
+        elif entry_type == "Half Day":
+            reason = st.text_area("Reason for Half Day", placeholder="e.g., Doctor's appointment")
+            work_duration = 4.0
+            work_name = entry_type
+        elif entry_type in ("No Internet", "Power Cut"):
+            work_name = entry_type
+            reason = entry_type # Reason is the same as the type
+            work_duration = st.number_input("Downtime (hours)", min_value=0.25, max_value=8.0, value=1.0, step=0.25)
+        elif entry_type == "Other":
+            work_name = entry_type
+            reason = st.text_area("Reason", placeholder="Please specify the reason for the downtime.")
+            work_duration = st.number_input("Downtime (hours)", min_value=0.25, max_value=8.0, value=1.0, step=0.25)
 
         if st.form_submit_button("Add Entry", type="primary"):
-            is_valid = (entry_type == "Work" and work_name and work_name.strip()) or \
-                       (entry_type != "Work" and reason and reason.strip())
+            # Validation Logic
+            is_valid = False
+            if entry_type == "Work":
+                is_valid = work_name and work_name.strip()
+            elif entry_type in ("Holiday", "Leave", "Half Day", "Other"):
+                is_valid = reason and reason.strip()
+            elif entry_type in ("No Internet", "Power Cut"):
+                is_valid = True # Always valid as reason is pre-filled
+
             if not is_valid:
                 st.warning("A title or reason is required.")
                 return
@@ -343,7 +487,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
                         "e_type": entry_type.lower().replace(" ", "_"), "reason": reason.strip() if reason else None
                     })
                     s.commit()
-                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, f"ADD_ENTRY", f"Added {entry_type} entry for {work_duration} hours")
+                # log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, f"ADD_ENTRY", f"Added {entry_type} entry for {work_duration} hours")
                 st.toast(f"Entry added to your timesheet! 🎉")
                 time.sleep(1)
                 st.rerun()
@@ -404,41 +548,58 @@ def reject_timesheet_dialog(conn, timesheet_id):
             except Exception as e:
                 st.error(f"Error rejecting timesheet: {e}")
 
-# --- UI Rendering Functions ---
-def render_work_entry(conn, work_row, is_editable):
-    """Renders a single work entry."""
+def render_work_entry(conn, work_row, is_editable, week_bounds):
+    """Renders a single work entry with one 'Manage' button and new icons."""
     with st.container(border=True):
         col1, col2 = st.columns([0.9, 0.1])
         with col1:
             entry_type = work_row.get('entry_type', 'work')
-            icon_map = {'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗'}
+            icon_map = {
+                'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗',
+                'no_internet': '🌐', 'power_cut': '🔌', 'other': '❓'
+            }
             if entry_type in icon_map:
                 st.markdown(f"{icon_map[entry_type]} **{work_row['work_name']}**")
-                st.caption(f"Reason: {work_row['reason']}")
-            else:
+                # Only show reason caption if it's meaningful (not redundant)
+                if entry_type in ['holiday', 'leave', 'half_day', 'other'] and work_row.get('reason'):
+                    st.caption(f"Reason: {work_row['reason']}")
+            else:  # 'work' type
                 st.markdown(f"**{work_row['work_name']}**")
-                if work_row['work_description']:
+                if work_row.get('work_description'):
                     st.caption(f"{work_row['work_description']}")
             st.markdown(f"**`{float(work_row['work_duration']):.2f} hrs`**")
         with col2:
             if is_editable:
-                work_id = work_row['id']
-                st.button("🗑️", key=f"del_{work_row['id']}", on_click=delete_work_entry,
-                          args=(conn, work_id), use_container_width=True, help="Delete this entry")
+                st.button(
+                    "⚙️",
+                    key=f"manage_{work_row['id']}",
+                    on_click=manage_work_entry,
+                    args=(conn, work_row, week_bounds['start'], week_bounds['end']),
+                    use_container_width=True,
+                    help="Manage this entry (Edit or Delete)"
+                )
+
 
 
 def render_weekly_work_grid(conn, work_df, start_of_week_date, is_editable=False):
     """Displays work entries in a 6-column grid (Mon-Sat)."""
     days_of_week = [(start_of_week_date + timedelta(days=i)) for i in range(6)]
     cols = st.columns(6)
+
+    # Defines the date boundaries for the entire week
+    week_bounds = {'start': start_of_week_date, 'end': start_of_week_date + timedelta(days=5)}
+
     for i, day_date in enumerate(days_of_week):
         with cols[i]:
             st.subheader(f"{day_date.strftime('%a')}", anchor=False)
             st.caption(f"{day_date.strftime('%d %b')}")
             day_work_df = work_df[work_df['work_date'] == day_date]
+
             if not day_work_df.empty:
                 for _, row in day_work_df.iterrows():
-                    render_work_entry(conn, row, is_editable)
+                    # Passes the full week_bounds dictionary down to the rendering function
+                    render_work_entry(conn, row, is_editable, week_bounds)
+
                 day_working_hours = day_work_df[day_work_df['entry_type'] == 'work']['work_duration'].sum()
                 if day_working_hours > 0:
                     st.markdown(f"**Total Work: `{float(day_working_hours):.2f} hrs`**")
