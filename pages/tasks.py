@@ -27,18 +27,6 @@ token = st.session_state.token
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
-
-# # In a real app, this would be replaced with a secure login system.
-# if 'user_id' not in st.session_state:
-#     st.session_state.user_id = 5 # Admin User ID
-#     st.session_state.username = "Umer"
-#     st.session_state.session_id = str(uuid.uuid4())
-#     st.session_state.role = "user"  # Roles: 'user', 'admin'
-#     # For an admin, 'level' primarily matters if they are also a manager.
-#     # 'report_to' is irrelevant for the admin's own tasks.
-#     st.session_state.level = "worker" # Levels: 'worker', 'reporting_manager', 'both'
-#     st.session_state.report_to = 4 # Admin doesn't report to anyone
-
 # --- Activity Logging ---
 def log_activity(conn, user_id, username, session_id, action, details):
     """Logs user activity to the database."""
@@ -494,24 +482,6 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
             except Exception as e:
                 st.error(f"Error adding entry: {e}")
 
-@st.dialog("Confirm Deletion")
-def delete_work_entry(conn, work_id):
-    """Deletes a specific work entry from the database."""
-    st.warning("Are you sure you want to delete this entry? This action cannot be undone.")
-    c1, c2 = st.columns(2)
-    if c1.button("Yes, Delete", type="primary", use_container_width=True):
-        try:
-            with conn.session as s:
-                s.execute(text("DELETE FROM work WHERE id = :work_id"), {"work_id": work_id})
-                s.commit()
-            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "DELETE_ENTRY", f"Deleted work entry ID: {work_id}")
-            st.toast("Entry deleted successfully.", icon="🗑️")
-            time.sleep(1)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error deleting entry: {e}")
-    if c2.button("Cancel", use_container_width=True):
-        st.rerun()
 
 @st.dialog("Confirm Submission")
 def confirm_submission_dialog(conn, timesheet_id, current_status):
@@ -576,7 +546,8 @@ def render_work_entry(conn, work_row, is_editable, week_bounds):
                     on_click=manage_work_entry,
                     args=(conn, work_row, week_bounds['start'], week_bounds['end']),
                     use_container_width=True,
-                    help="Manage this entry (Edit or Delete)"
+                    help="Manage this entry (Edit or Delete)",
+                    type="tertiary"
                 )
 
 
@@ -665,38 +636,153 @@ def my_timesheet_page(conn):
     col_met1.metric("**Total Logged Hours** (Work + Leave/Holiday)", f"{total_logged_hours:.2f} Hours")
     col_met2.metric("**Total Working Hours** (Actual Work)", f"{working_hours:.2f} Hours")
 
-
 def timesheet_history_page(conn):
-    """Renders the page displaying all past timesheets for the logged-in user."""
     st.subheader("📜 My Timesheet History", anchor=False, divider="rainbow")
-    history_df = get_user_timesheet_history(conn, st.session_state.user_id)
-    if history_df.empty:
-        st.info("No timesheet history found.")
-        return
-    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
-    for _, row in history_df.iterrows():
-        work_df = get_weekly_work(conn, row['id'])
-        date_range_str, start_of_that_week = "", None
-        if not work_df.empty:
-            first_entry_date = work_df['work_date'].min()
-            year = first_entry_date.year
-            start_of_that_week = first_entry_date - timedelta(days=first_entry_date.weekday())
-            date_range_str = get_week_dates_from_week_number(year, row['fiscal_week'])
-        expander_title = (f"**Week {row['fiscal_week']}** {date_range_str} | "
-                          f"Working: **{float(row['total_working_hours']):.2f}h** | "
-                          f"Logged: **{float(row['total_logged_hours']):.2f}h** | "
-                          f"Status: {status_map.get(row['status'], '⚪️')} **{row['status'].upper()}**")
-        with st.expander(expander_title):
-            if not work_df.empty and start_of_that_week:
-                render_weekly_work_grid(conn, work_df, start_of_that_week, is_editable=False)
-            else:
-                st.info("No work entries were found for this timesheet.")
-            if pd.notna(row['review_notes']):
-                st.warning(f"**Manager's Feedback:** {row['review_notes']}", icon="⚠️")
+    inject_custom_css()
 
-# MODIFIED: Dashboard now alerts managers to late submissions.
+    user_id = st.session_state.user_id
+    username = st.session_state.get('username', 'You')  # Assuming username is in session_state; adjust if needed
+
+    available_years, month_by_year = get_available_months_years(conn, user_id)
+    
+    if not available_years:
+        st.info("No timesheet history available.")
+        return
+
+    current_date = datetime.now()
+    default_year = current_date.year if current_date.year in available_years else max(available_years)
+    st.session_state.setdefault('selected_year_hist', default_year)
+
+    available_months_for_year = month_by_year.get(st.session_state['selected_year_hist'], [])
+    if not available_months_for_year:
+        st.session_state['selected_year_hist'] = max(available_years)
+        available_months_for_year = month_by_year[max(available_years)]
+
+    default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
+    st.session_state.setdefault('selected_month_hist', default_month)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.selectbox(
+            "Year",
+            options=available_years,
+            key="selected_year_hist",
+            label_visibility="collapsed"
+        )
+
+    available_months_for_year = month_by_year.get(st.session_state['selected_year_hist'], [])
+
+    with c2:
+        st.selectbox(
+            "Month",
+            options=available_months_for_year,
+            format_func=lambda month: calendar.month_name[month],
+            key="selected_month_hist",
+            label_visibility="collapsed"
+        )
+
+    selected_year = st.session_state['selected_year_hist']
+    selected_month = st.session_state['selected_month_hist']
+
+    monthly_summary = get_monthly_summary(conn, user_id, selected_year, selected_month)
+    
+    total_days = calendar.monthrange(selected_year, selected_month)[1]
+    expected_working_days = 0
+    for day in range(1, total_days + 1):
+        date_obj = date(selected_year, selected_month, day)
+        if date_obj.weekday() == 6:
+            continue
+        if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
+            continue
+        expected_working_days += 1
+    expected_working_hours = expected_working_days * 8
+
+    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
+    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
+    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
+    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
+    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
+
+    lifetime_stats = get_user_lifetime_stats(conn, user_id)
+    total_work_hours_user = lifetime_stats['total_work_hours']
+    leave_days_user = lifetime_stats['leave_days']
+    half_days_user = lifetime_stats['half_days']
+
+    with st.container():
+        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
+        cols = st.columns(5, border=True)
+        with cols[0]:
+            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
+        with cols[1]:
+            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
+        with cols[2]:
+            st.metric("Leave Days", leave_days_month)
+        with cols[3]:
+            st.metric("Half Days", half_days_month)
+        with cols[4]:
+            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+
+    with st.expander("Lifetime Statistics", expanded=False):
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
+        with cols[1]:
+            st.metric("Total Leave Days", leave_days_user)
+        with cols[2]:
+            st.metric("Total Half Days", half_days_user)
+    
+    days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    header_cols = st.columns([1,1,1,1,1,1,0.8])
+    for i, header in enumerate(days_headers):
+        with header_cols[i]:
+            st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+    with header_cols[6]:
+        st.markdown(f'<div class="header-card">View</div>', unsafe_allow_html=True)
+
+    cal = calendar.Calendar()
+    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
+    status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
+    now_date = datetime.now().date()
+    for week in cal.monthdatescalendar(selected_year, selected_month):
+        cols = st.columns([1,1,1,1,1,1,0.8])
+        for i, day_date in enumerate(week[:-1]):
+            with cols[i]:
+                is_current_month = (day_date.month == selected_month)
+                is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
+                is_future = day_date > datetime.now().date()
+                daily_data = monthly_summary.get(day_date, {})
+                render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+        with cols[6]:
+            if any(d.month == selected_month for d in week):
+                week_start_date = week[0]
+                # Get status from one day in the week
+                week_days = [d for d in week[:-1] if d in monthly_summary]
+                timesheet_status = None
+                if week_days:
+                    timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
+                
+                is_future_week = week_start_date > now_date
+                has_timesheet = bool(week_days and timesheet_status)
+                disabled = is_future_week or not has_timesheet
+                
+                if disabled:
+                    button_text = "No Data" if not has_timesheet else "Future"
+                    st.button(button_text, key=f"week_btn_hist_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                else:
+                    status_emoji = status_map.get(timesheet_status, '⚪️')
+                    status_label = status_display.get(timesheet_status, "Unknown")
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_hist_{week_start_date}", use_container_width=True):
+                        st.session_state.show_week_details_for = week_start_date
+                        st.rerun()
+
+    if "show_week_details_for" not in st.session_state:
+        st.session_state.show_week_details_for = None
+        
+    if st.session_state.show_week_details_for:
+        show_weekly_dialog(conn, user_id, username, st.session_state.show_week_details_for, is_manager=False)
+        st.session_state.show_week_details_for = None
+
 def manager_dashboard(conn):
-    """Displays timesheets for manager review (direct reports only)."""
     st.subheader("📋 Manager Dashboard", anchor=False, divider="rainbow")
     
     # Check for and display alerts about late submissions
@@ -704,142 +790,692 @@ def manager_dashboard(conn):
     if late_submitters:
         st.warning(f"**Pending Submissions:** The following users have not submitted their timesheet from last week: **{', '.join(late_submitters)}**.", icon="🔔")
     
-    st.caption("This dashboard shows submitted timesheets from your direct reports.")
-    query = """
-        SELECT t.id, u.username, t.fiscal_week, t.status, t.submitted_at FROM timesheets t
-        JOIN userss u ON t.user_id = u.id
-        WHERE t.manager_id = :manager_id AND t.status IN ('submitted', 'approved', 'rejected')
-        ORDER BY CASE t.status WHEN 'submitted' THEN 1 WHEN 'approved' THEN 2 WHEN 'rejected' THEN 3 END, t.submitted_at DESC
-    """
-    df = conn.query(query, params={"manager_id": st.session_state.user_id}, ttl=0)
-    if df.empty:
-        st.info("No timesheets are pending for your review.")
+    st.caption("Select a direct report to view their timesheets.")
+    inject_custom_css()
+
+    users_df = get_direct_reports(conn, st.session_state.user_id)
+    if users_df.empty:
+        st.info("No direct reports found.")
         return
 
-    status_map = {"approved": "✅", "submitted": "⏳", "rejected": "❌"}
-    for _, row in df.iterrows():
-        work_df = get_weekly_work(conn, row['id'])
-        date_range_str, start_of_week = "", None
-        if not work_df.empty:
-            first_entry = work_df['work_date'].min()
-            year = first_entry.year
-            start_of_week = first_entry - timedelta(days=first_entry.weekday())
-            date_range_str = get_week_dates_from_week_number(year, row['fiscal_week'])
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        selected_user = st.selectbox(
+            "Select Employee",
+            options=users_df['username'],
+            label_visibility="collapsed"
+        )
+    
+    if not selected_user:
+        st.info("Please select an employee to continue.")
+        return
+
+    user_info = users_df[users_df['username'] == selected_user].iloc[0]
+    selected_user_id = user_info['id']
+    
+    available_years, month_by_year = get_available_months_years(conn, selected_user_id)
+    
+    if not available_years:
+        st.info("No timesheet data available for this user.")
+        return
+
+    current_date = datetime.now()
+    default_year = current_date.year if current_date.year in available_years else max(available_years)
+    st.session_state.setdefault('selected_year_mgr', default_year)
+
+    available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
+    if not available_months_for_year:
+        st.session_state['selected_year_mgr'] = max(available_years)
+        available_months_for_year = month_by_year[max(available_years)]
+
+    default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
+    st.session_state.setdefault('selected_month_mgr', default_month)
+
+    with c2:
+        st.selectbox(
+            "Year",
+            options=available_years,
+            key="selected_year_mgr",
+            label_visibility="collapsed"
+        )
+
+    available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
+
+    with c3:
+        st.selectbox(
+            "Month",
+            options=available_months_for_year,
+            format_func=lambda month: calendar.month_name[month],
+            key="selected_month_mgr",
+            label_visibility="collapsed"
+        )
+
+    selected_year = st.session_state['selected_year_mgr']
+    selected_month = st.session_state['selected_month_mgr']
+
+    monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month, statuses=['submitted', 'approved', 'rejected'])
+    
+    total_days = calendar.monthrange(selected_year, selected_month)[1]
+    expected_working_days = 0
+    for day in range(1, total_days + 1):
+        date_obj = date(selected_year, selected_month, day)
+        if date_obj.weekday() == 6:
+            continue
+        if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
+            continue
+        expected_working_days += 1
+    expected_working_hours = expected_working_days * 8
+
+    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
+    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
+    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
+    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
+    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
+
+    lifetime_stats = get_user_lifetime_stats(conn, selected_user_id)
+    total_work_hours_user = lifetime_stats['total_work_hours']
+    leave_days_user = lifetime_stats['leave_days']
+    half_days_user = lifetime_stats['half_days']
+
+    with st.container():
+        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
+        cols = st.columns(5, border=True)
+        with cols[0]:
+            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
+        with cols[1]:
+            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
+        with cols[2]:
+            st.metric("Leave Days", leave_days_month)
+        with cols[3]:
+            st.metric("Half Days", half_days_month)
+        with cols[4]:
+            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+
+    with st.expander("Lifetime Statistics", expanded=False):
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
+        with cols[1]:
+            st.metric("Total Leave Days", leave_days_user)
+        with cols[2]:
+            st.metric("Total Half Days", half_days_user)
+    
+    days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    header_cols = st.columns([1,1,1,1,1,1,0.8])
+    for i, header in enumerate(days_headers):
+        with header_cols[i]:
+            st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+    with header_cols[6]:
+        st.markdown(f'<div class="header-card">View</div>', unsafe_allow_html=True)
+
+
+    cal = calendar.Calendar()
+    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
+    status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
+    now_date = datetime.now().date()
+    for week in cal.monthdatescalendar(selected_year, selected_month):
+        cols = st.columns([1,1,1,1,1,1,0.8])
+        for i, day_date in enumerate(week[:-1]):
+            with cols[i]:
+                is_current_month = (day_date.month == selected_month)
+                is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
+                is_future = day_date > datetime.now().date()
+                daily_data = monthly_summary.get(day_date, {})
+                render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+        with cols[6]:
+            if any(d.month == selected_month for d in week):
+                week_start_date = week[0]
+                # Get status from one day in the week
+                week_days = [d for d in week[:-1] if d in monthly_summary]
+                timesheet_status = None
+                if week_days:
+                    timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
+                
+                is_future_week = week_start_date > now_date
+                has_timesheet = bool(week_days and timesheet_status)
+                disabled = is_future_week or not has_timesheet
+                
+                if disabled:
+                    button_text = "No Data" if not has_timesheet else "Future"
+                    st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                else:
+                    status_emoji = status_map.get(timesheet_status, '⚪️')
+                    status_label = status_display.get(timesheet_status, "Unknown")
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", use_container_width=True):
+                        st.session_state.show_week_details_for = week_start_date
+                        st.rerun()
+
+    if "show_week_details_for" not in st.session_state:
+        st.session_state.show_week_details_for = None
         
-        title = f"{status_map.get(row['status'])} **{row['username']}** - Week {row['fiscal_week']} {date_range_str} (Status: {row['status'].upper()})"
-        with st.expander(title):
-            if not work_df.empty and start_of_week:
-                render_weekly_work_grid(conn, work_df, start_of_week)
-                total_logged_hours = work_df['work_duration'].sum()
-                working_hours = work_df[work_df['entry_type'] == 'work']['work_duration'].sum()
-                m_col1, m_col2 = st.columns(2)
-                m_col1.metric("Total Logged Hours", f"{total_logged_hours:.2f}")
-                m_col2.metric("Total Working Hours", f"{working_hours:.2f}")
-            else:
-                st.info("No work entries found.")
+    if st.session_state.show_week_details_for:
+        show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for, is_manager=True)
+        st.session_state.show_week_details_for = None
 
-            if row['status'] == 'submitted':
-                st.markdown("---")
-                c1, c2 = st.columns(2)
-                if c1.button("Approve", key=f"mgr_approve_{row['id']}", use_container_width=True, type="primary"):
-                    with conn.session as s:
-                        s.execute(text("UPDATE timesheets SET status = 'approved', reviewed_at = NOW() WHERE id = :id"), {"id": row['id']})
-                        s.commit()
-                    st.success(f"Timesheet for {row['username']} approved.")
-                    time.sleep(1)
-                    st.rerun()
-                if c2.button("Reject", key=f"mgr_reject_{row['id']}", use_container_width=True):
-                    reject_timesheet_dialog(conn, row['id'])
+import calendar
+from datetime import datetime, timedelta, date
 
-# NEW & OVERHAULED: Admin Dashboard Page
+
+@st.dialog("Weekly Timesheet Details", width="large")
+def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=False):
+    week_end_date = week_start_date + timedelta(days=6)
+    st.subheader(f"Week Details for {username} ({week_start_date} to {week_end_date})", anchor=False)
+
+    df = get_work_for_week(conn, user_id, week_start_date)
+
+    if df.empty:
+        st.info("No entries for this week.")
+        return
+
+    timesheet_id = df['timesheet_id'].iloc[0]
+    status = df['status'].iloc[0]
+    review_notes = df['review_notes'].iloc[0] if df['review_notes'].iloc[0] else None
+
+    status_map = {"approved": "🟢 Approved", "submitted": "🟠 Submitted", "rejected": "🔴 Rejected", "draft": "🔵 Draft"}
+
+    total_logged = df['work_duration'].sum()
+    total_working = df[df['entry_type'] == 'work']['work_duration'].sum()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Status", status_map.get(status, '⚪️ Unknown'))
+    with col2:
+        st.metric("Total Logged Hours", f"{total_logged:.2f}")
+    with col3:
+        st.metric("Total Working Hours", f"{total_working:.2f}")
+        
+
+    render_weekly_work_grid(conn, df, week_start_date, is_editable=False)
+
+    if review_notes:
+        st.warning(f"**Manager's Feedback:** {review_notes}", icon="⚠️")
+
+    if is_manager and status == 'submitted':
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        if c1.button("Approve", key=f"mgr_approve_{timesheet_id}", use_container_width=True, type="primary"):
+            with conn.session as s:
+                s.execute(text("UPDATE timesheets SET status = 'approved', reviewed_at = NOW() WHERE id = :id"), {"id": timesheet_id})
+                s.commit()
+            st.success(f"Timesheet for {username} approved.")
+            time.sleep(1)
+            st.rerun()
+        if c2.button("Reject", key=f"mgr_reject_{timesheet_id}", use_container_width=True):
+            reject_timesheet_dialog(conn, timesheet_id)
+
+
+def get_monthly_summary(conn, user_id: int, year: int, month: int, statuses: list[str] = None) -> dict:
+    try:
+        start_date = date(year, month, 1)
+        last_day = calendar.monthrange(year, month)[1]
+        end_date = date(year, month, last_day)
+
+        query = """
+            SELECT
+                w.work_date,
+                w.entry_type,
+                w.work_duration,
+                w.work_name,
+                COALESCE(w.work_description, '') AS work_description,
+                t.id AS timesheet_id,
+                t.status
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE
+                t.user_id = :user_id
+                AND w.work_date >= :start_date
+                AND w.work_date <= :end_date
+        """
+        params = {"user_id": user_id, "start_date": start_date, "end_date": end_date}
+        if statuses:
+            query += " AND t.status IN :statuses"
+            params["statuses"] = statuses
+        query += " ORDER BY w.work_date;"
+
+        df = conn.query(sql=query, params=params, ttl=60)
+
+        if df.empty:
+            return {}
+
+        df['work_date'] = pd.to_datetime(df['work_date']).dt.date
+
+        summary_data = {}
+        for work_date, group in df.groupby('work_date'):
+            total_hours = group['work_duration'].sum()
+            statuses_set = set(group['entry_type'])
+            status = 'work'
+            
+            if 'leave' in statuses_set:
+                status = 'leave'
+            elif 'holiday' in statuses_set:
+                status = 'holiday'
+            elif 'half_day' in statuses_set:
+                status = 'half_day'
+            elif 'power_cut' in statuses_set:
+                status = 'power_cut'
+            elif 'no_internet' in statuses_set:
+                status = 'no_internet'
+            elif 'other' in statuses_set:
+                status = 'other'
+            elif len(statuses_set) > 1:
+                status = group['entry_type'].iloc[0]
+            elif len(statuses_set) == 1:
+                status = list(statuses_set)[0]
+
+            type_hours = group.groupby('entry_type')['work_duration'].sum().to_dict()
+
+            holiday_name = None
+            if 'holiday' in statuses_set:
+                holiday_name = group[group['entry_type'] == 'holiday']['work_name'].iloc[0]
+
+            day_summary = {
+                'status': status,
+                'total_hours': total_hours,
+                'type_hours': type_hours,
+                'holiday_name': holiday_name,
+                'timesheet_id': group['timesheet_id'].iloc[0],
+                'timesheet_status': group['status'].iloc[0]
+            }
+            
+            summary_data[work_date] = day_summary
+
+        return summary_data
+
+    except Exception as e:
+        st.error(f"Error fetching monthly summary: {e}")
+        return {}
+
+def get_user_lifetime_stats(conn, user_id: int) -> dict:
+    try:
+        query_work = """
+            SELECT SUM(w.work_duration) AS total_work_hours
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id AND w.entry_type = 'work'
+        """
+        params = {"user_id": user_id}
+        df_work = conn.query(sql=query_work, params=params, ttl=60)
+        total_work_hours = df_work['total_work_hours'].iloc[0] if not df_work.empty else 0
+
+        query_leave = """
+            SELECT COUNT(DISTINCT w.work_date) AS leave_days
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id AND w.entry_type = 'leave'
+        """
+        df_leave = conn.query(sql=query_leave, params=params, ttl=60)
+        leave_days = df_leave['leave_days'].iloc[0] if not df_leave.empty else 0
+
+        query_half = """
+            SELECT COUNT(DISTINCT w.work_date) AS half_days
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id AND w.entry_type = 'half_day'
+        """
+        df_half = conn.query(sql=query_half, params=params, ttl=60)
+        half_days = df_half['half_days'].iloc[0] if not df_half.empty else 0
+
+        return {
+            'total_work_hours': total_work_hours or 0,
+            'leave_days': leave_days,
+            'half_days': half_days
+        }
+
+    except Exception as e:
+        st.error(f"Error fetching lifetime stats: {e}")
+        return {'total_work_hours': 0, 'leave_days': 0, 'half_days': 0}
+
+def get_available_months_years(conn, user_id: int) -> tuple:
+    try:
+        query = """
+            SELECT DISTINCT
+                EXTRACT(YEAR FROM w.work_date) AS year,
+                EXTRACT(MONTH FROM w.work_date) AS month
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id
+            ORDER BY year, month;
+        """
+        params = {"user_id": user_id}
+        df = conn.query(sql=query, params=params, ttl=60)
+        
+        if df.empty:
+            return [], {}
+        
+        years = sorted(df['year'].astype(int).unique().tolist())
+        month_by_year = {y: sorted(df[df['year']==y]['month'].astype(int).tolist()) for y in years}
+        return years, month_by_year
+
+    except Exception as e:
+        st.error(f"Error fetching available months/years: {e}")
+        return [], {}
+
+def get_work_for_week(conn, user_id: int, week_start_date: date) -> pd.DataFrame:
+    try:
+        week_end_date = week_start_date + timedelta(days=6)
+
+        query = """
+            SELECT
+                w.id,
+                w.work_date,
+                w.entry_type,
+                w.work_name,
+                COALESCE(w.work_description, '') AS work_description,
+                w.work_duration,
+                t.id AS timesheet_id,
+                t.status,
+                COALESCE(t.review_notes, '') AS review_notes
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE
+                t.user_id = :user_id
+                AND w.work_date BETWEEN :start_date AND :end_date
+            ORDER BY w.work_date ASC, w.id ASC;
+        """
+        params = {"user_id": user_id, "start_date": week_start_date, "end_date": week_end_date}
+        df = conn.query(sql=query, params=params, ttl=60)
+
+        if not df.empty:
+            df['work_date'] = pd.to_datetime(df['work_date']).dt.date
+        
+        return df
+
+    except Exception as e:
+        st.error(f"Error fetching weekly work details: {e}")
+        return pd.DataFrame()
+
+def get_direct_reports(conn, manager_id: int) -> pd.DataFrame:
+    try:
+        query = """
+            SELECT DISTINCT u.id, u.username FROM userss u
+            JOIN timesheets t ON u.id = t.user_id
+            WHERE t.manager_id = :manager_id
+            ORDER BY u.username;
+        """
+        params = {"manager_id": manager_id}
+        df = conn.query(sql=query, params=params, ttl=60)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching direct reports: {e}")
+        return pd.DataFrame()
+
+def inject_custom_css():
+    st.markdown("""
+        <style>
+            .day-card {
+                padding: 10px;
+                border-radius: 8px;
+                border: 1px solid #ddd;
+                height: 140px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                margin-bottom: 10px;
+            }
+            .day-card:hover {
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                border-color: #bbb;
+            }
+            .day-card-work { background-color: #D4EDDA; } /* Green */
+            .day-card-leave { background-color: #FEE2E2; } /* Red */
+            .day-card-half_day { background-color: #FFEDD5; } /* Orange */
+            .day-card-holiday { background-color: #F3E8FF; } /* Purple */
+            .day-card-power_cut { background-color: #D7CCC8; } /* Brown */
+            .day-card-no_internet { background-color: #FEF9C3; } /* Yellow */
+            .day-card-other { background-color: #DBEAFE; } /* Blue */
+            .day-card-weekend { background-color: #F5F5F5; } /* Grey for Sunday */
+            .day-card-empty { background-color: #FAFAFA; border-style: dashed; } /* Past empty */
+            .day-card-future { background-color: #ECEFF1; } /* Light gray for future */
+            .day-number { font-weight: bold; font-size: 1.2em; text-align: left; }
+            .day-name { font-size: 0.9em; color: #666; }
+            .day-summary { font-size: 0.85em; margin-top: 5px; line-height: 1.3; overflow-y: auto; max-height: 70px; }
+            .header-card {
+                padding-bottom: 0.75rem; /* 12px */
+                font-weight: 600;
+                font-size: 0.75rem; /* 12px */
+                text-align: center;
+                color: #313438; /* Slate 500 */
+                margin-bottom: 1.3rem; /* 8px */
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                border-bottom: 2px solid #d0d2d6; /* Light border instead of hr */
+                background-color: transparent;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 40px;
+            }
+            .status-indicator {
+                font-size: 0.8em;
+                text-align: center;
+                margin-bottom: 5px;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+def render_day_card(day, daily_data, is_current_month, is_weekend, is_future):
+    if not is_current_month:
+        st.markdown('<div class="day-card day-card-empty"></div>', unsafe_allow_html=True)
+        return
+
+    date_obj = day
+    status = daily_data.get('status', 'empty')
+    type_hours = daily_data.get('type_hours', {})
+    holiday_name = daily_data.get('holiday_name')
+
+    css_class = f"day-card-{status}" if status != 'empty' else "day-card-future" if is_future else "day-card-weekend" if is_weekend else "day-card-empty"
+
+    day_name = calendar.day_abbr[date_obj.weekday()]
+
+    summary_lines = []
+    work_hours = type_hours.get('work', 0)
+    non_work_types = {k: v for k, v in type_hours.items() if k != 'work'}
+
+    for typ, hours in sorted(non_work_types.items()):
+        if typ == 'holiday':
+            name = holiday_name or 'Holiday'
+            line = f"🏖️ {name}"
+        else:
+            display_name = {
+                'leave': 'Leave',
+                'half_day': 'Half Day',
+                'power_cut': 'Power Cut',
+                'no_internet': 'No Internet',
+                'other': 'Other',
+            }.get(typ, typ.replace('_', ' ').capitalize())
+            emoji = {
+                'leave': '🌴',
+                'half_day': '🌗',
+                'power_cut': '⚡',
+                'no_internet': '📶',
+                'other': '🔍',
+            }.get(typ, '')
+            line = f"{emoji} {hours:.1f}h {display_name}"
+        summary_lines.append(line)
+
+    if work_hours > 0:
+        summary_lines.append(f"✅ {work_hours:.1f}h Work")
+
+    if not summary_lines:
+        if not is_weekend:
+            summary_lines.append("📅 No Activity")
+
+    summary_text = "<br>".join(summary_lines)
+
+    card_html = f"""
+    <div class="day-card {css_class}">
+        <div>
+            <div class="day-number">{date_obj.day}</div>
+            <div class="day-name">{day_name}</div>
+            <div class="day-summary">{summary_text}</div>
+        </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+
 def admin_dashboard(conn):
-    """Admin dashboard to view and manage all employees' timesheets with enhanced UI."""
     st.subheader("👑 Admin Dashboard", anchor=False, divider="rainbow")
-    st.caption("View and manage timesheets for any employee in the organization.")
+    st.caption("Select an employee and navigate the calendar to view their timesheets.")
+    inject_custom_css()
 
     users_df = get_all_users_with_managers(conn)
     if users_df.empty:
         st.error("Could not load users.")
         return
 
-    selected_user = st.selectbox(
-        "Select an Employee",
-        users_df['username'],
-        index=None,
-        placeholder="Search for an employee..."
-    )
-
-    if not selected_user:
-        st.info("Select an employee from the dropdown to view their timesheet history.", icon="👈")
-        return
-
-    st.markdown("---")
-
-    selected_user_id = users_df[users_df['username'] == selected_user]['id'].iloc[0]
-    manager_name = users_df[users_df['username'] == selected_user]['manager_name'].iloc[0]
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        selected_user = st.selectbox(
+            "Select Employee",
+            options=users_df['username'],
+            label_visibility="collapsed"
+        )
     
-    st.header(f"Timesheet History for: {selected_user}", anchor=False)
-    st.info(f"**Reports to:** {manager_name}", icon="🧑‍💼")
-
-
-    history_df = get_user_timesheet_history(conn, selected_user_id)
-    if history_df.empty:
-        st.warning(f"No timesheet history found for {selected_user}.", icon="📂")
+    if not selected_user:
+        st.info("Please select an employee to continue.")
         return
 
-    status_map = {"approved": "✅", "submitted": "⏳", "rejected": "❌", "draft": "📝"}
-    status_color = {"approved": "green", "submitted": "orange", "rejected": "red", "draft": "blue"}
+    user_info = users_df[users_df['username'] == selected_user].iloc[0]
+    selected_user_id = user_info['id']
+    
+    available_years, month_by_year = get_available_months_years(conn, selected_user_id)
+    
+    if not available_years:
+        st.info("No timesheet data available for this user.")
+        return
 
-    for _, row in history_df.iterrows():
-        work_df = get_weekly_work(conn, row['id'])
-        date_range_str, start_of_week = "", None
-        if not work_df.empty:
-            first_entry = work_df['work_date'].min()
-            year = first_entry.year
-            start_of_week = first_entry - timedelta(days=first_entry.weekday())
-            date_range_str = get_week_dates_from_week_number(year, row['fiscal_week'])
+    current_date = datetime.now()
+    default_year = current_date.year if current_date.year in available_years else max(available_years)
+    st.session_state.setdefault('selected_year', default_year)
 
-        expander_title = (f"{status_map.get(row['status'])} **Week {row['fiscal_week']}** {date_range_str} | "
-                          f"Status: **:{status_color.get(row['status'], 'grey')}[{row['status'].upper()}]**")
+    available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
+    if not available_months_for_year:
+        st.session_state['selected_year'] = max(available_years)
+        available_months_for_year = month_by_year[max(available_years)]
 
-        with st.expander(expander_title):
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Logged Hours", f"{float(row['total_logged_hours']):.2f}h")
-            col2.metric("Working Hours", f"{float(row['total_working_hours']):.2f}h")
-            col3.metric("Status", row['status'].title())
-            
-            st.markdown(
-                f"""
-                <div style="font-size: 0.9rem; padding-left: 5px;">
-                <b>Submitted:</b> {format_timestamp(row['submitted_at'])} <br>
-                <b>Reviewed:</b> {format_timestamp(row['reviewed_at'])}
-                </div>
-                """, unsafe_allow_html=True
-            )
+    default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
+    st.session_state.setdefault('selected_month', default_month)
 
-            if pd.notna(row['review_notes']):
-                st.warning(f"**Review Notes:** {row['review_notes']}", icon="✍️")
-            
-            st.markdown("---")
+    with c2:
+        st.selectbox(
+            "Year",
+            options=available_years,
+            key="selected_year",
+            label_visibility="collapsed"
+        )
 
-            if not work_df.empty and start_of_week:
-                render_weekly_work_grid(conn, work_df, start_of_week, is_editable=False)
-            else:
-                st.info("No work entries found for this timesheet.")
+    available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
 
-            if row['status'] == 'submitted':
-                st.markdown("---")
-                btn_c1, btn_c2 = st.columns(2)
-                if btn_c1.button("Approve", key=f"admin_approve_{row['id']}", use_container_width=True, type="primary"):
-                    with conn.session as s:
-                        s.execute(text("UPDATE timesheets SET status = 'approved', reviewed_at = NOW() WHERE id = :id"), {"id": row['id']})
-                        s.commit()
-                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "ADMIN_APPROVE", f"Admin approved timesheet ID: {row['id']} for user {selected_user}")
-                    st.success(f"Timesheet for {selected_user} approved.")
-                    time.sleep(1)
-                    st.rerun()
-                if btn_c2.button("Reject", key=f"admin_reject_{row['id']}", use_container_width=True):
-                    reject_timesheet_dialog(conn, row['id'])
+    with c3:
+        st.selectbox(
+            "Month",
+            options=available_months_for_year,
+            format_func=lambda month: calendar.month_name[month],
+            key="selected_month",
+            label_visibility="collapsed"
+        )
+
+    selected_year = st.session_state['selected_year']
+    selected_month = st.session_state['selected_month']
+
+    monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month)
+    
+    total_days = calendar.monthrange(selected_year, selected_month)[1]
+    expected_working_days = 0
+    for day in range(1, total_days + 1):
+        date_obj = date(selected_year, selected_month, day)
+        if date_obj.weekday() == 6:
+            continue
+        if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
+            continue
+        expected_working_days += 1
+    expected_working_hours = expected_working_days * 8
+
+    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
+    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
+    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
+    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
+    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
+
+    lifetime_stats = get_user_lifetime_stats(conn, selected_user_id)
+    total_work_hours_user = lifetime_stats['total_work_hours']
+    leave_days_user = lifetime_stats['leave_days']
+    half_days_user = lifetime_stats['half_days']
+
+    with st.container():
+        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
+        cols = st.columns(5, border = True)
+        with cols[0]:
+            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
+        with cols[1]:
+            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
+        with cols[2]:
+            st.metric("Leave Days", leave_days_month)
+        with cols[3]:
+            st.metric("Half Days", half_days_month)
+        with cols[4]:
+            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+
+    with st.expander("Lifetime Statistics", expanded=False):
+        cols = st.columns(3)
+        with cols[0]:
+            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
+        with cols[1]:
+            st.metric("Total Leave Days", leave_days_user)
+        with cols[2]:
+            st.metric("Total Half Days", half_days_user)
+    
+    days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    header_cols = st.columns([1,1,1,1,1,1,0.8], vertical_alignment="bottom")
+    for i, header in enumerate(days_headers):
+        with header_cols[i]:
+            st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+    with header_cols[6]:
+        st.markdown(f'<div class="header-card">Timesheet</div>', unsafe_allow_html=True)
+    
+
+    cal = calendar.Calendar()
+    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
+    status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
+    now_date = datetime.now().date()
+    for week in cal.monthdatescalendar(selected_year, selected_month):
+        cols = st.columns([1,1,1,1,1,1,0.8])
+        for i, day_date in enumerate(week[:-1]):
+            with cols[i]:
+                is_current_month = (day_date.month == selected_month)
+                is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
+                is_future = day_date > datetime.now().date()
+                daily_data = monthly_summary.get(day_date, {})
+                render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+        with cols[6]:
+            if any(d.month == selected_month for d in week):
+                week_start_date = week[0]
+                # Get status from one day in the week
+                week_days = [d for d in week[:-1] if d in monthly_summary]
+                timesheet_status = None
+                if week_days:
+                    timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
+                
+                is_future_week = week_start_date > now_date
+                has_timesheet = bool(week_days and timesheet_status)
+                disabled = is_future_week or not has_timesheet
+                
+                if disabled:
+                    button_text = "No Data" if not has_timesheet else "Future"
+                    st.button(button_text, key=f"week_btn_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                else:
+                    status_emoji = status_map.get(timesheet_status, '⚪️')
+                    status_label = status_display.get(timesheet_status, "Unknown")
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", use_container_width=True):
+                        st.session_state.show_week_details_for = week_start_date
+                        st.rerun()
+
+    if "show_week_details_for" not in st.session_state:
+        st.session_state.show_week_details_for = None
+        
+    if st.session_state.show_week_details_for:
+        show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for)
+        st.session_state.show_week_details_for = None
 
 # --- Main App Runner ---
 def main():
