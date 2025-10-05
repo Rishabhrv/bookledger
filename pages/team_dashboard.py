@@ -1819,7 +1819,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
     
     cont = st.container(border=True)
     with cont:
-        # Custom CSS for search bar and note icon
+        # Custom CSS for search bar and icons
         st.markdown("""
             <style>
             .note-icon {
@@ -1830,6 +1830,13 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             }
             .note-icon:hover {
                 color: #333;
+            }
+            /* New style for history icons */
+            .history-icon {
+                font-size: 1em;
+                color: #8a6d3b;
+                margin-left: 0.5rem;
+                cursor: help;
             }
             </style>
         """, unsafe_allow_html=True)
@@ -1843,7 +1850,6 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     placeholder="Search by Book ID or Title",
                     key=f"search_{section}_{title}",
                     label_visibility="collapsed",
-                    width=700
                 )
                 if search_term:
                     filtered_df = books_df[
@@ -1935,19 +1941,31 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                 st.markdown(f'<span class="header">{col}</span>', unsafe_allow_html=True)
         st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
 
-        # Fetch ongoing corrections for running table
+        # Fetch metadata for books in the current view
         book_ids = tuple(filtered_df['Book ID'].tolist())
-        if book_ids and is_running:
-            query = """
-                SELECT book_id
-                FROM corrections
-                WHERE section = :section AND correction_end IS NULL AND book_id IN :book_ids
+        correction_book_ids = set() # For ONGOING corrections
+        correction_history_ids = set() # For ANY past correction
+
+        if book_ids:
+            # Fetch ongoing corrections for 'Running' table status pill
+            if is_running:
+                query_ongoing = """
+                    SELECT book_id
+                    FROM corrections
+                    WHERE section = :section AND correction_end IS NULL AND book_id IN :book_ids
+                """
+                with conn.session as s:
+                    ongoing_corrections = s.execute(text(query_ongoing), {"section": section, "book_ids": book_ids}).fetchall()
+                    correction_book_ids = set(row.book_id for row in ongoing_corrections)
+            
+            # Fetch all correction history for the new icon indicator
+            query_history = """
+                SELECT DISTINCT book_id FROM corrections
+                WHERE section = :section AND book_id IN :book_ids
             """
             with conn.session as s:
-                ongoing_corrections = s.execute(text(query), {"section": section, "book_ids": book_ids}).fetchall()
-                correction_book_ids = set(row.book_id for row in ongoing_corrections)
-        else:
-            correction_book_ids = set()
+                history_results = s.execute(text(query_history), {"section": section, "book_ids": book_ids}).fetchall()
+                correction_history_ids = {row.book_id for row in history_results}
 
         current_date = datetime.now().date()
         # Worker maps
@@ -1973,6 +1991,15 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             col_idx += 1
             with col_configs[col_idx]:
                 title_text = row['Title']
+
+                # Add indicators for hold and correction history
+                # Check for hold history (assuming 'hold_start' column indicates this)
+                if 'hold_start' in row and pd.notnull(row['hold_start']) and str(row['hold_start']) != '0000-00-00 00:00:00':
+                    title_text += ' <span class="history-icon" title="This book has been on hold before">:material/pause:</span>'
+                # Check for correction history from our fetched set
+                if row['Book ID'] in correction_history_ids:
+                    title_text += ' <span class="history-icon" title="This book has had corrections before">:material/build:</span>'
+                
                 if role == "proofreader":
                     if pd.notnull(row.get('is_publish_only')) and row['is_publish_only'] == 1:
                         title_text += ' <span class="pill publish-only-badge">Publish only</span>'

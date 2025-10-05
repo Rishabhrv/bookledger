@@ -240,15 +240,22 @@ def get_manager_name(conn, manager_id):
         st.error(f"Error fetching manager name: {e}")
         return "Unknown Manager"
 
+
 def submit_timesheet_for_approval(conn, timesheet_id, current_status):
-    """Submits timesheet, updating status and timestamp."""
+    """Submits timesheet, updating status and timestamp (IST timezone)."""
     try:
+        # Get current time in IST
+        ist = pytz.timezone('Asia/Kolkata')
+        submitted_time = datetime.now(ist)
+
         with conn.session as s:
             s.execute(text("""
                 UPDATE timesheets
-                SET status = 'submitted', submitted_at = NOW(), review_notes = NULL
+                SET status = 'submitted',
+                    submitted_at = :submitted_at,
+                    review_notes = NULL
                 WHERE id = :id AND status IN ('draft', 'rejected')
-            """), {"id": timesheet_id})
+            """), {"id": timesheet_id, "submitted_at": submitted_time})
             s.commit()
 
         action = "RESUBMIT_TIMESHEET" if current_status == 'rejected' else "SUBMIT_TIMESHEET"
@@ -260,6 +267,7 @@ def submit_timesheet_for_approval(conn, timesheet_id, current_status):
         time.sleep(1)
     except Exception as e:
         st.error(f"Failed to submit timesheet: {e}")
+
 
 # NEW: Helper to format timestamps gracefully
 def format_timestamp(ts):
