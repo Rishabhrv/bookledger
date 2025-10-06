@@ -720,13 +720,45 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
 
 @st.dialog("➕ Add New Entry", width="small")
 def add_work_dialog(conn, timesheet_id, start_date, end_date):
-    """Dialog for adding a new entry, including downtime reasons."""
+    """Dialog for adding a new entry, including downtime reasons, with support for previous week's unsubmitted timesheet."""
     entry_options = ("Work", "Holiday", "Leave", "Half Day", "No Internet", "Power Cut", "Other")
     entry_type = st.selectbox("Entry Type", entry_options, key="entry_type_modal")
 
-    default_date = st.session_state.get('last_selected_date', datetime.now(pytz.timezone('Asia/Kolkata')).date())
+    ist = pytz.timezone('Asia/Kolkata')
+    today = datetime.now(ist).date()
+    
+    # Check if the previous week's timesheet is unsubmitted (draft or rejected) for the user
+    prev_fiscal_week, prev_start_date, prev_end_date = get_previous_week_details()
+    allow_prev_week = False
+    try:
+        query = """
+            SELECT status
+            FROM timesheets
+            WHERE user_id = :user_id AND fiscal_week = :fiscal_week
+        """
+        result = conn.query(query, params={"user_id": st.session_state.user_id, "fiscal_week": prev_fiscal_week}, ttl=0)
+        if not result.empty and result['status'].iloc[0] in ('draft', 'rejected'):
+            allow_prev_week = True
+    except Exception as e:
+        st.error(f"Error checking previous timesheet status: {e}")
+
+    # Set date range based on whether previous week's timesheet is unsubmitted
+    if allow_prev_week and today.weekday() in [0, 1]:  # Monday or Tuesday
+        min_date = prev_start_date
+        max_date = end_date  # Allow up to current week's end date
+    else:
+        min_date = start_date
+        max_date = end_date
+
+    # Clamp default_date to be within min_date and max_date
+    default_date = st.session_state.get('last_selected_date', today)
+    if default_date < min_date:
+        default_date = min_date
+    elif default_date > max_date:
+        default_date = max_date
+
     with st.form("new_entry_form"):
-        work_date = st.date_input("Date", value=default_date, min_value=start_date, max_value=end_date)
+        work_date = st.date_input("Date", value=default_date, min_value=min_date, max_value=max_date)
 
         # Initialize variables
         work_name = None
@@ -776,6 +808,22 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
             work_duration = hours + minutes / 60.0
 
         if st.form_submit_button("Add Entry", type="primary"):
+            # Determine the correct timesheet_id based on the selected date
+            selected_timesheet_id = timesheet_id
+            if allow_prev_week and work_date <= prev_end_date:
+                try:
+                    query = """
+                        SELECT id
+                        FROM timesheets
+                        WHERE user_id = :user_id AND fiscal_week = :fiscal_week
+                    """
+                    result = conn.query(query, params={"user_id": st.session_state.user_id, "fiscal_week": prev_fiscal_week}, ttl=0)
+                    if not result.empty:
+                        selected_timesheet_id = result['id'].iloc[0]
+                except Exception as e:
+                    st.error(f"Error fetching previous timesheet ID: {e}")
+                    return
+
             # Validation Logic
             is_valid = False
             if entry_type == "Work":
@@ -795,7 +843,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
                         INSERT INTO work (timesheet_id, work_date, work_name, work_description, work_duration, entry_type, reason)
                         VALUES (:ts_id, :w_date, :w_name, :w_desc, :w_dur, :e_type, :reason)
                     """), {
-                        "ts_id": timesheet_id, "w_date": work_date, "w_name": work_name.strip(),
+                        "ts_id": selected_timesheet_id, "w_date": work_date, "w_name": work_name.strip(),
                         "w_desc": work_description.strip() if work_description else None, "w_dur": work_duration,
                         "e_type": entry_type.lower().replace(" ", "_"), "reason": reason.strip() if reason else None
                     })
@@ -930,6 +978,7 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                                 time.sleep(1)
                             except Exception as e:
                                 st.error(f"Error rejecting timesheet: {e}")
+                                
 
 ###################################################################################################################################
 ##################################--------------- Pages----------------------------########################################
