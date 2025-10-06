@@ -1734,7 +1734,7 @@ def main():
         if st.session_state.role == 'admin':
             pages.append("Admin Dashboard")
 
-        # NEW: Set the default page based on role.
+        # NEW: Set the default page based on role and level.
         default_index = 0
         if st.session_state.role == 'admin':
             try:
@@ -1744,6 +1744,13 @@ def main():
                 # Fallback to Manager Dashboard if admin is only a manager.
                 if "Manager Dashboard" in pages:
                     default_index = pages.index("Manager Dashboard")
+        elif st.session_state.level in ['reporting_manager', 'both']:
+            try:
+                # Land on Manager Dashboard for reporting_manager or both.
+                default_index = pages.index("Manager Dashboard")
+            except ValueError:
+                # Fallback to first page if Manager Dashboard is not available.
+                default_index = 0
 
         if not pages:
             st.warning("No pages available for your user role.")
