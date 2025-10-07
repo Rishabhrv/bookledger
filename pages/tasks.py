@@ -579,6 +579,87 @@ def render_status_detail(label: str, person: str, ts: datetime):
         </div>
         """, unsafe_allow_html=True)
     
+    
+def get_submitted_timesheet_users(conn, manager_id):
+    """
+    Retrieves usernames of direct reports who have submitted their timesheets for the current or previous week.
+    
+    Args:
+        conn: Database connection object.
+        manager_id (int): ID of the manager.
+    
+    Returns:
+        list: List of usernames who have submitted their timesheets.
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    today = datetime.now(ist).date()
+    
+    # Determine the fiscal week to check
+    if today.weekday() in [0, 1]:  # Monday or Tuesday, check previous week
+        fiscal_week, _, _ = get_previous_week_details()
+    else:
+        # Assume get_current_week_details() exists to get current week's fiscal week
+        fiscal_week, _, _ = get_current_week_details()  # Replace with actual function if different
+    
+    try:
+        query = """
+            SELECT u.username
+            FROM userss u
+            JOIN timesheets t ON u.id = t.user_id
+            WHERE t.manager_id = :manager_id
+              AND t.fiscal_week = :fiscal_week
+              AND t.status = 'submitted'
+        """
+        df = conn.query(query, params={"manager_id": manager_id, "fiscal_week": fiscal_week}, ttl=0)
+        return df['username'].tolist()
+    except Exception as e:
+        st.error(f"Error fetching submitted timesheet users: {e}")
+        return []
+
+
+def get_user_details(user_id):
+    """
+    Retrieve user details (username, role, associate_id, designation, report_to username) from the database.
+    
+    Args:
+        user_id (int): The ID of the user to fetch details for.
+    
+    Returns:
+        dict: Dictionary containing username, role, associate_id, designation, and report_to (username or None).
+              Returns None if the user is not found or an error occurs.
+    """
+    conn = connect_db()
+    try:
+        query = """
+            SELECT 
+                u.username,
+                u.role,
+                u.associate_id,
+                u.designation,
+                r.username AS report_to
+            FROM userss u
+            LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
+            LEFT JOIN userss r ON uaa.report_to = r.id
+            WHERE u.id = :user_id
+        """
+        result = conn.query(query, params={"user_id": user_id}, ttl=0)
+        
+        if result.empty:
+            return None
+        
+        user_details = {
+            "username": result['username'].iloc[0],
+            "role": result['role'].iloc[0],
+            "associate_id": result['associate_id'].iloc[0],
+            "designation": result['designation'].iloc[0],
+            "report_to": result['report_to'].iloc[0] if not result['report_to'].isna().iloc[0] else None
+        }
+        return user_details
+    
+    except Exception as e:
+        st.error(f"Error fetching user details: {e}")
+        return None
+    
 ###################################################################################################################################
 ##################################--------------- Dialogs----------------------------########################################
 ###################################################################################################################################
@@ -947,33 +1028,59 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
     if review_notes:
         st.warning(f"**Manager's Feedback:** {review_notes}", icon="⚠️")
 
-    # Manager Actions (remains the same)
     if is_manager and status == 'submitted':
         with st.form("timesheet_action_form", border=False):
-            action_col1, action_col2 = st.columns([1,1])
+            action_col1, action_col2 = st.columns(2)
             
-            if action_col1.form_submit_button("Approve", use_container_width=True, type="primary"):
-                try:
-                    # Your existing approval logic here...
-                    st.success(f"Timesheet for {username} approved.")
-                    time.sleep(1)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error approving timesheet: {e}")
+            with action_col1:
+                if st.form_submit_button("Approve", use_container_width=True, type="primary"):
+                    try:
+                        with conn.session as s:
+                            s.execute(
+                                text("UPDATE timesheets SET status = 'approved', reviewed_at = NOW(), review_notes = NULL WHERE id = :id"),
+                                {"id": timesheet_id}
+                            )
+                            s.commit()
+                        log_activity(
+                            conn, 
+                            st.session_state.user_id, 
+                            st.session_state.username, 
+                            st.session_state.session_id, 
+                            "APPROVE_TIMESHEET", 
+                            f"Approved timesheet ID: {timesheet_id}"
+                        )
+                        st.success(f"Timesheet for {username} approved.")
+                        time.sleep(1)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error approving timesheet: {e}")
 
             with action_col2:
-                with st.popover("Request Revision", use_container_width=True):
+                with st.popover("Revision", width="stretch"):
                     notes = st.text_area(
                         "Reason for Rejection", 
                         placeholder="e.g., Please provide more detail for Wednesday's entry.",
                         key=f"reject_notes_{timesheet_id}"
                     )
-                    if st.form_submit_button("Reject", use_container_width=True):
+                    if st.form_submit_button("Reject", use_container_width=True, type="primary"):
                         if not notes.strip():
                             st.warning("A reason for rejection is required.")
                         else:
                             try:
-                                # Your existing rejection logic here...
+                                with conn.session as s:
+                                    s.execute(
+                                        text("UPDATE timesheets SET status = 'rejected', reviewed_at = NOW(), review_notes = :notes WHERE id = :id"),
+                                        {"id": timesheet_id, "notes": notes.strip()}
+                                    )
+                                    s.commit()
+                                log_activity(
+                                    conn, 
+                                    st.session_state.user_id, 
+                                    st.session_state.username, 
+                                    st.session_state.session_id, 
+                                    "REJECT_TIMESHEET", 
+                                    f"Rejected timesheet ID: {timesheet_id}"
+                                )
                                 st.success(f"Timesheet {timesheet_id} has been rejected.")
                                 time.sleep(1)
                             except Exception as e:
@@ -1189,6 +1296,7 @@ def timesheet_history_page(conn):
         show_weekly_dialog(conn, user_id, username, st.session_state.show_week_details_for, is_manager=False)
         st.session_state.show_week_details_for = None
 
+
 def manager_dashboard(conn):
     st.subheader("📋 Manager Dashboard", anchor=False, divider="rainbow")
     
@@ -1196,6 +1304,16 @@ def manager_dashboard(conn):
     late_submitters = get_late_submitters_for_manager(conn, st.session_state.user_id)
     if late_submitters:
         st.warning(f"**Pending Submissions:** The following users have not submitted their timesheet from last week: **{', '.join(late_submitters)}**.", icon="🔔")
+    
+    # Check for and display submitted timesheets as a temporary toast notification
+    if 'submitted_timesheet_notified' not in st.session_state:
+        st.session_state.submitted_timesheet_notified = False
+    
+    if not st.session_state.submitted_timesheet_notified:
+        submitted_users = get_submitted_timesheet_users(conn, st.session_state.user_id)
+        if submitted_users:
+            st.toast(f"**Submitted Timesheets:** {', '.join(submitted_users)} have submitted their timesheet.", icon="✅", duration="infinite")
+            st.session_state.submitted_timesheet_notified = True
     
     st.caption("Select a direct report to view their timesheets.")
     inject_custom_css()
@@ -1314,7 +1432,6 @@ def manager_dashboard(conn):
             st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
     with header_cols[6]:
         st.markdown(f'<div class="header-card">View</div>', unsafe_allow_html=True)
-
 
     cal = calendar.Calendar()
     status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
@@ -1716,9 +1833,13 @@ def main():
 
     conn = connect_db()
 
+    user_details = get_user_details(user_id)
+
     with st.sidebar:
-        st.header(f"Welcome, {st.session_state.username}!")
-        st.caption(f"Role: {st.session_state.role.title()}")
+        st.header(f"Welcome, {user_details['username']}!")
+        st.caption(f"Associate ID: **{user_details['associate_id']}**")
+        st.caption(f"Designation: **{user_details['designation']}**")
+        st.caption(f"Report To: **{user_details['report_to']}**")
         st.markdown("---")
         
         pages = []
