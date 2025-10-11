@@ -671,7 +671,7 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
     """A single dialog for both editing and deleting a work entry, including new types."""
     entry_type_map = {
         "work": "Work", "holiday": "Holiday", "leave": "Leave", "half_day": "Half Day",
-        "no_internet": "No Internet", "power_cut": "Power Cut", "other": "Other"
+        "no_internet": "No Internet", "power_cut": "Power Cut", "system_failure": "System Failure", "other": "Other"
     }
     entry_types = list(entry_type_map.values())
     current_entry_type = entry_type_map.get(work_entry_row['entry_type'], "Work")
@@ -680,6 +680,10 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
         default_index = entry_types.index(current_entry_type)
     except ValueError:
         default_index = 0
+
+    # Initialize session state for tracking entry type changes
+    if f"prev_entry_type_{work_entry_row['id']}" not in st.session_state:
+        st.session_state[f"prev_entry_type_{work_entry_row['id']}"] = current_entry_type
 
     # --- Edit Form ---
     with st.form(f"edit_entry_form_{work_entry_row['id']}"):
@@ -692,6 +696,9 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
             key=f"entry_type_edit_{work_entry_row['id']}"
         )
 
+        # Check if entry type has changed
+        entry_type_changed = st.session_state[f"prev_entry_type_{work_entry_row['id']}"] != entry_type_selection
+
         work_date = st.date_input(
             "Date",
             value=pd.to_datetime(work_entry_row['work_date']).date(),
@@ -701,50 +708,79 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
 
         # Logic to display correct fields based on selected entry type
         if entry_type_selection == "Work":
-            work_name = st.text_input("Work Title", value=work_entry_row.get('work_name', ''), placeholder="e.g., Developed login page")
-            work_description = st.text_area("Description", value=work_entry_row.get('work_description', '') or '', placeholder="e.g., Implemented frontend and backend...")
+            # Only use existing data if entry type hasn't changed
+            work_name_value = '' if entry_type_changed else work_entry_row.get('work_name', '')
+            work_desc_value = '' if entry_type_changed else (work_entry_row.get('work_description', '') or '')
+            duration_value = 1.0 if entry_type_changed else float(work_entry_row.get('work_duration', 1.0))
+            
+            work_name = st.text_input("Work Title", value=work_name_value, placeholder="e.g., Developed login page")
+            work_description = st.text_area("Description", value=work_desc_value, placeholder="e.g., Implemented frontend and backend...")
             col1, col2 = st.columns(2)
             with col1:
-                hours = st.number_input("Hours", min_value=0, max_value=8, value=int(float(work_entry_row.get('work_duration', 1.0))), step=1)
+                hours = st.number_input("Hours", min_value=0, max_value=8, value=int(duration_value), step=1)
             with col2:
-                minutes = st.number_input("Minutes", min_value=0, max_value=59, value=int((float(work_entry_row.get('work_duration', 1.0)) % 1) * 60), step=5)
+                minutes = st.number_input("Minutes", min_value=0, max_value=59, value=int((duration_value % 1) * 60), step=5)
             work_duration = hours + minutes / 60.0
             reason = None
+            
         elif entry_type_selection == "Holiday":
             work_name = entry_type_selection
             work_description = None
-            reason = st.text_input("Holiday Name", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Independence Day")
+            reason_value = '' if entry_type_changed else (work_entry_row.get('reason', '') or '')
+            reason = st.text_input("Holiday Name", value=reason_value, placeholder="e.g., Independence Day")
             work_duration = 0.0
+            
         elif entry_type_selection == "Leave":
             work_name = entry_type_selection
             work_description = None
-            reason = st.text_area("Reason for Leave", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Personal reason")
+            reason_value = '' if entry_type_changed else (work_entry_row.get('reason', '') or '')
+            reason = st.text_area("Reason for Leave", value=reason_value, placeholder="e.g., Personal reason")
             work_duration = 0.0
+            
         elif entry_type_selection == "Half Day":
             work_name = entry_type_selection
             work_description = None
-            reason = st.text_area("Reason for Half Day", value=work_entry_row.get('reason', '') or '', placeholder="e.g., Doctor's appointment")
+            reason_value = '' if entry_type_changed else (work_entry_row.get('reason', '') or '')
+            reason = st.text_area("Reason for Half Day", value=reason_value, placeholder="e.g., Doctor's appointment")
             work_duration = 0.0
+            
         elif entry_type_selection in ("No Internet", "Power Cut"):
             work_name = entry_type_selection
             work_description = None
             reason = entry_type_selection
             st.text_input("Reason", value=entry_type_selection, disabled=True)
+            duration_value = 1.0 if entry_type_changed else float(work_entry_row.get('work_duration', 1.0))
             col1, col2 = st.columns(2)
             with col1:
-                hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=int(float(work_entry_row.get('work_duration', 1.0))), step=1)
+                hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=int(duration_value), step=1)
             with col2:
-                minutes = st.number_input("Downtime Minutes", min_value=0, max_value=59, value=int((float(work_entry_row.get('work_duration', 1.0)) % 1) * 60), step=1)
+                minutes = st.number_input("Downtime Minutes", min_value=0, max_value=59, value=int((duration_value % 1) * 60), step=1)
             work_duration = hours + minutes / 60.0
+            
+        elif entry_type_selection == "System Failure":
+            work_name = entry_type_selection
+            work_description = None
+            reason_value = '' if entry_type_changed else (work_entry_row.get('reason', '') or '')
+            reason = st.text_area("Problem Description", value=reason_value, placeholder="e.g., PC won't boot, Blue screen error, Hardware malfunction...")
+            duration_value = 1.0 if entry_type_changed else float(work_entry_row.get('work_duration', 1.0))
+            col1, col2 = st.columns(2)
+            with col1:
+                hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=int(duration_value), step=1)
+            with col2:
+                minutes = st.number_input("Downtime Minutes", min_value=0, max_value=59, value=int((duration_value % 1) * 60), step=1)
+            work_duration = hours + minutes / 60.0
+            
         elif entry_type_selection == "Other":
             work_name = entry_type_selection
             work_description = None
-            reason = st.text_area("Reason", value=work_entry_row.get('reason', '') or '', placeholder="Please specify the reason for the downtime.")
+            reason_value = '' if entry_type_changed else (work_entry_row.get('reason', '') or '')
+            reason = st.text_area("Reason", value=reason_value, placeholder="Please specify the reason for the downtime.")
+            duration_value = 1.0 if entry_type_changed else float(work_entry_row.get('work_duration', 1.0))
             col1, col2 = st.columns(2)
             with col1:
-                hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=int(float(work_entry_row.get('work_duration', 1.0))), step=1)
+                hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=int(duration_value), step=1)
             with col2:
-                minutes = st.number_input("Downtime Minutes", min_value=0, max_value=59, value=int((float(work_entry_row.get('work_duration', 1.0)) % 1) * 60), step=1)
+                minutes = st.number_input("Downtime Minutes", min_value=0, max_value=59, value=int((duration_value % 1) * 60), step=1)
             work_duration = hours + minutes / 60.0
 
         col1, col2 = st.columns([1.5, 1])
@@ -754,10 +790,13 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
             delete_button = st.form_submit_button("🗑️ Delete Entry", type="secondary", use_container_width=True)
 
         if submit_button:
+            # Update the previous entry type tracker
+            st.session_state[f"prev_entry_type_{work_entry_row['id']}"] = entry_type_selection
+            
             is_valid = False
             if entry_type_selection == "Work":
                 is_valid = work_name and work_name.strip()
-            elif entry_type_selection in ("Holiday", "Leave", "Half Day", "Other"):
+            elif entry_type_selection in ("Holiday", "Leave", "Half Day", "System Failure", "Other"):
                 is_valid = reason and reason.strip()
             elif entry_type_selection in ("No Internet", "Power Cut"):
                 is_valid = True
@@ -793,6 +832,9 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
                     s.execute(text("DELETE FROM work WHERE id = :work_id"), {"work_id": work_entry_row['id']})
                     s.commit()
                 log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "DELETE_ENTRY", f"Deleted work entry ID: {work_entry_row['id']}")
+                # Clean up session state
+                if f"prev_entry_type_{work_entry_row['id']}" in st.session_state:
+                    del st.session_state[f"prev_entry_type_{work_entry_row['id']}"]
                 st.toast("Entry deleted successfully.", icon="🗑️")
                 time.sleep(1)
                 st.rerun()
@@ -801,8 +843,8 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
 
 @st.dialog("➕ Add New Entry", width="small")
 def add_work_dialog(conn, timesheet_id, start_date, end_date):
-    """Dialog for adding a new entry, including downtime reasons, with support for previous week's unsubmitted timesheet."""
-    entry_options = ("Work", "Holiday", "Leave", "Half Day", "No Internet", "Power Cut", "Other")
+    """Dialog for adding a new entry, including downtime reasons with system failure, with support for previous week's unsubmitted timesheet."""
+    entry_options = ("Work", "Holiday", "Leave", "Half Day", "No Internet", "Power Cut", "System Failure", "Other")
     entry_type = st.selectbox("Entry Type", entry_options, key="entry_type_modal")
 
     ist = pytz.timezone('Asia/Kolkata')
@@ -869,9 +911,12 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
             reason = st.text_area("Reason for Half Day", placeholder="e.g., Doctor's appointment")
             work_duration = 0.0
             work_name = entry_type
-        elif entry_type in ("No Internet", "Power Cut"):
+        elif entry_type in ("No Internet", "Power Cut", "System Failure"):
             work_name = entry_type
-            reason = entry_type
+            if entry_type == "System Failure":
+                reason = st.text_area("System Problem", placeholder="e.g., Blue screen error or software crash")
+            else:
+                reason = entry_type
             col1, col2 = st.columns(2)
             with col1:
                 hours = st.number_input("Downtime Hours", min_value=0, max_value=8, value=1, step=1)
@@ -909,7 +954,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
             is_valid = False
             if entry_type == "Work":
                 is_valid = work_name and work_name.strip()
-            elif entry_type in ("Holiday", "Leave", "Half Day", "Other"):
+            elif entry_type in ("Holiday", "Leave", "Half Day", "System Failure", "Other"):
                 is_valid = reason and reason.strip()
             elif entry_type in ("No Internet", "Power Cut"):
                 is_valid = True
@@ -953,10 +998,9 @@ def confirm_submission_dialog(conn, timesheet_id, current_status):
         st.rerun()
 
 
-# --- MODIFIED FUNCTION ---
 @st.dialog("Weekly Timesheet Details", width="large")
-def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=False):
-    """Dialog for viewing weekly timesheet details with a dynamic horizontal layout."""
+def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=False, is_admin = False):
+    """Dialog for viewing weekly timesheet details with a dynamic horizontal layout, including System Failure."""
     week_end_date = week_start_date + timedelta(days=6)
     st.subheader(f"Week Summary for {username}", anchor=False)
     st.caption(f"{week_start_date.strftime('%b %d')} - {week_end_date.strftime('%b %d, %Y')}")
@@ -981,8 +1025,8 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
     leave_count = df[df['entry_type'] == 'leave']['work_date'].nunique()
     half_day_count = df[df['entry_type'] == 'half_day']['work_date'].nunique()
     
-    # **NEW**: Calculate downtime
-    downtime_types = ['power_cut', 'no_internet', 'other']
+    # **MODIFIED**: Include 'system_failure' in downtime types
+    downtime_types = ['power_cut', 'no_internet', 'system_failure', 'other']
     total_downtime = df[df['entry_type'].isin(downtime_types)]['work_duration'].sum()
 
     # --- UI Logic ---
@@ -997,11 +1041,11 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
         if status in ['approved', 'rejected'] and pd.notna(reviewed_at):
             display_items.append({'type': 'detail', 'label': 'Reviewed By', 'person': manager_name, 'ts': reviewed_at})
         
-        # **MODIFIED**: Added 'Downtime' to the list of metrics
+        # **UNCHANGED**: Metrics including downtime
         display_items.extend([
             {'type': 'metric', 'label': 'Logged', 'value': f"{total_logged:.2f} hrs", 'help': 'Total hours for all entry types.'},
             {'type': 'metric', 'label': 'Working', 'value': f"{total_working:.2f} hrs", 'help': 'Total hours logged as "work".'},
-            {'type': 'metric', 'label': 'Downtime', 'value': f"{total_downtime:.2f} hrs", 'help': 'Total hours for power cuts, no internet, or other issues.'},
+            {'type': 'metric', 'label': 'Downtime', 'value': f"{total_downtime:.2f} hrs", 'help': 'Total hours for power cuts, no internet, system failures, or other issues.'},
             {'type': 'metric', 'label': 'Leaves', 'value': f"{leave_count}", 'help': 'Total number of full-day leaves.'},
             {'type': 'metric', 'label': 'Half Days', 'value': f"{half_day_count}", 'help': 'Total number of half-days taken.'}
         ])
@@ -1028,8 +1072,9 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
     if review_notes:
         st.warning(f"**Manager's Feedback:** {review_notes}", icon="⚠️")
 
-    if is_manager and status == 'submitted':
-        with st.form("timesheet_action_form", border=False):
+    # --- Manager Approval/Rejection Logic ---
+    if is_manager or is_admin and status == 'submitted':
+        with st.form(f"timesheet_action_form_{timesheet_id}", border=False):
             action_col1, action_col2 = st.columns(2)
             
             with action_col1:
@@ -1037,8 +1082,15 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                     try:
                         with conn.session as s:
                             s.execute(
-                                text("UPDATE timesheets SET status = 'approved', reviewed_at = NOW(), review_notes = NULL WHERE id = :id"),
-                                {"id": timesheet_id}
+                                text("""
+                                    UPDATE timesheets 
+                                    SET status = 'approved', 
+                                        reviewed_at = CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata',
+                                        review_notes = NULL,
+                                        reviewed_by = :manager_id
+                                    WHERE id = :id
+                                """),
+                                {"id": timesheet_id, "manager_id": st.session_state.user_id}
                             )
                             s.commit()
                         log_activity(
@@ -1047,30 +1099,37 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                             st.session_state.username, 
                             st.session_state.session_id, 
                             "APPROVE_TIMESHEET", 
-                            f"Approved timesheet ID: {timesheet_id}"
+                            f"Approved timesheet ID: {timesheet_id} for user {username}"
                         )
-                        st.success(f"Timesheet for {username} approved.")
+                        st.success(f"Timesheet for {username} approved successfully.")
                         time.sleep(1)
                         st.rerun()
                     except Exception as e:
                         st.error(f"Error approving timesheet: {e}")
 
             with action_col2:
-                with st.popover("Revision", width="stretch"):
+                with st.popover("Request Revision", use_container_width=True):
                     notes = st.text_area(
-                        "Reason for Rejection", 
-                        placeholder="e.g., Please provide more detail for Wednesday's entry.",
-                        key=f"reject_notes_{timesheet_id}"
+                        "Reason for Revision", 
+                        placeholder="e.g., Please provide more detail for Wednesday's System Failure entry.",
+                        key=f"revision_notes_{timesheet_id}"
                     )
-                    if st.form_submit_button("Reject", use_container_width=True, type="primary"):
+                    if st.form_submit_button("Request Revision", use_container_width=True, type="secondary"):
                         if not notes.strip():
-                            st.warning("A reason for rejection is required.")
+                            st.warning("A reason for revision is required.")
                         else:
                             try:
                                 with conn.session as s:
                                     s.execute(
-                                        text("UPDATE timesheets SET status = 'rejected', reviewed_at = NOW(), review_notes = :notes WHERE id = :id"),
-                                        {"id": timesheet_id, "notes": notes.strip()}
+                                        text("""
+                                            UPDATE timesheets 
+                                            SET status = 'rejected', 
+                                                reviewed_at = CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata',
+                                                review_notes = :notes,
+                                                reviewed_by = :manager_id
+                                            WHERE id = :id
+                                        """),
+                                        {"id": timesheet_id, "notes": notes.strip(), "manager_id": st.session_state.user_id}
                                     )
                                     s.commit()
                                 log_activity(
@@ -1078,13 +1137,14 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                                     st.session_state.user_id, 
                                     st.session_state.username, 
                                     st.session_state.session_id, 
-                                    "REJECT_TIMESHEET", 
-                                    f"Rejected timesheet ID: {timesheet_id}"
+                                    "REQUEST_REVISION_TIMESHEET", 
+                                    f"Requested revision for timesheet ID: {timesheet_id} for user {username}"
                                 )
-                                st.success(f"Timesheet {timesheet_id} has been rejected.")
+                                st.success(f"Revision requested for {username}'s timesheet.")
                                 time.sleep(1)
+                                st.rerun()
                             except Exception as e:
-                                st.error(f"Error rejecting timesheet: {e}")
+                                st.error(f"Error requesting revision: {e}")
                                 
 
 ###################################################################################################################################
@@ -1638,7 +1698,7 @@ def admin_dashboard(conn):
         st.session_state.show_week_details_for = None
         
     if st.session_state.show_week_details_for:
-        show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for)
+        show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for, is_admin = True)
         st.session_state.show_week_details_for = None
 
 
@@ -1736,6 +1796,7 @@ def render_day_card(day, daily_data, is_current_month, is_weekend, is_future):
                 'half_day': '🌗',
                 'power_cut': '⚡',
                 'no_internet': '📶',
+                'system_failure': '⚠️',
                 'other': '🔍',
             }.get(typ, '')
             line = f"{emoji} {hours:.1f}h {display_name}"
@@ -1769,7 +1830,8 @@ def render_work_entry(conn, work_row, is_editable, week_bounds):
             entry_type = work_row.get('entry_type', 'work')
             icon_map = {
                 'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗',
-                'no_internet': '🌐', 'power_cut': '🔌', 'other': '❓'
+                'no_internet': '🌐', 'power_cut': '🔌', 'other': '❓',
+                'system_failure': '⚠️'
             }
             if entry_type in icon_map:
                 st.markdown(f"{icon_map[entry_type]} **{work_row['work_name']}**")
