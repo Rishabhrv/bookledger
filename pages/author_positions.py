@@ -22,11 +22,24 @@ user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
 
 
-if user_role != 'admin' and not (
-    user_role == 'user' and 
-    user_app == 'main' and 
-    'Open Author Positions' in user_access 
-):
+def has_access(user_role, user_app, user_access):
+    # Sales app always has access
+    if user_app == 'sales':
+        return True
+    
+    # Admins always have access
+    if user_role == 'admin':
+        return True
+    
+    # Regular users with specific app and permission
+    if (user_role == 'user' and 
+        user_app == 'main' and 
+        'Open Author Positions' in user_access):
+        return True
+    
+    return False
+
+if not has_access(user_role, user_app, user_access):
     st.error("⚠️ Access Denied: You don't have permission to access this page.")
     st.stop()
 

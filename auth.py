@@ -34,7 +34,13 @@ logger.addHandler(handler)
 # Secrets and constants
 JWT_SECRET = st.secrets["general"]["JWT_SECRET"]
 VALID_ROLES = {"admin", "user"}
-VALID_APPS = {"main", "operations", "ijisem", "tasks"}
+VALID_APPS = {
+    "Main": "main",
+    "Operations": "operations",
+    "IJISEM": "ijisem",
+    "Tasks": "tasks",
+    "Sales": "sales"
+} # you have to add in database if you are adding here
 
 # Configuration
 FLASK_AUTH_URL = st.secrets["general"]["FLASK_AUTH_URL"]
@@ -111,7 +117,7 @@ def validate_token():
             logger.error(f"Invalid role: {role}")
             raise jwt.InvalidTokenError(f"Invalid role '{role}'")
         if role != 'admin':
-            if app not in VALID_APPS:
+            if app not in VALID_APPS.values():
                 logger.error(f"Invalid app: {app}")
                 raise jwt.InvalidTokenError(f"Invalid app '{app}'")
             if app == 'main':

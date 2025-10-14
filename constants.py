@@ -2,6 +2,8 @@
 
 from sqlalchemy import text
 import streamlit as st
+from datetime import datetime
+import pytz
 
 ACCESS_TO_BUTTON = {
     # Loop buttons (table)
@@ -49,10 +51,6 @@ def connect_db():
         st.stop()
 
 
-
-from datetime import datetime
-import pytz
-
 def get_page_url(page_path, token):
     """Generate a URL with the token as a query parameter."""
     return f"{BASE_URL}/{page_path}?token={token}"
@@ -81,7 +79,6 @@ def log_activity(conn, user_id, username, session_id, action, details):
             s.commit()
     except Exception as e:
         st.error(f"Error logging activity: {e}")
-
 
 
 def clean_old_logs(conn, days_to_keep=30):

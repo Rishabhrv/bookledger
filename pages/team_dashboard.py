@@ -65,19 +65,6 @@ user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
 token = st.session_state.token
-# if "session_id" not in st.session_state:
-#     st.session_state.session_id = str(uuid.uuid4())
-
-
-# role_user = 'admin'
-# user_app = 'main'
-# user_name = 'Akash'
-# user_access = ['DatadashBoard','Advance' 'Search','Team Dashboard']
-
-#st.write(f"### Welcome {user_name}!")
-# st.write(f"**Role:** {role_user}")
-# st.write(f"**App:** {user_app}")
-# st.write(f"**Access:** {user_access}")
 
 
 section_labels = {
@@ -103,8 +90,6 @@ if role_user == "admin" or (role_user == "user" and user_app == "main" and "Team
     #st.session_state.access = [selected]  # Store as list to match user format
     user_role = section_labels[selected]
 
-
-
 elif role_user == "user" and user_app == "operations":
     # Set user_role from their first access item
     user_role = user_access[0] if user_access else ""
@@ -119,47 +104,6 @@ st.cache_data.clear()
 # Connect to MySQL
 conn = connect_db()
 
-# if user_app == 'operations':
-#     if "activity_logged" not in st.session_state:
-#         log_activity(
-#                     conn,
-#                     st.session_state.user_id,
-#                     st.session_state.username,
-#                     st.session_state.session_id,
-#                     "logged in",
-#                     f"App: {st.session_state.app}, Access: {st.session_state.access[0]}"
-#                 )
-#         st.session_state.activity_logged = True
-
-
-# if user_app == 'main':
-#     # Initialize session state from query parameters
-#     query_params = st.query_params
-#     click_id = query_params.get("click_id", [None])
-#     session_id = query_params.get("session_id", [None])
-
-#     # Set session_id in session state
-#     st.session_state.session_id = session_id
-
-#     # Initialize logged_click_ids if not present
-#     if "logged_click_ids" not in st.session_state:
-#         st.session_state.logged_click_ids = set()
-
-#     # Log navigation if click_id is present and not already logged
-#     if click_id and click_id not in st.session_state.logged_click_ids:
-#         try:
-#             log_activity(
-#                 conn,
-#                 st.session_state.user_id,
-#                 st.session_state.username,
-#                 st.session_state.session_id,
-#                 "navigated to page",
-#                 f"Page: Team Dashboard"
-#             )
-#             st.session_state.logged_click_ids.add(click_id)
-#         except Exception as e:
-#             st.error(f"Error logging navigation: {str(e)}")
-
 
 # Initialize session state
 if "logged_click_ids" not in st.session_state:
@@ -168,7 +112,7 @@ if "activity_logged" not in st.session_state:
     st.session_state.activity_logged = False
 
 # Determine session_id based on access method
-user_app = st.session_state.get("app", "operations")
+user_app = st.session_state.get("app", None)
 if user_app == "main":
     query_params = st.query_params
     session_id = query_params.get("session_id", [None])

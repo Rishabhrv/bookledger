@@ -5,6 +5,7 @@ import pytz
 from sqlalchemy import text
 import time
 from constants import connect_db
+from constants import log_activity
 import uuid
 from auth import validate_token
 import calendar
@@ -30,23 +31,67 @@ token = st.session_state.token
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
-# --- Activity Logging ---
-def log_activity(conn, user_id, username, session_id, action, details):
-    """Logs user activity to the database."""
+
+conn = connect_db()
+
+
+# Initialize session state
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+if "activity_logged" not in st.session_state:
+    st.session_state.activity_logged = False
+
+# Handle session ID logic
+if user_app in ["main", "operations", "sales"]:
+    query_params = st.query_params
+    session_id = query_params.get("session_id", [None])[0]
+    click_id = query_params.get("click_id", [None])[0]
+
+    if not session_id:
+        st.error("Session not initialized. Please access this page from the main dashboard.")
+        st.stop()
+
+    st.session_state.session_id = session_id
+else:
+    # for 'tasks' or any other direct access app
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    click_id = None
+
+# Ensure user_id and username are set
+if not all(key in st.session_state for key in ["user_id", "username"]):
+    st.error("Session not initialized. Please log in again.")
+    st.stop()
+
+# Log login for direct access (tasks)
+if user_app == "tasks" and not st.session_state.activity_logged:
     try:
-        ist = pytz.timezone('Asia/Kolkata')
-        ist_time = datetime.now(ist)
-        with conn.session as s:
-            s.execute(text("""
-                INSERT INTO activity_log (user_id, username, session_id, action, details, timestamp)
-                VALUES (:user_id, :username, :session_id, :action, :details, :timestamp)
-            """), {
-                "user_id": user_id, "username": username, "session_id": session_id,
-                "action": action, "details": details, "timestamp": ist_time.strftime('%Y-%m-%d %H:%M:%S')
-            })
-            s.commit()
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "logged in",
+            f"App: {user_app}, Access: {st.session_state.get('access', ['direct'])[0]}"
+        )
+        st.session_state.activity_logged = True
     except Exception as e:
-        st.error(f"Error logging activity: {e}")
+        st.error(f"Error logging login: {str(e)}")
+
+# Log page access if coming from main page and click_id is new
+if user_app in ["main", "operations", "sales"] and click_id and click_id not in st.session_state.logged_click_ids:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Tasks"
+        )
+        st.session_state.logged_click_ids.add(click_id)
+    except Exception as e:
+        st.error(f"Error logging navigation: {str(e)}")
 
 
 ###################################################################################################################################
@@ -1085,9 +1130,8 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                                 text("""
                                     UPDATE timesheets 
                                     SET status = 'approved', 
-                                        reviewed_at = CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata',
-                                        review_notes = NULL,
-                                        reviewed_by = :manager_id
+                                        reviewed_at = NOW(),
+                                        review_notes = NULL
                                     WHERE id = :id
                                 """),
                                 {"id": timesheet_id, "manager_id": st.session_state.user_id}
@@ -1124,9 +1168,8 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                                         text("""
                                             UPDATE timesheets 
                                             SET status = 'rejected', 
-                                                reviewed_at = CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata',
-                                                review_notes = :notes,
-                                                reviewed_by = :manager_id
+                                                reviewed_at = NOW(),
+                                                review_notes = :notes
                                             WHERE id = :id
                                         """),
                                         {"id": timesheet_id, "notes": notes.strip(), "manager_id": st.session_state.user_id}
@@ -1892,8 +1935,6 @@ def main():
     if 'user_id' not in st.session_state:
         st.warning("Please log in to use the application.")
         st.stop()
-
-    conn = connect_db()
 
     user_details = get_user_details(user_id)
 

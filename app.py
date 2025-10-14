@@ -7,11 +7,12 @@ import re
 import datetime
 import random
 import uuid
-from urllib.parse import urlencode
+from urllib.parse import urlencode, quote
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
 from constants import ACCESS_TO_BUTTON
+from auth import VALID_APPS
 from constants import log_activity
 from constants import connect_db
 from constants import clean_old_logs
@@ -93,10 +94,7 @@ icon_image = small_logo
 ##################################--------------- Token Validation ----------------------------######################
 #######################################################################################################################
 
-chek_time = time.time()
 validate_token()
-total_chek_time = time.time() - chek_time
-
 
 user_role = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
@@ -342,7 +340,8 @@ elif user_role != "admin":
 
 def fetch_book_details(book_id, conn):
     query = f"""
-    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher
+    SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, 
+    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -904,15 +903,28 @@ def manage_users(conn):
         st.error("❌ Access Denied: Only admins can manage users.")
         return
 
-    # Initialize session state for show_passwords and confirm_delete_user_id
+    # Initialize session state
     if "show_passwords" not in st.session_state:
         st.session_state.show_passwords = False
     if "confirm_delete_user_id" not in st.session_state:
         st.session_state.confirm_delete_user_id = None
     if "show_passwords_prev" not in st.session_state:
         st.session_state.show_passwords_prev = st.session_state.show_passwords
+    if "selected_user_for_edit" not in st.session_state:
+        st.session_state.selected_user_for_edit = None
 
-    # One-time database cleanup to fix casing in user_app_access
+    # Fetch unique publishing consultants
+    try:
+        with conn.session as s:
+            publishing_consultants = s.execute(
+                text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
+            ).fetchall()
+            publishing_consultant_names = [pc[0] for pc in publishing_consultants]
+    except Exception as e:
+        st.error(f"❌ Error fetching publishing consultants: {str(e)}")
+        publishing_consultant_names = []
+
+    # Database cleanup
     try:
         with conn.session as s:
             for correct_access in ACCESS_TO_BUTTON.keys():
@@ -930,7 +942,7 @@ def manage_users(conn):
         st.error(f"❌ Database error during cleanup: {str(e)}")
         return
 
-    # Fetch all users and their app access from database
+    # Fetch all users
     try:
         with conn.session as s:
             users = s.execute(
@@ -953,33 +965,34 @@ def manage_users(conn):
         st.error(f"❌ Database error while fetching users: {str(e)}")
         return
     
-    # Tabs for user management
-    tab1, tab2 = st.tabs(["Users", "Edit or Add"])
+    # App configurations
+    app_display_names = list(VALID_APPS.keys())
+    app_db_values = {display: db_value for display, db_value in VALID_APPS.items()}
+    FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
+    LEVEL_SUPPORT_APPS = ["Tasks", "Operations", "Sales"]
 
-    # Tab 1: View Users
+    # Create 3 tabs
+    tab1, tab2, tab3 = st.tabs(["👥 Users Table", "✏️ Edit User", "➕ Add User"])
+
     with tab1:
+        st.write("### Users Overview")
         if not users:
             st.error("❌ No users found in database.")
         else:
-            # Show Password checkbox with logging
             show_passwords = st.checkbox(
-                "Show Passwords",
+                "🔓 Show Passwords",
                 value=st.session_state.show_passwords,
                 key="toggle_passwords",
                 help="Check to reveal all passwords in the table"
             )
             if show_passwords:
-                st.toast("Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️", duration="long")
+                st.toast("⚠️ Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️")
 
-            # Log checkbox toggle
             if show_passwords != st.session_state.show_passwords_prev:
                 try:
                     log_activity(
-                        conn,
-                        st.session_state.user_id,
-                        st.session_state.username,
-                        st.session_state.session_id,
-                        "toggled checkbox",
+                        conn, st.session_state.user_id, st.session_state.username,
+                        st.session_state.session_id, "toggled checkbox",
                         f"Show Passwords changed to '{show_passwords}'"
                     )
                     st.session_state.show_passwords = show_passwords
@@ -987,192 +1000,486 @@ def manage_users(conn):
                 except Exception as e:
                     st.error(f"❌ Error logging activity: {str(e)}")
 
-            # Prepare data for st.data_editor
-            user_data = [
-                {
-                    "ID": user.id,
-                    "Username": user.username,
-                    "Email": user.email or "",
-                    "Associate ID": user.associate_id or "",
-                    "Designation": user.designation or "",
-                    "Password": user.password if st.session_state.show_passwords else "••••••••",
-                    "Real_Password": user.password,  # Hidden column
-                    "Role": user.role,
-                    "Apps": user.apps or "",
-                    "Access Types": user.access_types or "",
-                    "Levels": user.levels or "",
-                    "Reports To": user.report_to or "",
-                    "Start Date": user.start_date
-                }
-                for user in users
-            ]
+            user_data = [{
+                "ID": user.id, "Username": user.username, "Email": user.email or "",
+                "Associate ID": user.associate_id or "", "Designation": user.designation or "",
+                "Password": user.password if st.session_state.show_passwords else "••••••••",
+                "Real_Password": user.password, "Role": user.role.capitalize() if user.role else "",
+                "Apps": user.apps or "", "Access Types": user.access_types or "",
+                "Levels": user.levels or "", "Reports To": user.report_to or "",
+                "Start Date": user.start_date
+            } for user in users]
+            
             df = pd.DataFrame(user_data)
-
-            # Display table
             st.data_editor(
-                df,
-                width="stretch",
-                hide_index=True,
-                disabled=["ID", "Username", "Email", "Associate ID", "Designation", "Password", "Real_Password", "Role", "Apps", "Access Types", "Levels", "Reports To", "Start Date"],
+                df, width="stretch", hide_index=True,
+                disabled=["ID", "Username", "Email", "Associate ID", "Designation", 
+                         "Password", "Real_Password", "Role", "Apps", "Access Types", 
+                         "Levels", "Reports To", "Start Date"],
                 column_config={
-                    "ID": st.column_config.NumberColumn("ID", help="Unique user ID", disabled=True),
-                    "Username": st.column_config.TextColumn("Username", help="User's username"),
-                    "Email": st.column_config.TextColumn("Email", help="User's email address"),
-                    "Associate ID": st.column_config.TextColumn("Associate ID", help="User's associate ID"),
-                    "Designation": st.column_config.TextColumn("Designation", help="User's designation"),
-                    "Password": st.column_config.TextColumn("Password", help="Password (masked by default)"),
-                    "Real_Password": None,  # Hide this column
-                    "Role": st.column_config.TextColumn("Role", help="User's role"),
-                    "Apps": st.column_config.TextColumn("Apps", help="User's app assignments"),
-                    "Access Types": st.column_config.TextColumn("Access Types", help="User's access permissions"),
-                    "Levels": st.column_config.TextColumn("Levels", help="User's level for tasks app"),
-                    "Reports To": st.column_config.TextColumn("Reports To", help="User this person reports to"),
-                    "Start Date": st.column_config.DateColumn("Start Date", help="Data access start date")
+                    "ID": st.column_config.NumberColumn("ID", disabled=True),
+                    "Password": st.column_config.TextColumn("Password"),
+                    "Real_Password": None,
+                    "Role": st.column_config.SelectboxColumn("Role", options=["Admin", "User"]),
+                    "Start Date": st.column_config.DateColumn("Start Date")
                 },
-                column_order=["ID", "Username", "Email", "Associate ID", "Designation", "Role", "Apps", "Access Types", "Levels", "Reports To", "Start Date", "Password"],
-                num_rows="fixed",
-                key="user_table"
+                column_order=["ID", "Username", "Email", "Associate ID", "Designation", 
+                             "Role", "Apps", "Access Types", "Levels", "Reports To", 
+                             "Start Date", "Password"],
+                num_rows="fixed", key="user_table"
             )
-    
-    with tab2:
-        edit_user_col, add_user_col = st.columns(2)
 
-        with add_user_col:
-            st.write("#### Add New User")
+    with tab2:
+
+        tab_col1, _ = st.columns([2,1])
+
+        with tab_col1:
+            st.write("### ✏️ Edit Existing User")
+            if not users:
+                st.error("❌ No users found in database.")
+                st.stop()
+
             with st.container(border=True):
+                user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
+                selected_user_key = st.selectbox(
+                    "Select User to Edit", 
+                    options=list(user_dict.keys()), 
+                    key="edit_user_select",
+                    format_func=lambda x: x
+                )
+                selected_user = user_dict[selected_user_key]
+
+            with st.container(border=True):
+                
+                if selected_user.id == 1:
+                    st.warning("⚠️ Primary admin (ID: 1) - Limited editing capabilities.")
+
+                # Check if current user is Sales app user
+                try:
+                    with conn.session as s:
+                        uaa = s.execute(
+                            text("SELECT app, access_type, level, report_to, start_date FROM user_app_access WHERE user_id = :user_id"),
+                            {"user_id": selected_user.id}
+                        ).fetchone()
+                        is_sales_user = uaa and uaa.app and uaa.app.lower() == 'sales'
+                        current_app_db = uaa.app if uaa else None
+                        current_access_type = uaa.access_type if uaa else None
+                        current_level = uaa.level if uaa else None
+                        current_report_to = uaa.report_to if uaa else None
+                        current_start_date = uaa.start_date if uaa else None
+                except:
+                    is_sales_user = False
+                    current_app_db = None
+                    current_access_type = None
+                    current_level = None
+                    current_report_to = None
+                    current_start_date = None
+
+                current_app_display = next((display for display, db_val in app_db_values.items() if db_val == current_app_db), "Main")
+
+                # Basic Information Section
+                st.subheader("👤 Basic Information")
                 col1, col2 = st.columns(2)
                 with col1:
-                    new_username = st.text_input("Username", key="new_username", placeholder="Enter username")
-                    new_email = st.text_input("Email", key="new_email", placeholder="Enter email")
+                    if is_sales_user and publishing_consultant_names:
+                        st.text_input(
+                            "Username", value=selected_user.username, disabled=True,
+                            help="💡 Sales users must use publishing consultant names. Contact admin to change."
+                        )
+                        new_username = selected_user.username
+                        st.info(f"👤 Publishing Consultant: **{new_username}**")
+                    else:
+                        new_username = st.text_input(
+                            "Username", value=selected_user.username,
+                            key=f"edit_username_{selected_user.id}"
+                        )
+                    
+                    new_email = st.text_input(
+                        "Email", value=selected_user.email or "",
+                        key=f"edit_email_{selected_user.id}"
+                    )
+                
                 with col2:
-                    new_password = st.text_input("Password", key="new_password", type="password", placeholder="Enter password")
-                    new_role = st.selectbox("Role", options=["Admin", "User"], format_func=lambda x: x.capitalize(), key="new_role")
+                    new_password = st.text_input(
+                        "Password", value="", type="password",
+                        key=f"edit_password_{selected_user.id}",
+                        placeholder="Leave empty to keep current"
+                    )
+                    
+                    current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
+                    if selected_user.id == 1:
+                        st.selectbox("Role", options=["Admin"], disabled=True, key=f"edit_role_{selected_user.id}")
+                        new_role = "Admin"
+                    else:
+                        new_role = st.selectbox(
+                            "Role", options=["Admin", "User"],
+                            index=["Admin", "User"].index(current_role),
+                            key=f"edit_role_{selected_user.id}"
+                        )
 
-                col3, col4 = st.columns(2)
-                col5, col6 = st.columns(2)
-                new_associate_id = None
-                new_designation = None
-                new_app = None
-                new_access_type = None
-                new_level = None
-                new_report_to = None
-                new_start_date = None
+                # Application and Access Section
+                st.write("---")
+                st.subheader("🔧 Application & Access")
+                col_app1, col_app2 = st.columns(2)
+                with col_app1:
+                    if new_role == "Admin":
+                        st.selectbox("Application", options=["Main"], disabled=True, key=f"edit_app_admin_{selected_user.id}")
+                        new_app = "Main"
+                    else:
+                        new_app = st.selectbox(
+                            "Application", options=app_display_names,
+                            format_func=lambda x: x.capitalize(),
+                            index=app_display_names.index(current_app_display) if current_app_display in app_display_names else 0,
+                            key=f"edit_app_select_{selected_user.id}"
+                        )
 
-                if new_role == "Admin":
-                    new_app = "main"
-                    with col3:
-                        new_associate_id = st.text_input("Associate ID", key="new_associate_id", disabled=True)
-                        st.selectbox("Application", options=["Main"], disabled=True, key="new_app")
-                    with col4:
-                        new_designation = st.text_input("Designation", key="new_designation", placeholder="Enter designation")
-                        st.text_input("Access Permissions", value="", disabled=True, key="new_access_type")
-                    with col5:
-                        st.selectbox("Access Level", options=["None"], disabled=True, key="new_level")
-                    with col6:
-                        st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to")
-                    new_start_date = st.date_input("Start Date", value=None, disabled=True, key="new_start_date")
+                with col_app2:
+                    access_options = (
+                        list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
+                        else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
+                        else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
+                    )
+                    
+                    current_access = current_access_type.split(",") if current_access_type else []
+                    current_access = [acc.strip() for acc in current_access if acc.strip() in access_options]
+                    
+                    if new_app == "Main":
+                        new_access_type = st.multiselect(
+                            "Access Permissions", options=access_options,
+                            default=current_access, key=f"edit_access_type_{selected_user.id}"
+                        )
+                    elif new_app in FULL_ACCESS_APPS:
+                        default_access = current_access_type if current_access_type in access_options else "Full Access"
+                        new_access_type = st.selectbox(
+                            "Access Permissions", options=access_options,
+                            index=access_options.index(default_access) if default_access in access_options else 0,
+                            key=f"edit_access_type_full_{selected_user.id}"
+                        )
+                    else:
+                        default_access = current_access_type if current_access_type in access_options else (access_options[0] if access_options else "")
+                        new_access_type = st.selectbox(
+                            "Access Permissions", options=access_options,
+                            index=access_options.index(default_access) if default_access in access_options else 0,
+                            key=f"edit_access_type_ops_{selected_user.id}"
+                        )
+
+                # Additional Information
+                st.write("---")
+                st.subheader("📋 Additional Information")
+                col_add1, col_add2 = st.columns(2)
+                with col_add1:
+                    new_associate_id = st.text_input(
+                        "Associate ID", value=selected_user.associate_id or "",
+                        key=f"edit_associate_id_{selected_user.id}"
+                    )
+                with col_add2:
+                    new_designation = st.text_input(
+                        "Designation", value=selected_user.designation or "",
+                        key=f"edit_designation_{selected_user.id}"
+                    )
+
+                # Level and Reports To
+                show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
+                if show_level_report:
+                    st.write("---")
+                    col_level1, col_level2 = st.columns(2)
+                    with col_level1:
+                        current_level_display = "Worker" if current_level == "worker" else "Reporting Manager" if current_level == "reporting_manager" else "Both"
+                        new_level_display = st.selectbox(
+                            "Access Level", options=["Worker", "Reporting Manager", "Both"],
+                            index=["Worker", "Reporting Manager", "Both"].index(current_level_display) if current_level_display in ["Worker", "Reporting Manager", "Both"] else 0,
+                            key=f"edit_level_{selected_user.id}"
+                        )
+                        new_level = new_level_display.lower().replace(" ", "_")
+                    
+                    with col_level2:
+                        if new_level in ["worker", "both"]:
+                            report_to_options = ["None"] + [f"{user.username} (ID: {user.id})" for user in users]
+                            current_report_to_display = "None"
+                            if current_report_to:
+                                try:
+                                    with conn.session as s:
+                                        report_user = s.execute(
+                                            text("SELECT username FROM userss WHERE id = :id"),
+                                            {"id": current_report_to}
+                                        ).fetchone()
+                                        if report_user:
+                                            current_report_to_display = f"{report_user[0]} (ID: {current_report_to})"
+                                except:
+                                    pass
+                            
+                            new_report_to_display = st.selectbox(
+                                "Reports To", options=report_to_options,
+                                index=report_to_options.index(current_report_to_display),
+                                key=f"edit_report_to_{selected_user.id}"
+                            )
+                            new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if " (ID: " in new_report_to_display else None
+                        else:
+                            new_report_to = None
+                            st.selectbox("Reports To", options=["None"], disabled=True, key=f"edit_report_to_disabled_{selected_user.id}")
                 else:
-                    with col3:
-                        new_associate_id = st.text_input("Associate ID", key="new_associate_id", placeholder="Enter associate ID")
-                        new_app = st.selectbox("Application", options=["Main", "Operations", "IJISEM", "Tasks"], format_func=lambda x: x.capitalize(), key="new_app_select")
-                    with col4:
-                        new_designation = st.text_input("Designation", key="new_designation", placeholder="Enter designation")
+                    new_level = None
+                    new_report_to = None
+
+                # Start Date
+                new_start_date = st.date_input(
+                    "Start Date", value=current_start_date,
+                    key=f"edit_start_date_{selected_user.id}",
+                    disabled=new_app != "Main"
+                )
+
+                # Action Buttons
+                st.write("---")
+                col_btn1, col_btn2 = st.columns([3, 1])
+                with col_btn1:
+                    if st.button("💾 Save Changes", key=f"save_edit_{selected_user.id}", type="primary", use_container_width=True):
+                        if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+                            st.error("❌ Invalid email format.")
+                        else:
+                            try:
+                                with st.spinner("Saving changes..."):
+                                    with conn.session as s:
+                                        # Update users table
+                                        s.execute(
+                                            text("""
+                                                UPDATE userss SET username = :username, email = :email,
+                                                associate_id = :associate_id, designation = :designation,
+                                                password = :password, role = :role WHERE id = :id
+                                            """),
+                                            {
+                                                "username": new_username,
+                                                "email": new_email or None,
+                                                "associate_id": new_associate_id or None,
+                                                "designation": new_designation or None,
+                                                "password": new_password if new_password else selected_user.password,
+                                                "role": new_role.lower(),
+                                                "id": selected_user.id
+                                            }
+                                        )
+                                        
+                                        # Update user_app_access
+                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :user_id"), {"user_id": selected_user.id})
+                                        
+                                        if new_role != "Admin" and new_app:
+                                            db_app_value = app_db_values.get(new_app, new_app.lower())
+                                            access_value = (
+                                                ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
+                                                else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
+                                                else None
+                                            )
+                                            s.execute(
+                                                text("""
+                                                    INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                    VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                """),
+                                                {
+                                                    "user_id": selected_user.id, "app": db_app_value,
+                                                    "access_type": access_value, "level": new_level,
+                                                    "report_to": new_report_to, "start_date": new_start_date
+                                                }
+                                            )
+                                        s.commit()
+                                    
+                                    log_activity(
+                                        conn, st.session_state.user_id, st.session_state.username,
+                                        st.session_state.session_id, "updated user",
+                                        f"User ID: {selected_user.id}, Username: {new_username}"
+                                    )
+                                    st.success("✅ User Updated Successfully!")
+                                    st.rerun()
+                            except Exception as e:
+                                error_message = str(e).lower()
+                                if "duplicate entry" in error_message and "'username'" in error_message:
+                                    st.error("❌ Username already exists.")
+                                else:
+                                    st.error(f"❌ Database error: {str(e)}")
+
+                with col_btn2:
+                    if selected_user.id != 1:
+                        if st.button("🗑️ Delete", key=f"delete_{selected_user.id}", type="secondary"):
+                            st.session_state.confirm_delete_user_id = selected_user.id
+
+                if st.session_state.confirm_delete_user_id == selected_user.id:
+                    st.warning(f"⚠️ Are you sure you want to delete {selected_user.username}?")
+                    col_confirm1, col_confirm2 = st.columns(2)
+                    with col_confirm1:
+                        if st.button("❌ Cancel", key=f"cancel_delete_{selected_user.id}"):
+                            st.session_state.confirm_delete_user_id = None
+                    with col_confirm2:
+                        if st.button("🗑️ Confirm Delete", key=f"confirm_delete_{selected_user.id}", type="secondary"):
+                            try:
+                                with st.spinner("Deleting user..."):
+                                    with conn.session as s:
+                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
+                                        s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
+                                        s.commit()
+                                    log_activity(
+                                        conn, st.session_state.user_id, st.session_state.username,
+                                        st.session_state.session_id, "deleted user",
+                                        f"User ID: {selected_user.id}, Username: {selected_user.username}"
+                                    )
+                                    st.success("✅ User Deleted Successfully!")
+                                    st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Database error: {str(e)}")
+                            st.session_state.confirm_delete_user_id = None
+
+    with tab3:
+
+        tab3_col1, _ = st.columns([2,1])
+
+        with tab3_col1:
+            st.write("### ➕ Add New User")
+            with st.container(border=True):
+                # Role and Application Selection
+                st.subheader("🔧 Role & Application")
+                col_role1, col_role2 = st.columns(2)
+                with col_role1:
+                    new_role = st.selectbox(
+                        "Role", options=["Admin", "User"],
+                        format_func=lambda x: x.capitalize(),
+                        key="add_role"
+                    )
+                
+                with col_role2:
+                    if new_role == "Admin":
+                        st.selectbox("Application", options=["Main"], disabled=True, key="add_app_admin")
+                        new_app = "Main"
+                    else:
+                        new_app = st.selectbox(
+                            "Application", options=app_display_names,
+                            format_func=lambda x: x.capitalize(),
+                            key="add_app_select"
+                        )
+
+                # Username Section
+                st.write("---")
+                st.subheader("👤 Username")
+                if new_role == "Admin":
+                    new_username = st.text_input("Username", key="add_username_admin", placeholder="Admin username")
+                elif new_app == "Sales" and publishing_consultant_names:
+                    st.info("💡 Sales users must use publishing consultant names for data integrity")
+                    selected_consultant = st.selectbox(
+                        "Select Publishing Consultant",
+                        options=publishing_consultant_names,
+                        key="add_publishing_consultant",
+                        help="Username will be automatically set to the selected consultant name"
+                    )
+                    new_username = selected_consultant
+                    st.success(f"✅ Username: **{new_username}**")
+                else:
+                    new_username = st.text_input("Username", key="add_username", placeholder="Enter username")
+
+                # Contact Information
+                st.write("---")
+                st.subheader("📧 Contact Information")
+                col_contact1, col_contact2 = st.columns(2)
+                with col_contact1:
+                    new_email = st.text_input("Email", key="add_email", placeholder="Enter email")
+                with col_contact2:
+                    new_password = st.text_input("Password", type="password", key="add_password", placeholder="Enter password")
+
+                # Additional Information
+                st.write("---")
+                st.subheader("📋 Additional Information")
+                col_add1, col_add2 = st.columns(2)
+                with col_add1:
+                    new_associate_id = st.text_input("Associate ID", key="add_associate_id", placeholder="Enter associate ID")
+                with col_add2:
+                    new_designation = st.text_input("Designation", key="add_designation", placeholder="Enter designation")
+
+                # Access Permissions
+                if new_role != "Admin":
+                    st.write("---")
+                    st.subheader("🔐 Access Permissions")
+                    with st.container(border=True):
                         access_options = (
                             list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
                             else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
-                            else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
+                            else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
                         )
+                        
                         if new_app == "Main":
                             new_access_type = st.multiselect(
-                                "Access Permissions",
-                                options=access_options,
-                                default=[],
-                                key="new_access_type_select",
-                                help="Select one or more access permissions"
+                                "Access Permissions", options=access_options, default=[],
+                                key="add_access_type_select"
                             )
-                        elif new_app in ["IJISEM", "Tasks"]:
+                        elif new_app in FULL_ACCESS_APPS:
                             new_access_type = st.selectbox(
-                                "Access Permissions",
-                                options=access_options,
-                                key=f"new_access_type_select_{new_app.lower()}",
+                                "Access Permissions", options=access_options, index=0,
+                                key=f"add_access_type_full_{new_app.lower()}",
                                 help=f"{new_app} users have full access by default"
                             )
                         else:
                             new_access_type = st.selectbox(
-                                "Access Permissions",
-                                options=access_options,
-                                key="new_access_type_select_operations",
-                                help="Select one access permission"
+                                "Access Permissions", options=access_options,
+                                key="add_access_type_operations"
                             )
-                            
-                        if new_app in ["Tasks", "Operations"] or (new_app == "Main" and new_access_type and "Tasks" in new_access_type):
-                            with col5:
-                                new_level = st.selectbox(
-                                    "Access Level",
-                                    options=["Worker", "Reporting Manager", "Both"],
-                                    format_func=lambda x: x.replace("_", " ").title(),
-                                    key="new_level_select",
-                                    help="Select access level for tasks"
+
+                        # Level and Reports To
+                        show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
+                        if show_level_report:
+                            col_level1, col_level2 = st.columns(2)
+                            with col_level1:
+                                new_level_display = st.selectbox(
+                                    "Access Level", options=["Worker", "Reporting Manager", "Both"],
+                                    key="add_level_select"
                                 )
-                                new_level = new_level.lower().replace(" ", "_")
-                            with col6:
+                                new_level = new_level_display.lower().replace(" ", "_")
+                            with col_level2:
                                 if new_level in ["worker", "both"]:
                                     report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
-                                    new_report_to = st.selectbox(
-                                        "Reports To",
-                                        options=["None"] + report_to_options,
-                                        key="new_report_to_select",
-                                        help="Select the user this person reports to"
+                                    new_report_to_display = st.selectbox(
+                                        "Reports To", options=["None"] + report_to_options,
+                                        key="add_report_to_select"
                                     )
-                                    new_report_to = new_report_to.split(" (ID: ")[1][:-1] if new_report_to != "None" else None
+                                    new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if new_report_to_display != "None" else None
                                 else:
                                     new_report_to = None
-                                    st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to_select")
+                                    st.selectbox("Reports To", options=["None"], disabled=True, key="add_report_to_disabled")
                         else:
                             new_level = None
-                            with col5:
-                                st.selectbox("Access Level", options=["None"], disabled=True, key="new_level_select")
-                            with col6:
-                                st.selectbox("Reports To", options=["None"], disabled=True, key="new_report_to_select")
-                    new_start_date = st.date_input(
-                        "Start Date",
-                        value=None,
-                        key="new_start_date",
-                        help="Select data access start date" if new_app == "Main" else None,
-                        disabled=new_app != "Main"
-                    )
+                            new_report_to = None
 
-                if st.button("Add User", key="add_user", type="primary"):
+                # Start Date
+                if new_app == "Main":
+                    new_start_date = st.date_input("Start Date", key="add_start_date")
+                else:
+                    new_start_date = None
+
+                # Add Button
+                if st.button("➕ Add User", key="add_user_btn", type="primary", use_container_width=True):
                     if not new_username or not new_password:
                         st.error("❌ Username and password are required.")
                     elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                         st.error("❌ Invalid email format.")
+                    elif new_role != "Admin" and not new_app:
+                        st.error("❌ Application selection is required.")
+                    elif new_app == "Sales" and not publishing_consultant_names:
+                        st.error("❌ No publishing consultants available.")
                     else:
                         try:
                             with st.spinner("Adding user..."):
                                 with conn.session as s:
-                                    # Insert into userss table
                                     s.execute(
                                         text("""
                                             INSERT INTO userss (username, email, associate_id, designation, password, role)
                                             VALUES (:username, :email, :associate_id, :designation, :password, :role)
                                         """),
                                         {
-                                            "username": new_username,
-                                            "email": new_email if new_email else None,
-                                            "associate_id": new_associate_id if new_associate_id else None,
-                                            "designation": new_designation if new_designation else None,
-                                            "password": new_password,
-                                            "role": new_role.lower()
+                                            "username": new_username, "email": new_email or None,
+                                            "associate_id": new_associate_id or None,
+                                            "designation": new_designation or None,
+                                            "password": new_password, "role": new_role.lower()
                                         }
                                     )
                                     new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
                                     
-                                    # Insert into user_app_access table
-                                    if new_role != "Admin":
+                                    if new_role != "Admin" and new_app:
+                                        db_app_value = app_db_values.get(new_app, new_app.lower())
                                         access_value = (
-                                            ",".join(new_access_type) if new_app == "Main" and new_access_type
-                                            else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
+                                            ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
+                                            else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
                                             else None
                                         )
                                         s.execute(
@@ -1181,26 +1488,20 @@ def manage_users(conn):
                                                 VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
                                             """),
                                             {
-                                                "user_id": new_user_id,
-                                                "app": new_app.lower(),
-                                                "access_type": access_value,
-                                                "level": new_level,
-                                                "report_to": new_report_to,
-                                                "start_date": new_start_date
+                                                "user_id": new_user_id, "app": db_app_value,
+                                                "access_type": access_value, "level": new_level,
+                                                "report_to": new_report_to, "start_date": new_start_date
                                             }
                                         )
                                     s.commit()
-                                # Log the add user action
+                                
                                 log_activity(
-                                    conn,
-                                    st.session_state.user_id,
-                                    st.session_state.username,
-                                    st.session_state.session_id,
-                                    "added user",
-                                    f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}, Associate ID: {new_associate_id}, Designation: {new_designation}, Level: {new_level}, Reports To: {new_report_to}"
+                                    conn, st.session_state.user_id, st.session_state.username,
+                                    st.session_state.session_id, "added user",
+                                    f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
                                 )
-                                st.success("User Added Successfully!", icon="✔️")
-                                st.toast("User Added Successfully!", icon="✔️", duration="long")
+                                st.success("✅ User Added Successfully!")
+                                st.rerun()
                         except Exception as e:
                             error_message = str(e).lower()
                             if "duplicate entry" in error_message:
@@ -1208,315 +1509,10 @@ def manage_users(conn):
                                     st.error("❌ Username already exists.")
                                 elif "'email'" in error_message:
                                     st.error("❌ Email already exists.")
-                                elif "'associate_id'" in error_message:
-                                    st.error("❌ Associate ID already exists.")
                                 else:
-                                    st.error(f"❌ Duplicate entry error: {str(e)}")
-                            elif "foreign key" in error_message:
-                                st.error("❌ Invalid 'Reports To' user ID.")
+                                    st.error(f"❌ Duplicate entry: {str(e)}")
                             else:
                                 st.error(f"❌ Database error: {str(e)}")
-
-        # Tab 2: Edit Users
-        with edit_user_col:
-            if not users:
-                st.error("❌ No users found in database.")
-            else:
-                st.write("#### Edit Existing User")
-                with st.container(border=True):
-                    user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
-                    selected_user_name = st.selectbox("Select User", options=list(user_dict.keys()), key="user_select")
-                    selected_user = user_dict[selected_user_name]
-
-                with st.container(border=True):
-                    st.markdown(f"### Editing: <span style='color: #4CAF50'>{selected_user.username}</span>", unsafe_allow_html=True)
-                    
-                    if selected_user.id == 1:
-                        st.warning("⚠️ This is the primary admin (ID: 1). Role cannot be changed, and the user cannot be deleted.")
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        new_username = st.text_input("Username", value=selected_user.username, key=f"username_{selected_user.id}")
-                        new_email = st.text_input("Email", value=selected_user.email or "", key=f"email_{selected_user.id}")
-                    with col2:
-                        new_password = st.text_input("Password", value=selected_user.password or "", key=f"password_{selected_user.id}", type="password")
-                        valid_roles = ["Admin", "User"]
-                        current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
-                        if selected_user.role not in ["admin", "user"]:
-                            st.warning(f"⚠️ Invalid role '{selected_user.role}' detected. Defaulting to 'User'.")
-                        if selected_user.id == 1:
-                            st.selectbox("Role", options=["Admin"], index=0, disabled=True, key=f"role_{selected_user.id}")
-                            new_role = "Admin"
-                        else:
-                            new_role = st.selectbox("Role", options=valid_roles, index=valid_roles.index(current_role), key=f"role_{selected_user.id}")
-
-                    col3, col4 = st.columns(2)
-                    col5, col6 = st.columns(2)
-                    new_associate_id = None
-                    new_designation = None
-                    new_app = None
-                    new_access_type = None
-                    new_level = None
-                    new_report_to = None
-                    new_start_date = None
-
-                    try:
-                        with conn.session as s:
-                            # Fetch user_app_access details for the selected user
-                            uaa = s.execute(
-                                text("""
-                                    SELECT app, access_type, level, report_to, start_date
-                                    FROM user_app_access
-                                    WHERE user_id = :user_id
-                                """),
-                                {"user_id": selected_user.id}
-                            ).fetchone()
-                    except Exception as e:
-                        st.error(f"❌ Database error while fetching user access: {str(e)}")
-                        return
-
-                    if new_role == "Admin":
-                        new_app = "Main"
-                        with col3:
-                            new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", disabled=True, key=f"associate_id_{selected_user.id}")
-                            st.selectbox("Application", options=["Main"], disabled=True, key=f"app_{selected_user.id}")
-                        with col4:
-                            new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
-                            st.text_input("Access Permissions", value="", disabled=True, key=f"access_type_{selected_user.id}")
-                        with col5:
-                            st.selectbox("Access Level", options=["None"], disabled=True, key=f"level_{selected_user.id}")
-                        with col6:
-                            st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_{selected_user.id}")
-                        new_start_date = st.date_input("Start Date", value=None, disabled=True, key=f"start_date_{selected_user.id}")
-                    else:
-                        with col3:
-                            new_associate_id = st.text_input("Associate ID", value=selected_user.associate_id or "", key=f"associate_id_{selected_user.id}", placeholder="Enter associate ID")
-                            current_app = uaa.app.capitalize() if uaa and uaa.app else "Main"
-                            new_app = st.selectbox("Application", options=["Main", "Operations", "IJISEM", "Tasks"], format_func=lambda x: x.capitalize(), index=["Main", "Operations", "IJISEM", "Tasks"].index(current_app) if current_app in ["Main", "Operations", "IJISEM", "Tasks"] else 0, key=f"app_select_{selected_user.id}")
-                        with col4:
-                            new_designation = st.text_input("Designation", value=selected_user.designation or "", key=f"designation_{selected_user.id}", placeholder="Enter designation")
-                            access_options = (
-                                list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
-                                else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
-                                else ["Full Access"] if new_app in ["IJISEM", "Tasks"] else []
-                            )
-                            current_access = uaa.access_type.split(",") if uaa and uaa.access_type and isinstance(uaa.access_type, str) else []
-                            current_access = [acc for acc in current_access if acc in ACCESS_TO_BUTTON.keys() or acc in access_options]
-                            if new_app == "Main":
-                                new_access_type = st.multiselect(
-                                    "Access Permissions",
-                                    options=access_options,
-                                    default=current_access,
-                                    key=f"access_type_select_{selected_user.id}"
-                                )
-                            elif new_app in ["IJISEM", "Tasks"]:
-                                default_access = uaa.access_type if uaa and uaa.access_type in access_options else "Full Access"
-                                new_access_type = st.selectbox(
-                                    "Access Permissions",
-                                    options=access_options,
-                                    index=access_options.index(default_access) if default_access in access_options else 0,
-                                    key=f"access_type_select_{new_app.lower()}_{selected_user.id}",
-                                    help=f"{new_app} users have full access by default"
-                                )
-                            else:
-                                default_access = uaa.access_type if uaa and uaa.access_type in access_options else access_options[0]
-                                new_access_type = st.selectbox(
-                                    "Access Permissions",
-                                    options=access_options,
-                                    index=access_options.index(default_access) if default_access in access_options else 0,
-                                    key=f"access_type_select_operations_{selected_user.id}"
-                                )
-                            if new_app in ["Tasks", "Operations"] or (new_app == "Main" and new_access_type and "Tasks" in new_access_type):
-                                with col5:
-                                    current_level = uaa.level if uaa and uaa.level in ["worker", "reporting_manager", "both"] else "worker"
-                                    new_level = st.selectbox(
-                                        "Access Level",
-                                        options=["Worker", "Reporting Manager", "Both"],
-                                        format_func=lambda x: x.replace("_", " ").title(),
-                                        index=["worker", "reporting_manager", "both"].index(current_level) if current_level in ["worker", "reporting_manager", "both"] else 0,
-                                        key=f"level_select_{selected_user.id}",
-                                        help="Select access level for tasks"
-                                    )
-                                    new_level = new_level.lower().replace(" ", "_")
-                                with col6:
-                                    if new_level in ["worker", "both"]:
-                                        report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
-                                        current_report_to = None
-                                        if uaa and uaa.report_to:
-                                            report_to_user = s.execute(
-                                                text("SELECT username FROM userss WHERE id = :report_to_id"),
-                                                {"report_to_id": uaa.report_to}
-                                            ).fetchone()
-                                            current_report_to = f"{report_to_user.username} (ID: {uaa.report_to})" if report_to_user else "None"
-                                        new_report_to = st.selectbox(
-                                            "Reports To",
-                                            options=["None"] + report_to_options,
-                                            index=report_to_options.index(current_report_to) + 1 if current_report_to and current_report_to in report_to_options else 0,
-                                            key=f"report_to_select_{selected_user.id}",
-                                            help="Select the user this person reports to"
-                                        )
-                                        new_report_to = new_report_to.split(" (ID: ")[1][:-1] if new_report_to != "None" else None
-                                    else:
-                                        new_report_to = None
-                                        st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_select_{selected_user.id}")
-                            else:
-                                new_level = None
-                                with col5:
-                                    st.selectbox("Access Level", options=["None"], disabled=True, key=f"level_select_{selected_user.id}")
-                                with col6:
-                                    st.selectbox("Reports To", options=["None"], disabled=True, key=f"report_to_select_{selected_user.id}")
-                        new_start_date = st.date_input(
-                            "Start Date", 
-                            value=uaa.start_date if uaa and uaa.start_date else None, 
-                            key=f"start_date_{selected_user.id}", 
-                            disabled=new_app != "Main"
-                        )
-
-                    btn_col1, btn_col2 = st.columns([3, 1])
-                    with btn_col1:
-                        if st.button("Save Changes", key=f"save_{selected_user.id}", type="primary"):
-                            if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
-                                st.error("❌ Invalid email format.")
-                            else:
-                                access_value = (
-                                    ",".join(new_access_type) if new_app == "Main" and new_access_type
-                                    else new_access_type if new_app in ["Operations", "IJISEM", "Tasks"] and new_access_type
-                                    else None
-                                )
-                                # Track changes for logging
-                                changes = []
-                                if new_username != selected_user.username:
-                                    changes.append(f"Updated username from '{selected_user.username}' to '{new_username}'")
-                                if new_email != (selected_user.email or ""):
-                                    changes.append(f"Updated email from '{selected_user.email or ''}' to '{new_email}'")
-                                if new_password and new_password != selected_user.password:
-                                    changes.append("Updated password")
-                                if new_role != selected_user.role.capitalize():
-                                    changes.append(f"Updated role from '{selected_user.role}' to '{new_role}'")
-                                if new_associate_id != (selected_user.associate_id or ""):
-                                    changes.append(f"Updated associate_id from '{selected_user.associate_id or ''}' to '{new_associate_id or ''}'")
-                                if new_designation != (selected_user.designation or ""):
-                                    changes.append(f"Updated designation from '{selected_user.designation or ''}' to '{new_designation or ''}'")
-                                if new_app != (uaa.app.capitalize() if uaa and uaa.app else ""):
-                                    changes.append(f"Updated app from '{uaa.app if uaa else ''}' to '{new_app}'")
-                                if access_value != (uaa.access_type if uaa else None):
-                                    changes.append(f"Updated access_type from '{uaa.access_type if uaa else ''}' to '{access_value or ''}'")
-                                if new_level != (uaa.level if uaa else None):
-                                    changes.append(f"Updated level from '{uaa.level if uaa else ''}' to '{new_level or ''}'")
-                                if new_report_to != (uaa.report_to if uaa else None):
-                                    changes.append(f"Updated report_to from '{uaa.report_to if uaa else ''}' to '{new_report_to or ''}'")
-                                if new_start_date != (uaa.start_date if uaa else None):
-                                    changes.append(f"Updated start_date from '{uaa.start_date if uaa else ''}' to '{new_start_date or ''}'")
-
-                                try:
-                                    with st.spinner("Saving changes..."):
-                                        with conn.session as s:
-                                            # Update userss table
-                                            s.execute(
-                                                text("""
-                                                    UPDATE userss 
-                                                    SET username = :username, email = :email, associate_id = :associate_id, 
-                                                        designation = :designation, password = :password, role = :role
-                                                    WHERE id = :id
-                                                """),
-                                                {
-                                                    "username": new_username,
-                                                    "email": new_email if new_email else None,
-                                                    "associate_id": new_associate_id if new_associate_id else None,
-                                                    "designation": new_designation if new_designation else None,
-                                                    "password": new_password if new_password else None,
-                                                    "role": new_role.lower(),
-                                                    "id": selected_user.id
-                                                }
-                                            )
-                                            # Update or insert into user_app_access table
-                                            if new_role != "Admin":
-                                                s.execute(
-                                                    text("DELETE FROM user_app_access WHERE user_id = :user_id"),
-                                                    {"user_id": selected_user.id}
-                                                )
-                                                s.execute(
-                                                    text("""
-                                                        INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
-                                                        VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
-                                                    """),
-                                                    {
-                                                        "user_id": selected_user.id,
-                                                        "app": new_app.lower(),
-                                                        "access_type": access_value,
-                                                        "level": new_level,
-                                                        "report_to": new_report_to,
-                                                        "start_date": new_start_date
-                                                    }
-                                                )
-                                            else:
-                                                s.execute(
-                                                    text("DELETE FROM user_app_access WHERE user_id = :user_id"),
-                                                    {"user_id": selected_user.id}
-                                                )
-                                            s.commit()
-                                        # Log changes if any
-                                        if changes:
-                                            details = f"User ID: {selected_user.id}, {', '.join(changes)}"
-                                            log_activity(
-                                                conn,
-                                                st.session_state.user_id,
-                                                st.session_state.username,
-                                                st.session_state.session_id,
-                                                "updated user",
-                                                details
-                                            )
-                                        st.success("User Updated Successfully!", icon="✔️")
-                                        st.toast("User Updated Successfully!", icon="✔️", duration="long")
-                                except Exception as e:
-                                    error_message = str(e).lower()
-                                    if "duplicate entry" in error_message:
-                                        if "'username'" in error_message:
-                                            st.error("❌ Username already exists.")
-                                        elif "'email'" in error_message:
-                                            st.error("❌ Email already exists.")
-                                        elif "'associate_id'" in error_message:
-                                            st.error("❌ Associate ID already exists.")
-                                        else:
-                                            st.error(f"❌ Duplicate entry error: {str(e)}")
-                                    elif "foreign key" in error_message:
-                                        st.error("❌ Invalid 'Reports To' user ID.")
-                                    else:
-                                        st.error(f"❌ Database error: {str(e)}")
-
-                    with btn_col2:
-                        if selected_user.id != 1:
-                            if st.button("🗑️", key=f"delete_{selected_user.id}", type="secondary"):
-                                st.session_state.confirm_delete_user_id = selected_user.id
-
-                    if st.session_state.confirm_delete_user_id == selected_user.id:
-                        st.warning(f"Are you sure you want to delete {selected_user.username} (ID: {selected_user.id})?")
-                        confirm_col1, confirm_col2 = st.columns([4, 1])
-                        with confirm_col1:
-                            if st.button("❌ Cancel", key=f"cancel_delete_{selected_user.id}"):
-                                st.session_state.confirm_delete_user_id = None
-                        with confirm_col2:
-                            if st.button("✔️ Confirm", key=f"confirm_delete_{selected_user.id}"):
-                                try:
-                                    with st.spinner("Deleting user..."):
-                                        with conn.session as s:
-                                            s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
-                                            s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
-                                            s.commit()
-                                        # Log the delete action
-                                        log_activity(
-                                            conn,
-                                            st.session_state.user_id,
-                                            st.session_state.username,
-                                            st.session_state.session_id,
-                                            "deleted user",
-                                            f"User ID: {selected_user.id}, Username: {selected_user.username}"
-                                        )
-                                        st.success("User Deleted Successfully!", icon="✔️")
-                                        st.toast("User Deleted Successfully!", icon="✔️", duration="long")
-                                        st.session_state.confirm_delete_user_id = None
-                                except Exception as e:
-                                    st.error(f"❌ Database error while deleting user: {str(e)}")
 
         
 
@@ -3220,11 +3216,12 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Book Price and Author Payments", width="medium", on_dismiss='rerun')
-def manage_price_dialog(book_id, current_price, conn):
-    # Fetch book details for title
+@st.dialog("Manage Book Price and Author Payments", width="large", on_dismiss="rerun")
+def manage_price_dialog(book_id, conn):
+    # Fetch book details for title and price
     book_details = fetch_book_details(book_id, conn)
     book_title = book_details.iloc[0]['title'] if not book_details.empty else "Unknown Title"
+    current_price = book_details.iloc[0]['price'] if not book_details.empty else None
     col1, col2 = st.columns([6, 1])
     with col1:
         st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
@@ -3318,7 +3315,7 @@ def manage_price_dialog(book_id, current_price, conn):
             emi2 = int(row.get('emi2', 0) or 0)
             emi3 = int(row.get('emi3', 0) or 0)
             amount_paid = emi1 + emi2 + emi3
-            agent = row.get('corresponding_agent', 'Unknown Agent')
+            agent = row.get('publishing_consultant', 'Unknown Agent')
 
             # Determine payment status
             if amount_paid >= total_amount and total_amount > 0:
@@ -3331,7 +3328,7 @@ def manage_price_dialog(book_id, current_price, conn):
                 badge_text = "Partial"
             else:
                 status_class = "status-pending"
-                status_text = "₹0/₹{total_amount}" if total_amount > 0 else "N/A"
+                status_text = f"₹0/₹{total_amount}" if total_amount > 0 else "N/A"
                 badge_text = "Pending"
 
             with cols[i]:
@@ -3345,248 +3342,263 @@ def manage_price_dialog(book_id, current_price, conn):
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-    contrn = st.container(border=True)
-    with contrn:
-        # Section 1: Book Price
-        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
-        with col1:
-            price_str = st.text_input(
-                "Book Price (₹)",
-                value=str(int(current_price)) if pd.notna(current_price) else "",
-                key=f"price_{book_id}",
-                placeholder="Enter whole amount"
-            )
+    glob_col1, glob_col2 = st.columns([2.2,1])
 
-        with col2:
-            if st.button("Save Book Price", key=f"save_price_{book_id}"):
-                with st.spinner("Saving..."):
-                    import time
-                    time.sleep(1)
-                    try:
-                        price = int(price_str) if price_str.strip() else None
-                        if price is not None and price < 0:
-                            st.error("Price cannot be negative")
-                            return
-                        with conn.session as s:
-                            s.execute(
-                                text("UPDATE books SET price = :price WHERE book_id = :book_id"),
-                                {"price": price, "book_id": book_id}
+    with glob_col2:
+ 
+        with st.container(border=True):
+            # Section 1: Book Price
+            st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
+            col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
+            with col1:
+                price_str = st.text_input(
+                    "Book Price (₹)",
+                    value=str(int(current_price)) if pd.notna(current_price) else "",
+                    key=f"price_{book_id}",
+                    placeholder="Enter whole amount"
+                )
+
+            with col2:
+                if st.button("Save Price", key=f"save_price_{book_id}"):
+                    with st.spinner("Saving..."):
+                        import time
+                        time.sleep(1)
+                        try:
+                            price = int(price_str) if price_str.strip() else None
+                            if price is not None and price < 0:
+                                st.error("Price cannot be negative")
+                                return
+                            with conn.session as s:
+                                s.execute(
+                                    text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                                    {"price": price, "book_id": book_id}
+                                )
+                                s.commit()
+                            st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
+                            st.cache_data.clear()
+                        except ValueError:
+                            st.error("Please enter a valid whole number", icon="🚨")
+    
+    with glob_col1:
+        with st.container(border=True):
+            # Section 2: Author Payments with Tabs
+            st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
+            if not book_authors.empty:
+                total_author_amounts = 0
+                updated_authors = []
+
+                # Create tabs for each author
+                tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
+                tabs = st.tabs(tab_titles)
+
+                for tab, (_, row) in zip(tabs, book_authors.iterrows()):
+                    # Inside the `for tab, (_, row) in zip(tabs, book_authors.iterrows()):` loop
+                    with tab:
+                        # Fetch existing payment details
+                        total_amount = int(row.get('total_amount', 0) or 0)
+                        emi1 = int(row.get('emi1', 0) or 0)
+                        emi2 = int(row.get('emi2', 0) or 0)
+                        emi3 = int(row.get('emi3', 0) or 0)
+                        emi1_date = row.get('emi1_date', None)
+                        emi2_date = row.get('emi2_date', None)
+                        emi3_date = row.get('emi3_date', None)
+                        # New fields for payment mode and transaction ID (now nullable in DB)
+                        emi1_payment_mode = row.get('emi1_payment_mode', None)  # Could be None
+                        emi2_payment_mode = row.get('emi2_payment_mode', None)  # Could be None
+                        emi3_payment_mode = row.get('emi3_payment_mode', None)  # Could be None
+                        emi1_transaction_id = row.get('emi1_transaction_id', '')
+                        emi2_transaction_id = row.get('emi2_transaction_id', '')
+                        emi3_transaction_id = row.get('emi3_transaction_id', '')
+                        amount_paid = emi1 + emi2 + emi3
+
+                        # Payment status (unchanged)
+                        if amount_paid >= total_amount and total_amount > 0:
+                            status = '<span class="payment-status status-paid">Fully Paid</span>'
+                        elif amount_paid > 0:
+                            status = '<span class="payment-status status-partial">Partially Paid</span>'
+                        else:
+                            status = '<span class="payment-status status-pending">Pending</span>'
+                        st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
+
+                        # Total Amount Due (unchanged)
+                        total_str = st.text_input(
+                            "Total Amount Due (₹)",
+                            value=str(total_amount) if total_amount > 0 else "",
+                            key=f"total_{row['id']}",
+                            placeholder="Enter whole amount"
+                        )
+
+                        # EMI Payments with Dates, Payment Mode, and Transaction ID
+                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
+                        
+                        # Determine visibility for progressive EMI display
+                        show_emi2 = emi1 > 0
+                        show_emi3 = emi1 > 0 and emi2 > 0
+
+                        # EMI 1 (always shown)
+                        st.markdown("**EMI 1**")
+                        col1, col2, col3 = st.columns([1, 1, 1])
+                        with col1:
+                            emi1_str = st.text_input(
+                                "Amount (₹)",
+                                value=str(emi1) if emi1 > 0 else "",
+                                key=f"emi1_{row['id']}",
+                                placeholder="Enter EMI amount"
                             )
-                            s.commit()
-                        st.success("Book Price Updated Successfully", icon="✔️")
-                        st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
-                    except ValueError:
-                        st.error("Please enter a valid whole number", icon="🚨")
-
-    cont = st.container(border=True)
-    with cont:
-        # Section 2: Author Payments with Tabs
-        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
-        if not book_authors.empty:
-            total_author_amounts = 0
-            updated_authors = []
-
-            # Create tabs for each author
-            tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
-            tabs = st.tabs(tab_titles)
-
-            for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-                # Inside the `for tab, (_, row) in zip(tabs, book_authors.iterrows()):` loop
-                with tab:
-                    # Fetch existing payment details
-                    total_amount = int(row.get('total_amount', 0) or 0)
-                    emi1 = int(row.get('emi1', 0) or 0)
-                    emi2 = int(row.get('emi2', 0) or 0)
-                    emi3 = int(row.get('emi3', 0) or 0)
-                    emi1_date = row.get('emi1_date', None)
-                    emi2_date = row.get('emi2_date', None)
-                    emi3_date = row.get('emi3_date', None)
-                    # New fields for payment mode and transaction ID (now nullable in DB)
-                    emi1_payment_mode = row.get('emi1_payment_mode', None)  # Could be None
-                    emi2_payment_mode = row.get('emi2_payment_mode', None)  # Could be None
-                    emi3_payment_mode = row.get('emi3_payment_mode', None)  # Could be None
-                    emi1_transaction_id = row.get('emi1_transaction_id', '')
-                    emi2_transaction_id = row.get('emi2_transaction_id', '')
-                    emi3_transaction_id = row.get('emi3_transaction_id', '')
-                    amount_paid = emi1 + emi2 + emi3
-
-                    # Payment status (unchanged)
-                    if amount_paid >= total_amount and total_amount > 0:
-                        status = '<span class="payment-status status-paid">Fully Paid</span>'
-                    elif amount_paid > 0:
-                        status = '<span class="payment-status status-partial">Partially Paid</span>'
-                    else:
-                        status = '<span class="payment-status status-pending">Pending</span>'
-                    st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
-
-                    # Total Amount Due (unchanged)
-                    total_str = st.text_input(
-                        "Total Amount Due (₹)",
-                        value=str(total_amount) if total_amount > 0 else "",
-                        key=f"total_{row['id']}",
-                        placeholder="Enter whole amount"
-                    )
-
-                    # EMI Payments with Dates, Payment Mode, and Transaction ID
-                    #st.markdown("#### EMI Details")
-                    payment_modes = ["Cash", "UPI", "Bank Deposit"]
-
-                    # EMI 1
-                    st.markdown("**EMI 1**")
-                    col1, col2, col3 = st.columns([1, 1, 1])
-                    with col1:
-                        emi1_str = st.text_input(
-                            "Amount (₹)",
-                            value=str(emi1) if emi1 > 0 else "",
-                            key=f"emi1_{row['id']}",
-                            placeholder="Enter EMI amount"
-                        )
-                    with col2:
-                        emi1_date_new = st.date_input(
-                            "Date",
-                            value=pd.to_datetime(emi1_date) if emi1_date else None,
-                            key=f"emi1_date_{row['id']}"
-                        )
-                    with col3:
-                        emi1_mode = st.selectbox(
-                            "Payment Mode",
-                            payment_modes,
-                            index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
-                            key=f"emi1_mode_{row['id']}"
-                        )
-                    if emi1_mode in ["UPI", "Bank Deposit"]:
-                        emi1_txn_id = st.text_input(
-                            "Transaction ID",
-                            value=emi1_transaction_id,
-                            key=f"emi1_txn_{row['id']}",
-                            placeholder="Enter Transaction ID"
-                        )
-                    else:
+                        with col2:
+                            emi1_date_new = st.date_input(
+                                "Date",
+                                value=pd.to_datetime(emi1_date) if emi1_date else None,
+                                key=f"emi1_date_{row['id']}"
+                            )
+                        with col3:
+                            emi1_mode = st.selectbox(
+                                "Payment Mode",
+                                payment_modes,
+                                index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
+                                key=f"emi1_mode_{row['id']}"
+                            )
                         emi1_txn_id = ""
+                        if emi1_mode in ["UPI", "Bank Deposit"]:
+                            emi1_txn_id = st.text_input(
+                                "Transaction ID",
+                                value=emi1_transaction_id,
+                                key=f"emi1_txn_{row['id']}",
+                                placeholder="Enter Transaction ID"
+                            )
 
-                    # EMI 2
-                    st.markdown("**EMI 2**")
-                    col1, col2, col3 = st.columns([1, 1, 1])
-                    with col1:
-                        emi2_str = st.text_input(
-                            "Amount (₹)",
-                            value=str(emi2) if emi2 > 0 else "",
-                            key=f"emi2_{row['id']}",
-                            placeholder="Enter EMI amount"
-                        )
-                    with col2:
-                        emi2_date_new = st.date_input(
-                            "Date",
-                            value=pd.to_datetime(emi2_date) if emi2_date else None,
-                            key=f"emi2_date_{row['id']}"
-                        )
-                    with col3:
-                        emi2_mode = st.selectbox(
-                            "Payment Mode",
-                            payment_modes,
-                            index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
-                            key=f"emi2_mode_{row['id']}"
-                        )
-                    if emi2_mode in ["UPI", "Bank Deposit"]:
-                        emi2_txn_id = st.text_input(
-                            "Transaction ID",
-                            value=emi2_transaction_id,
-                            key=f"emi2_txn_{row['id']}",
-                            placeholder="Enter Transaction ID"
-                        )
-                    else:
-                        emi2_txn_id = ""
+                        # EMI 2 (shown only if EMI 1 is saved)
+                        if show_emi2:
+                            st.markdown("**EMI 2**")
+                            col1, col2, col3 = st.columns([1, 1, 1])
+                            with col1:
+                                emi2_str = st.text_input(
+                                    "Amount (₹)",
+                                    value=str(emi2) if emi2 > 0 else "",
+                                    key=f"emi2_{row['id']}",
+                                    placeholder="Enter EMI amount"
+                                )
+                            with col2:
+                                emi2_date_new = st.date_input(
+                                    "Date",
+                                    value=pd.to_datetime(emi2_date) if emi2_date else None,
+                                    key=f"emi2_date_{row['id']}"
+                                )
+                            with col3:
+                                emi2_mode = st.selectbox(
+                                    "Payment Mode",
+                                    payment_modes,
+                                    index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
+                                    key=f"emi2_mode_{row['id']}"
+                                )
+                            emi2_txn_id = ""
+                            if emi2_mode in ["UPI", "Bank Deposit"]:
+                                emi2_txn_id = st.text_input(
+                                    "Transaction ID",
+                                    value=emi2_transaction_id,
+                                    key=f"emi2_txn_{row['id']}",
+                                    placeholder="Enter Transaction ID"
+                                )
+                        else:
+                            emi2_str = str(emi2) if emi2 > 0 else ""
+                            emi2_date_new = pd.to_datetime(emi2_date) if emi2_date else None
+                            emi2_mode = emi2_payment_mode
+                            emi2_txn_id = emi2_transaction_id
 
-                    # EMI 3
-                    st.markdown("**EMI 3**")
-                    col1, col2, col3 = st.columns([1, 1, 1])
-                    with col1:
-                        emi3_str = st.text_input(
-                            "Amount (₹)",
-                            value=str(emi3) if emi3 > 0 else "",
-                            key=f"emi3_{row['id']}",
-                            placeholder="Enter EMI amount"
-                        )
-                    with col2:
-                        emi3_date_new = st.date_input(
-                            "Date",
-                            value=pd.to_datetime(emi3_date) if emi3_date else None,
-                            key=f"emi3_date_{row['id']}"
-                        )
-                    with col3:
-                        emi3_mode = st.selectbox(
-                            "Payment Mode",
-                            payment_modes,
-                            index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
-                            key=f"emi3_mode_{row['id']}"
-                        )
-                    if emi3_mode in ["UPI", "Bank Deposit"]:
-                        emi3_txn_id = st.text_input(
-                            "Transaction ID",
-                            value=emi3_transaction_id,
-                            key=f"emi3_txn_{row['id']}",
-                            placeholder="Enter Transaction ID"
-                        )
-                    else:
-                        emi3_txn_id = ""
+                        # EMI 3 (shown only if EMI 1 and 2 are saved)
+                        if show_emi3:
+                            st.markdown("**EMI 3**")
+                            col1, col2, col3 = st.columns([1, 1, 1])
+                            with col1:
+                                emi3_str = st.text_input(
+                                    "Amount (₹)",
+                                    value=str(emi3) if emi3 > 0 else "",
+                                    key=f"emi3_{row['id']}",
+                                    placeholder="Enter EMI amount"
+                                )
+                            with col2:
+                                emi3_date_new = st.date_input(
+                                    "Date",
+                                    value=pd.to_datetime(emi3_date) if emi3_date else None,
+                                    key=f"emi3_date_{row['id']}"
+                                )
+                            with col3:
+                                emi3_mode = st.selectbox(
+                                    "Payment Mode",
+                                    payment_modes,
+                                    index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
+                                    key=f"emi3_mode_{row['id']}"
+                                )
+                            emi3_txn_id = ""
+                            if emi3_mode in ["UPI", "Bank Deposit"]:
+                                emi3_txn_id = st.text_input(
+                                    "Transaction ID",
+                                    value=emi3_transaction_id,
+                                    key=f"emi3_txn_{row['id']}",
+                                    placeholder="Enter Transaction ID"
+                                )
+                        else:
+                            emi3_str = str(emi3) if emi3 > 0 else ""
+                            emi3_date_new = pd.to_datetime(emi3_date) if emi3_date else None
+                            emi3_mode = emi3_payment_mode
+                            emi3_txn_id = emi3_transaction_id
 
-                    # Calculate remaining balance
-                    try:
-                        new_total = int(total_str) if total_str.strip() else 0
-                        new_emi1 = int(emi1_str) if emi1_str.strip() else 0
-                        new_emi2 = int(emi2_str) if emi2_str.strip() else 0
-                        new_emi3 = int(emi3_str) if emi3_str.strip() else 0
-                        new_paid = new_emi1 + new_emi2 + new_emi3
-                        remaining = new_total - new_paid
-                        total_author_amounts += new_total
-                        updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
-                                                emi1_date_new, emi2_date_new, emi3_date_new,
-                                                emi1_mode, emi2_mode, emi3_mode,
-                                                emi1_txn_id, emi2_txn_id, emi3_txn_id))
-                    except ValueError:
-                        st.error("Please enter valid whole numbers for all fields")
-                        return
+                        # Calculate remaining balance
+                        try:
+                            new_total = int(total_str) if total_str.strip() else 0
+                            new_emi1 = int(emi1_str) if emi1_str.strip() else 0
+                            new_emi2 = int(emi2_str) if emi2_str.strip() else 0
+                            new_emi3 = int(emi3_str) if emi3_str.strip() else 0
+                            new_paid = new_emi1 + new_emi2 + new_emi3
+                            remaining = new_total - new_paid
+                            total_author_amounts += new_total
+                            updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
+                                                    emi1_date_new, emi2_date_new, emi3_date_new,
+                                                    emi1_mode, emi2_mode, emi3_mode,
+                                                    emi1_txn_id, emi2_txn_id, emi3_txn_id))
+                        except ValueError:
+                            st.error("Please enter valid whole numbers for all fields")
+                            return
 
-                    st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
+                        st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
 
-                    # Save button
-                    if st.button("Save Payment", key=f"save_payment_{row['id']}"):
-                        with st.spinner("Saving Payment..."):
-                            import time
-                            time.sleep(1)
-                            if new_paid > new_total:
-                                st.error("Total EMI payments cannot exceed total amount")
-                            elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
-                                st.error("Amounts cannot be negative")
-                            else:
-                                book_price = int(price_str) if price_str.strip() else current_price
-                                if pd.isna(book_price):
-                                    st.error("Please set a book price first")
-                                    return
-                                if total_author_amounts > book_price:
-                                    st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
-                                    return
+                        # Save button
+                        if st.button("Save Payment", key=f"save_payment_{row['id']}"):
+                            with st.spinner("Saving Payment..."):
+                                import time
+                                time.sleep(1)
+                                if new_paid > new_total:
+                                    st.error("Total EMI payments cannot exceed total amount")
+                                elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
+                                    st.error("Amounts cannot be negative")
+                                else:
+                                    book_price = int(price_str) if price_str.strip() else current_price
+                                    if pd.isna(book_price):
+                                        st.error("Please set a book price first")
+                                        return
+                                    if total_author_amounts > book_price:
+                                        st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
+                                        return
 
-                                updates = {
-                                    "total_amount": new_total,
-                                    "emi1": new_emi1,
-                                    "emi2": new_emi2,
-                                    "emi3": new_emi3,
-                                    "emi1_date": emi1_date_new,
-                                    "emi2_date": emi2_date_new,
-                                    "emi3_date": emi3_date_new,
-                                    "emi1_payment_mode": emi1_mode,
-                                    "emi2_payment_mode": emi2_mode,
-                                    "emi3_payment_mode": emi3_mode,
-                                    "emi1_transaction_id": emi1_txn_id,
-                                    "emi2_transaction_id": emi2_txn_id,
-                                    "emi3_transaction_id": emi3_txn_id
-                                }
-                                update_book_authors(row['id'], updates, conn)
-                                st.success(f"Payment updated for {row['name']}", icon="✔️")
-                                st.toast(f"Payment updated for {row['name']}", icon="✔️", duration="long")
-                                st.cache_data.clear()
+                                    updates = {
+                                        "total_amount": new_total,
+                                        "emi1": new_emi1,
+                                        "emi2": new_emi2,
+                                        "emi3": new_emi3,
+                                        "emi1_date": emi1_date_new,
+                                        "emi2_date": emi2_date_new,
+                                        "emi3_date": emi3_date_new,
+                                        "emi1_payment_mode": emi1_mode,
+                                        "emi2_payment_mode": emi2_mode,
+                                        "emi3_payment_mode": emi3_mode,
+                                        "emi1_transaction_id": emi1_txn_id,
+                                        "emi2_transaction_id": emi2_txn_id,
+                                        "emi3_transaction_id": emi3_txn_id
+                                    }
+                                    update_book_authors(row['id'], updates, conn)
+                                    st.success(f"Payment updated for {row['name']}", icon="✔️")
+                                    st.toast(f"Payment updated for {row['name']}", icon="✔️", duration="long")
+                                    st.cache_data.clear()
 
 
 
@@ -7579,7 +7591,6 @@ with srcol4:
         st.button(":material/add: Book", type="secondary", help="Add New Book (Not Authorized)", width="stretch", disabled=True)
 
 with srcol5:
-        from urllib.parse import urlencode, quote
         # Initialize session state for tracking logged click IDs
         if "logged_click_ids" not in st.session_state:
             st.session_state.logged_click_ids = set()
@@ -7886,7 +7897,7 @@ with st.container(border=False):
                         if publisher not in ["AG Kids", "NEET/JEE"] or st.session_state.get("role") == "admin":
                             if is_button_allowed("manage_price_dialog"):
                                 if st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Edit Payments"):
-                                    manage_price_dialog(row['book_id'], row['price'], conn)
+                                    manage_price_dialog(row['book_id'],conn)
                             else:
                                 st.button(price_icon, key=f"price_btn_{row['book_id']}", help="Not Authorised", disabled=True)
                         else:
@@ -7975,3 +7986,4 @@ total_time = time.time() - start_time
 st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
 st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
 
+st.write(token)
