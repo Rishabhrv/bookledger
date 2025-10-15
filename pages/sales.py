@@ -1043,14 +1043,14 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             }
         </style>
         <table class='compact-table'>
-            <tr><th>ID</th><th>Name</th><th>Contact</th><th>Consultant</th><th>Pos</th>
+            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th>
         """
         for label in checklist_labels:
             table_html += f"<th>{label}</th>"
         table_html += "</tr>"
         
         for _, author in book_authors_df.iterrows():
-            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['phone']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
+            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
             for col, label in zip(checklist_columns, checklist_labels):
                 if col in ['apply_isbn_not_applied', 'isbn_not_received']:
                     # Handle book-level ISBN fields
@@ -1316,7 +1316,7 @@ with c3:
         st.cache_data.clear()
 
 # Search bar and filters
-srcol1, srcol2, scrol3, scrol4 = st.columns([5, 3, 1, 1], gap="small")
+srcol1, srcol2, scrol3, scrol4 = st.columns([4, 3, 1, 1.5], gap="small")
 with srcol1:
     search_query = st.text_input(
         "🔎 Search Books",

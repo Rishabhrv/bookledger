@@ -122,34 +122,88 @@ def get_previous_week_details():
     previous_fiscal_week = previous_week_date.isocalendar()[1]
     return previous_fiscal_week, start_of_last_week, end_of_last_week
 
-# NEW: Core logic to decide which timesheet to show
+def get_week_dates_from_fiscal_week(fiscal_week):
+    """Get start and end dates for a given fiscal week."""
+    try:
+        year = datetime.now().isocalendar()[0]  # Assume current year, adjust if needed
+        start_of_week = datetime.fromisocalendar(year, fiscal_week, 1).date()
+        end_of_week = start_of_week + timedelta(days=5)
+        return start_of_week, end_of_week
+    except:
+        return None, None
+
 def determine_timesheet_week_to_display(conn, user_id):
     """
     Determines which week's timesheet to display.
-    If it's Monday and last week's timesheet is pending ('draft' or 'rejected'),
-    it returns last week's details. Otherwise, returns the current week's details.
+    STRICT: If ANY previous timesheet is pending, force user to complete it first.
     """
     ist = pytz.timezone('Asia/Kolkata')
     today = datetime.now(ist).date()
     current_fiscal_week, current_start_of_week, current_end_of_week = get_current_week_details()
 
-    # Grace period check: Only on Monday (weekday() == 0)
-    if today.weekday() == 0:
+    # Check for ANY pending timesheets (draft or rejected) from previous weeks
+    try:
+        pending_query = """
+            SELECT fiscal_week, status 
+            FROM timesheets 
+            WHERE user_id = :user_id AND status IN ('draft', 'rejected')
+            AND fiscal_week < :current_fiscal_week
+            ORDER BY fiscal_week DESC
+            LIMIT 1
+        """
+        pending_df = conn.query(pending_query, params={
+            "user_id": user_id, 
+            "current_fiscal_week": current_fiscal_week
+        }, ttl=0)
+        
+        if not pending_df.empty:
+            pending_fiscal_week = pending_df.iloc[0]['fiscal_week']
+            pending_status = pending_df.iloc[0]['status']
+            
+            # Get dates for the pending week
+            try:
+                year = datetime.now().isocalendar()[0]
+                pending_start = datetime.fromisocalendar(year, pending_fiscal_week, 1).date()
+                pending_end = pending_start + timedelta(days=5)
+                date_range = f"{pending_start.strftime('%b %d')} - {pending_end.strftime('%d, %Y')}"
+                
+                st.warning(
+                    f"⚠️ **Pending Timesheet Detected:** Week {pending_fiscal_week} ({date_range}) "
+                    f"is still in **{pending_status.upper()}** status. "
+                    "You must complete and submit it before accessing the current week."
+                )
+                
+                # Return the pending week details so user can complete it
+                return pending_fiscal_week, pending_start, pending_end, True
+                
+            except ValueError:
+                st.error("Error calculating dates for pending timesheet.")
+                return current_fiscal_week, current_start_of_week, current_end_of_week, False
+
+    except Exception as e:
+        st.error(f"Error checking pending timesheets: {e}")
+        # Fallback to current week on error
+        return current_fiscal_week, current_start_of_week, current_end_of_week, False
+
+    # Check Monday specifically for previous week
+    if today.weekday() == 0:  # Monday
         prev_fiscal_week, prev_start_of_week, prev_end_of_week = get_previous_week_details()
-
+        
         try:
-            query = "SELECT status FROM timesheets WHERE user_id = :user_id AND fiscal_week = :fiscal_week"
-            df = conn.query(query, params={"user_id": user_id, "fiscal_week": prev_fiscal_week}, ttl=0)
-
-            if not df.empty and df.iloc[0]['status'] in ['draft', 'rejected']:
-                # User has a pending timesheet from last week. Show that one.
-                return prev_fiscal_week, prev_start_of_week, prev_end_of_week, True # True indicates a late submission
+            prev_query = "SELECT status FROM timesheets WHERE user_id = :user_id AND fiscal_week = :fiscal_week"
+            prev_df = conn.query(prev_query, params={"user_id": user_id, "fiscal_week": prev_fiscal_week}, ttl=0)
+            
+            if not prev_df.empty and prev_df.iloc[0]['status'] in ['draft', 'rejected']:
+                st.warning(
+                    "**Monday Grace Period:** Previous week's timesheet is pending. "
+                    "Please complete and submit it now."
+                )
+                return prev_fiscal_week, prev_start_of_week, prev_end_of_week, True
+                
         except Exception as e:
-            st.error(f"Error checking previous week's timesheet: {e}")
-            # Fallback to current week on error
-            return current_fiscal_week, current_start_of_week, current_end_of_week, False
+            st.error(f"Error checking Monday previous week: {e}")
 
-    # Default behavior for any other day or if last week's sheet is fine
+    # No pending timesheets found, show current week
     return current_fiscal_week, current_start_of_week, current_end_of_week, False
 
 
@@ -163,15 +217,45 @@ def get_week_dates_from_week_number(year, week_number):
         return ""
 
 def get_or_create_timesheet(conn, user_id, fiscal_week):
-    """Fetches or creates a timesheet for the current week."""
+    """Fetches or creates a timesheet for the specified week. Blocks creation if previous weeks are pending."""
     try:
+        # First, check if timesheet already exists for this week
         query = "SELECT id, status, review_notes FROM timesheets WHERE user_id = :user_id AND fiscal_week = :fiscal_week"
         df = conn.query(query, params={"user_id": user_id, "fiscal_week": fiscal_week}, ttl=0)
+        
         if not df.empty:
             return df.iloc[0]['id'], df.iloc[0]['status'], df.iloc[0]['review_notes']
 
-        # --- CHANGE 1: Handle case where user has no manager ---
-        # If report_to is "Unknown" or not a valid ID, set manager_id to None.
+        # Before creating new timesheet, check for ANY pending previous timesheets
+        current_fiscal_week, _, _ = get_current_week_details()
+        
+        # Block creation if trying to create current week but previous weeks have pending timesheets
+        if fiscal_week == current_fiscal_week:
+            pending_query = """
+                SELECT fiscal_week, status 
+                FROM timesheets 
+                WHERE user_id = :user_id AND status IN ('draft', 'rejected')
+                AND fiscal_week < :current_fiscal_week
+                ORDER BY fiscal_week DESC
+                LIMIT 1
+            """
+            pending_df = conn.query(pending_query, params={
+                "user_id": user_id, 
+                "current_fiscal_week": current_fiscal_week
+            }, ttl=0)
+            
+            if not pending_df.empty:
+                pending_fiscal_week = pending_df.iloc[0]['fiscal_week']
+                pending_status = pending_df.iloc[0]['status']
+                
+                st.error(
+                    f"❌ **Cannot create current week's timesheet!** "
+                    f"Week {pending_fiscal_week} is still in **{pending_status.upper()}** status. "
+                    "Please complete and submit all previous pending timesheets first."
+                )
+                return None, None, None
+
+        # Safe to create new timesheet
         manager_id = st.session_state.get("report_to")
         if manager_id == "Unknown" or not manager_id:
             manager_id = None
@@ -186,6 +270,7 @@ def get_or_create_timesheet(conn, user_id, fiscal_week):
         log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
                      "CREATE_TIMESHEET", f"Created new draft timesheet (ID: {new_id}) for week {fiscal_week}")
         return new_id, 'draft', None
+        
     except Exception as e:
         st.error(f"Error getting/creating timesheet: {e}")
         return None, None, None
@@ -379,45 +464,49 @@ def get_monthly_summary(conn, user_id: int, year: int, month: int, statuses: lis
         query += " ORDER BY w.work_date;"
 
         df = conn.query(sql=query, params=params, ttl=60)
-
         if df.empty:
             return {}
 
         df['work_date'] = pd.to_datetime(df['work_date']).dt.date
+        DOWNTIME_TYPES = {'no_internet', 'power_cut', 'system_failure', 'other'}
 
         summary_data = {}
         for work_date, group in df.groupby('work_date'):
             total_hours = group['work_duration'].sum()
-            statuses_set = set(group['entry_type'])
-            status = 'work'
+            entry_types = set(group['entry_type'])
             
-            if 'leave' in statuses_set:
+            # Calculate ALL downtime hours for this day (don't deduplicate)
+            downtime_entries = group[group['entry_type'].isin(DOWNTIME_TYPES)]
+            total_downtime_hours = downtime_entries['work_duration'].sum()
+            
+            # Day status classification (for UI display)
+            status = 'work'  # Default
+            if 'leave' in entry_types:
                 status = 'leave'
-            elif 'holiday' in statuses_set:
+            elif 'holiday' in entry_types:
                 status = 'holiday'
-            elif 'half_day' in statuses_set:
+            elif 'half_day' in entry_types:
                 status = 'half_day'
-            elif 'power_cut' in statuses_set:
-                status = 'power_cut'
-            elif 'no_internet' in statuses_set:
-                status = 'no_internet'
-            elif 'other' in statuses_set:
-                status = 'other'
-            elif len(statuses_set) > 1:
-                status = group['entry_type'].iloc[0]
-            elif len(statuses_set) == 1:
-                status = list(statuses_set)[0]
+            elif total_downtime_hours > 0 and 'work' not in entry_types:
+                # Day is purely downtime or downtime dominant
+                if len(downtime_entries) > 0:
+                    # Use the type with most instances or hours
+                    most_common_type = downtime_entries['entry_type'].mode().iloc[0]
+                    status = most_common_type
+            # Keep as 'work' if mixed work + downtime
 
             type_hours = group.groupby('entry_type')['work_duration'].sum().to_dict()
-
             holiday_name = None
-            if 'holiday' in statuses_set:
-                holiday_name = group[group['entry_type'] == 'holiday']['work_name'].iloc[0]
+            if 'holiday' in entry_types:
+                holiday_row = group[group['entry_type'] == 'holiday'].iloc[0]
+                holiday_name = holiday_row['work_name']
 
             day_summary = {
                 'status': status,
                 'total_hours': total_hours,
+                'total_downtime_hours': total_downtime_hours,  # NEW: Track all downtime
                 'type_hours': type_hours,
+                'downtime_types': downtime_entries['entry_type'].tolist(),  # NEW: Track which types
                 'holiday_name': holiday_name,
                 'timesheet_id': group['timesheet_id'].iloc[0],
                 'timesheet_status': group['status'].iloc[0]
@@ -433,43 +522,228 @@ def get_monthly_summary(conn, user_id: int, year: int, month: int, statuses: lis
 
 def get_user_lifetime_stats(conn, user_id: int) -> dict:
     try:
+        # Total work hours
         query_work = """
-            SELECT SUM(w.work_duration) AS total_work_hours
+            SELECT COALESCE(SUM(w.work_duration), 0) AS total_work_hours
             FROM work w
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'work'
         """
-        params = {"user_id": user_id}
-        df_work = conn.query(sql=query_work, params=params, ttl=60)
+        df_work = conn.query(sql=query_work, params={"user_id": user_id}, ttl=60)
         total_work_hours = df_work['total_work_hours'].iloc[0] if not df_work.empty else 0
 
+        # Leave days
         query_leave = """
             SELECT COUNT(DISTINCT w.work_date) AS leave_days
             FROM work w
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'leave'
         """
-        df_leave = conn.query(sql=query_leave, params=params, ttl=60)
+        df_leave = conn.query(sql=query_leave, params={"user_id": user_id}, ttl=60)
         leave_days = df_leave['leave_days'].iloc[0] if not df_leave.empty else 0
 
+        # Half days
         query_half = """
             SELECT COUNT(DISTINCT w.work_date) AS half_days
             FROM work w
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'half_day'
         """
-        df_half = conn.query(sql=query_half, params=params, ttl=60)
+        df_half = conn.query(sql=query_half, params={"user_id": user_id}, ttl=60)
         half_days = df_half['half_days'].iloc[0] if not df_half.empty else 0
 
+        # Holiday days
+        query_holiday = """
+            SELECT COUNT(DISTINCT w.work_date) AS holiday_days
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id AND w.entry_type = 'holiday'
+        """
+        df_holiday = conn.query(sql=query_holiday, params={"user_id": user_id}, ttl=60)
+        holiday_days = df_holiday['holiday_days'].iloc[0] if not df_holiday.empty else 0
+
+        # Total downtime hours and breakdown
+        query_downtime = """
+            SELECT 
+                COALESCE(SUM(CASE WHEN w.entry_type = 'no_internet' THEN w.work_duration ELSE 0 END), 0) AS no_internet_hours,
+                COALESCE(SUM(CASE WHEN w.entry_type = 'power_cut' THEN w.work_duration ELSE 0 END), 0) AS power_cut_hours,
+                COALESCE(SUM(CASE WHEN w.entry_type = 'system_failure' THEN w.work_duration ELSE 0 END), 0) AS system_failure_hours,
+                COALESCE(SUM(CASE WHEN w.entry_type = 'other' THEN w.work_duration ELSE 0 END), 0) AS other_downtime_hours,
+                COALESCE(SUM(CASE WHEN w.entry_type IN ('no_internet', 'power_cut', 'system_failure', 'other') 
+                          THEN w.work_duration ELSE 0 END), 0) AS total_downtime_hours
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id 
+            AND w.entry_type IN ('no_internet', 'power_cut', 'system_failure', 'other')
+        """
+        df_downtime = conn.query(sql=query_downtime, params={"user_id": user_id}, ttl=60)
+        downtime_row = df_downtime.iloc[0] if not df_downtime.empty else {}
+        
+        total_downtime_hours = downtime_row.get('total_downtime_hours', 0)
+        no_internet_hours = downtime_row.get('no_internet_hours', 0)
+        power_cut_hours = downtime_row.get('power_cut_hours', 0)
+        system_failure_hours = downtime_row.get('system_failure_hours', 0)
+        other_downtime_hours = downtime_row.get('other_downtime_hours', 0)
+
+        # Total unique working days (excluding leaves, holidays, half_days)
+        query_working_days = """
+            SELECT COUNT(DISTINCT w.work_date) AS working_days
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id 
+            AND w.entry_type = 'work'
+        """
+        df_working_days = conn.query(sql=query_working_days, params={"user_id": user_id}, ttl=60)
+        working_days = df_working_days['working_days'].iloc[0] if not df_working_days.empty else 0
+
+        # Average daily work hours
+        avg_daily_hours = total_work_hours / working_days if working_days > 0 else 0
+
         return {
-            'total_work_hours': total_work_hours or 0,
+            # Core hours
+            'total_work_hours': round(total_work_hours, 2),
+            'total_downtime_hours': round(total_downtime_hours, 2),
             'leave_days': leave_days,
-            'half_days': half_days
+            'half_days': half_days,
+            'holiday_days': holiday_days,
+            'working_days': working_days,
+            'avg_daily_hours': round(avg_daily_hours, 2),
+            
+            # Downtime breakdown
+            'downtime_breakdown': {
+                'no_internet': round(no_internet_hours, 2),
+                'power_cut': round(power_cut_hours, 2),
+                'system_failure': round(system_failure_hours, 2),
+                'other': round(other_downtime_hours, 2)
+            },
+            
+            # REMOVED: total_billable_hours
+            # REMOVED: downtime_percentage - now just use total_downtime_hours directly
         }
 
     except Exception as e:
         st.error(f"Error fetching lifetime stats: {e}")
-        return {'total_work_hours': 0, 'leave_days': 0, 'half_days': 0}
+        return {
+            'total_work_hours': 0, 
+            'total_downtime_hours': 0, 
+            'leave_days': 0, 
+            'half_days': 0, 
+            'holiday_days': 0, 
+            'working_days': 0, 
+            'avg_daily_hours': 0,
+            'downtime_breakdown': {
+                'no_internet': 0, 
+                'power_cut': 0, 
+                'system_failure': 0, 
+                'other': 0
+            }
+        }
+
+    except Exception as e:
+        st.error(f"Error fetching lifetime stats: {e}")
+        return {
+            'total_work_hours': 0, 'total_downtime_hours': 0, 'leave_days': 0, 
+            'half_days': 0, 'holiday_days': 0, 'working_days': 0, 'avg_daily_hours': 0,
+            'downtime_breakdown': {'no_internet': 0, 'power_cut': 0, 'system_failure': 0, 'other': 0},
+            'submitted_timesheets': 0, 'approved_timesheets': 0, 'pending_timesheets': 0,
+            'downtime_percentage': 0
+        }
+
+def display_lifetime_stats(conn, user_id):
+    """Enhanced lifetime statistics with icons and styling."""
+    stats = get_user_lifetime_stats(conn, user_id)
+    
+    # Row 1: Work metrics with green theme
+    row1_cols = st.columns(5)
+    
+    row1_metrics = [
+        ("Total Work Hours", f"{stats['total_work_hours']} hrs", "🕐"),
+        ("Working Days", stats['working_days'], "📅"),
+        ("Leave Days", stats['leave_days'], "🏖️"),
+        ("Half Days", stats['half_days'], "⏰"),
+        ("Holiday Days", stats['holiday_days'], "🎉")
+    ]
+    
+    for i, (label, value, icon) in enumerate(row1_metrics):
+        with row1_cols[i]:
+            st.metric(f"{icon} {label}", value)
+    
+    # Row 2: Productivity & Downtime with mixed theme
+    row2_cols = st.columns(5)
+    
+    # Avg daily hours
+    with row2_cols[0]:
+        st.metric("📊 Avg Daily Hours", f"{stats['avg_daily_hours']} hrs")
+    
+    # Downtime metrics with warning colors
+    downtime_icons = {
+        'no_internet': "🌐",
+        'power_cut': "⚡",
+        'system_failure': "💻",
+        'other': "❓"
+    }
+    
+    for i, downtime_type in enumerate(['no_internet', 'power_cut', 'system_failure', 'other']):
+        hours = stats['downtime_breakdown'][downtime_type]
+        icon = downtime_icons.get(downtime_type, "⛔")
+        display_name = downtime_type.replace('_', ' ').title()
+        
+        with row2_cols[i + 1]:
+            st.metric(f"{icon} {display_name}", f"{hours} hrs")
+    
+    # Total downtime highlight
+    total_downtime = stats['total_downtime_hours']
+    if total_downtime > 0:
+        st.warning(f"**Total Downtime: {total_downtime} hours** across all categories")
+
+def display_monthly_stats(monthly_summary, selected_year, selected_month, 
+                         expected_working_days, expected_working_hours):
+    """
+    Enhanced monthly statistics display with icons and styling.
+    Similar structure to display_lifetime_stats.
+    """
+    # Calculate monthly metrics from summary
+    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
+    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
+    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
+    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
+    total_downtime_month = calculate_monthly_downtime(monthly_summary)
+    
+    # Row 1: Monthly work metrics with borders
+    st.markdown(f"### **📅 {calendar.month_name[selected_month]} {selected_year} Summary**")
+    row1_cols = st.columns(5, border=True)
+    
+    row1_metrics = [
+        ("Working Days", working_days_month, f"expected {expected_working_days}", "🖥️"),
+        ("Work Hours", f"{total_work_hours_month:.1f}h", f"expected {expected_working_hours:.1f}h", "🕐"),
+        ("Leave Days", leave_days_month, None, "🏖️"),
+        ("Half Days", half_days_month, None, "⏰"),
+        ("Downtime", f"{total_downtime_month:.1f}h", None, "⛔")
+    ]
+    
+    for i, (label, value, delta, icon) in enumerate(row1_metrics):
+        with row1_cols[i]:
+            metric_display = f"{icon} {label}"
+            if delta:
+                st.metric(metric_display, value, delta=delta)
+            else:
+                st.metric(metric_display, value)
+
+def calculate_monthly_downtime(summary_data):
+    """Calculate total downtime from monthly summary."""
+    DOWNTIME_TYPES = ['no_internet', 'power_cut', 'system_failure', 'other']
+    total_downtime = 0
+    
+    for day_data in summary_data.values():
+        # Method 1: Use the new total_downtime_hours field (preferred)
+        if 'total_downtime_hours' in day_data:
+            total_downtime += day_data['total_downtime_hours']
+        else:
+            # Fallback: Sum all downtime types from type_hours
+            day_downtime = sum(day_data.get('type_hours', {}).get(dt, 0) for dt in DOWNTIME_TYPES)
+            total_downtime += day_downtime
+    
+    return total_downtime
 
 def get_available_months_years(conn, user_id: int) -> tuple:
     try:
@@ -1195,28 +1469,21 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
 ###################################################################################################################################
 
 
-# --- Page Implementations ---
 def my_timesheet_page(conn):
     """Renders the main page for the user's timesheet."""
     st.subheader(f"📝 {st.session_state.username}'s Weekly Timesheet", anchor=False, divider="rainbow")
 
-    # Determine which week to show: current or previous (if pending on Monday)
+    # Determine which week to show: current or previous pending
     fiscal_week, start_of_week, end_of_week, is_late_submission = determine_timesheet_week_to_display(conn, st.session_state.user_id)
 
-    # Display a warning if the user is filling out a late timesheet
-    if is_late_submission:
-        st.warning(
-            "**Action Required:** Your timesheet for the previous week was not submitted on time. "
-            "Please complete and submit it before proceeding to the current week.",
-            icon="⚠️"
-        )
-
     timesheet_id, status, notes = get_or_create_timesheet(conn, st.session_state.user_id, fiscal_week)
+    
     if timesheet_id is None:
-        st.error("Failed to load timesheet. Please refresh.")
-        st.stop()
+        st.stop()  # Stop execution - user must resolve pending timesheets first
 
     st.session_state.timesheet_status = status
+    
+    # Rest of the UI code remains the same...
     c1, c2, c3 = st.columns([0.6, 0.2, 0.2])
     with c1:
         date_range = f"{start_of_week.strftime('%b %d')} - {end_of_week.strftime('%d, %Y')}"
@@ -1314,39 +1581,14 @@ def timesheet_history_page(conn):
         expected_working_days += 1
     expected_working_hours = expected_working_days * 8
 
-    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
-    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
-    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
-    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
-    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
-
-    lifetime_stats = get_user_lifetime_stats(conn, user_id)
-    total_work_hours_user = lifetime_stats['total_work_hours']
-    leave_days_user = lifetime_stats['leave_days']
-    half_days_user = lifetime_stats['half_days']
-
-    with st.container():
-        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
-        cols = st.columns(5, border=True)
-        with cols[0]:
-            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
-        with cols[1]:
-            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
-        with cols[2]:
-            st.metric("Leave Days", leave_days_month)
-        with cols[3]:
-            st.metric("Half Days", half_days_month)
-        with cols[4]:
-            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+    # Display enhanced monthly stats
+    display_monthly_stats(
+        monthly_summary, selected_year, selected_month,
+        expected_working_days, expected_working_hours
+    )
 
     with st.expander("Lifetime Statistics", expanded=False):
-        cols = st.columns(3)
-        with cols[0]:
-            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
-        with cols[1]:
-            st.metric("Total Leave Days", leave_days_user)
-        with cols[2]:
-            st.metric("Total Half Days", half_days_user)
+        display_lifetime_stats(conn, user_id)
     
     days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     header_cols = st.columns([1,1,1,1,1,1,0.8])
@@ -1494,39 +1736,14 @@ def manager_dashboard(conn):
         expected_working_days += 1
     expected_working_hours = expected_working_days * 8
 
-    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
-    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
-    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
-    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
-    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
-
-    lifetime_stats = get_user_lifetime_stats(conn, selected_user_id)
-    total_work_hours_user = lifetime_stats['total_work_hours']
-    leave_days_user = lifetime_stats['leave_days']
-    half_days_user = lifetime_stats['half_days']
-
-    with st.container():
-        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
-        cols = st.columns(5, border=True)
-        with cols[0]:
-            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
-        with cols[1]:
-            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
-        with cols[2]:
-            st.metric("Leave Days", leave_days_month)
-        with cols[3]:
-            st.metric("Half Days", half_days_month)
-        with cols[4]:
-            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+    # Display enhanced monthly stats
+    display_monthly_stats(
+        monthly_summary, selected_year, selected_month,
+        expected_working_days, expected_working_hours
+    )
 
     with st.expander("Lifetime Statistics", expanded=False):
-        cols = st.columns(3)
-        with cols[0]:
-            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
-        with cols[1]:
-            st.metric("Total Leave Days", leave_days_user)
-        with cols[2]:
-            st.metric("Total Half Days", half_days_user)
+        display_lifetime_stats(conn, selected_user_id)
     
     days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     header_cols = st.columns([1,1,1,1,1,1,0.8])
@@ -1658,39 +1875,14 @@ def admin_dashboard(conn):
         expected_working_days += 1
     expected_working_hours = expected_working_days * 8
 
-    total_work_hours_month = sum(d.get('type_hours', {}).get('work', 0) for d in monthly_summary.values())
-    leave_days_month = len([d for d in monthly_summary.values() if 'leave' in d.get('type_hours', {})])
-    half_days_month = len([d for d in monthly_summary.values() if 'half_day' in d.get('type_hours', {})])
-    working_days_month = len([d for d in monthly_summary.values() if d.get('type_hours', {}).get('work', 0) > 0])
-    total_downtime_month = sum(d.get('type_hours', {}).get('power_cut', 0) + d.get('type_hours', {}).get('no_internet', 0) for d in monthly_summary.values())
-
-    lifetime_stats = get_user_lifetime_stats(conn, selected_user_id)
-    total_work_hours_user = lifetime_stats['total_work_hours']
-    leave_days_user = lifetime_stats['leave_days']
-    half_days_user = lifetime_stats['half_days']
-
-    with st.container():
-        st.subheader(f"{calendar.month_name[selected_month]} {selected_year}", anchor=False)
-        cols = st.columns(5, border = True)
-        with cols[0]:
-            st.metric("Working Days", working_days_month, delta=f"expected {expected_working_days}")
-        with cols[1]:
-            st.metric("Work Hours", f"{total_work_hours_month:.1f}", delta=f"expected {expected_working_hours:.1f}")
-        with cols[2]:
-            st.metric("Leave Days", leave_days_month)
-        with cols[3]:
-            st.metric("Half Days", half_days_month)
-        with cols[4]:
-            st.metric("Downtime", f"{total_downtime_month:.1f}h")
+    # Display enhanced monthly stats
+    display_monthly_stats(
+        monthly_summary, selected_year, selected_month,
+        expected_working_days, expected_working_hours
+    )
 
     with st.expander("Lifetime Statistics", expanded=False):
-        cols = st.columns(3)
-        with cols[0]:
-            st.metric("Total Work Hours", f"{total_work_hours_user:.1f}")
-        with cols[1]:
-            st.metric("Total Leave Days", leave_days_user)
-        with cols[2]:
-            st.metric("Total Half Days", half_days_user)
+        display_lifetime_stats(conn, selected_user_id)
     
     days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
     header_cols = st.columns([1,1,1,1,1,1,0.8], vertical_alignment="bottom")
