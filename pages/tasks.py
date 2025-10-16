@@ -102,8 +102,7 @@ if user_app in ["main", "operations", "sales"] and click_id and click_id not in 
 # --- Helper Functions ---
 def get_current_week_details():
     """Calculates current fiscal week and dates."""
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
     # Monday is 0 and Sunday is 6. This is consistent with isocalendar().
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=5) # Saturday
@@ -113,8 +112,7 @@ def get_current_week_details():
 # NEW: Function to specifically get previous week's details
 def get_previous_week_details():
     """Calculates the previous fiscal week and its dates."""
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
     # Go to last week (e.g., from Monday, go back one day to Sunday)
     previous_week_date = today - timedelta(days=7)
     start_of_last_week = previous_week_date - timedelta(days=previous_week_date.weekday())
@@ -137,8 +135,7 @@ def determine_timesheet_week_to_display(conn, user_id):
     Determines which week's timesheet to display.
     STRICT: If ANY previous timesheet is pending, force user to complete it first.
     """
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
     current_fiscal_week, current_start_of_week, current_end_of_week = get_current_week_details()
 
     # Check for ANY pending timesheets (draft or rejected) from previous weeks
@@ -282,7 +279,7 @@ def get_weekly_work(conn, timesheet_id):
             SELECT id, work_date, work_name, work_description, work_duration, entry_type, reason
             FROM work WHERE timesheet_id = :timesheet_id ORDER BY work_date ASC
         """
-        df = conn.query(query, params={"timesheet_id": timesheet_id}, ttl=5)
+        df = conn.query(query, params={"timesheet_id": timesheet_id}, ttl=0)
         if not df.empty:
             df['work_date'] = pd.to_datetime(df['work_date']).dt.date
         return df
@@ -307,7 +304,7 @@ def get_user_timesheet_history(conn, user_id):
             GROUP BY t.id, t.fiscal_week, t.status, t.submitted_at, t.reviewed_at, t.review_notes, manager.username
             ORDER BY t.fiscal_week DESC
         """
-        return conn.query(query, params={"user_id": user_id}, ttl=10)
+        return conn.query(query, params={"user_id": user_id}, ttl=0)
     except Exception as e:
         st.error(f"Error fetching timesheet history: {e}")
         return pd.DataFrame()
@@ -375,8 +372,7 @@ def submit_timesheet_for_approval(conn, timesheet_id, current_status):
     """Submits timesheet, updating status and timestamp (IST timezone)."""
     try:
         # Get current time in IST
-        ist = pytz.timezone('Asia/Kolkata')
-        submitted_time = datetime.now(ist)
+        submitted_time = get_ist_time()
 
         with conn.session as s:
             s.execute(text("""
@@ -411,8 +407,7 @@ def get_late_submitters_for_manager(conn, manager_id):
     """
     Checks on Monday for direct reports who have not submitted the previous week's timesheet.
     """
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
 
     # This check is most relevant on Monday and Tuesday
     if today.weekday() not in [0, 1]: # 0=Monday, 1=Tuesday
@@ -463,7 +458,7 @@ def get_monthly_summary(conn, user_id: int, year: int, month: int, statuses: lis
             params["statuses"] = statuses
         query += " ORDER BY w.work_date;"
 
-        df = conn.query(sql=query, params=params, ttl=60)
+        df = conn.query(sql=query, params=params, ttl=0)
         if df.empty:
             return {}
 
@@ -529,7 +524,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'work'
         """
-        df_work = conn.query(sql=query_work, params={"user_id": user_id}, ttl=60)
+        df_work = conn.query(sql=query_work, params={"user_id": user_id}, ttl=0)
         total_work_hours = df_work['total_work_hours'].iloc[0] if not df_work.empty else 0
 
         # Leave days
@@ -539,7 +534,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'leave'
         """
-        df_leave = conn.query(sql=query_leave, params={"user_id": user_id}, ttl=60)
+        df_leave = conn.query(sql=query_leave, params={"user_id": user_id}, ttl=0)
         leave_days = df_leave['leave_days'].iloc[0] if not df_leave.empty else 0
 
         # Half days
@@ -549,7 +544,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'half_day'
         """
-        df_half = conn.query(sql=query_half, params={"user_id": user_id}, ttl=60)
+        df_half = conn.query(sql=query_half, params={"user_id": user_id}, ttl=0)
         half_days = df_half['half_days'].iloc[0] if not df_half.empty else 0
 
         # Holiday days
@@ -559,7 +554,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             JOIN timesheets t ON w.timesheet_id = t.id
             WHERE t.user_id = :user_id AND w.entry_type = 'holiday'
         """
-        df_holiday = conn.query(sql=query_holiday, params={"user_id": user_id}, ttl=60)
+        df_holiday = conn.query(sql=query_holiday, params={"user_id": user_id}, ttl=0)
         holiday_days = df_holiday['holiday_days'].iloc[0] if not df_holiday.empty else 0
 
         # Total downtime hours and breakdown
@@ -576,7 +571,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             WHERE t.user_id = :user_id 
             AND w.entry_type IN ('no_internet', 'power_cut', 'system_failure', 'other')
         """
-        df_downtime = conn.query(sql=query_downtime, params={"user_id": user_id}, ttl=60)
+        df_downtime = conn.query(sql=query_downtime, params={"user_id": user_id}, ttl=0)
         downtime_row = df_downtime.iloc[0] if not df_downtime.empty else {}
         
         total_downtime_hours = downtime_row.get('total_downtime_hours', 0)
@@ -593,7 +588,7 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             WHERE t.user_id = :user_id 
             AND w.entry_type = 'work'
         """
-        df_working_days = conn.query(sql=query_working_days, params={"user_id": user_id}, ttl=60)
+        df_working_days = conn.query(sql=query_working_days, params={"user_id": user_id}, ttl=0)
         working_days = df_working_days['working_days'].iloc[0] if not df_working_days.empty else 0
 
         # Average daily work hours
@@ -757,7 +752,7 @@ def get_available_months_years(conn, user_id: int) -> tuple:
             ORDER BY year, month;
         """
         params = {"user_id": user_id}
-        df = conn.query(sql=query, params=params, ttl=60)
+        df = conn.query(sql=query, params=params, ttl=0)
         
         if df.empty:
             return [], {}
@@ -794,7 +789,7 @@ def get_work_for_week(conn, user_id: int, week_start_date: date) -> pd.DataFrame
             ORDER BY w.work_date ASC, w.id ASC;
         """
         params = {"user_id": user_id, "start_date": week_start_date, "end_date": week_end_date}
-        df = conn.query(sql=query, params=params, ttl=60)
+        df = conn.query(sql=query, params=params, ttl=0)
 
         if not df.empty:
             df['work_date'] = pd.to_datetime(df['work_date']).dt.date
@@ -814,7 +809,7 @@ def get_direct_reports(conn, manager_id: int) -> pd.DataFrame:
             ORDER BY u.username;
         """
         params = {"manager_id": manager_id}
-        df = conn.query(sql=query, params=params, ttl=60)
+        df = conn.query(sql=query, params=params, ttl=0)
         return df
     except Exception as e:
         st.error(f"Error fetching direct reports: {e}")
@@ -852,7 +847,7 @@ def get_weekly_timesheet_details(conn, user_id: int, week_start_date: date) -> p
             ORDER BY w.work_date ASC, w.id ASC;
         """
         params = {"user_id": user_id, "start_date": week_start_date, "end_date": week_end_date}
-        df = conn.query(sql=query, params=params, ttl=60)
+        df = conn.query(sql=query, params=params, ttl=0)
 
         if not df.empty:
             df['work_date'] = pd.to_datetime(df['work_date']).dt.date
@@ -910,8 +905,7 @@ def get_submitted_timesheet_users(conn, manager_id):
     Returns:
         list: List of usernames who have submitted their timesheets.
     """
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
     
     # Determine the fiscal week to check
     if today.weekday() in [0, 1]:  # Monday or Tuesday, check previous week
@@ -979,6 +973,42 @@ def get_user_details(user_id):
         st.error(f"Error fetching user details: {e}")
         return None
     
+def get_recent_work_titles(conn, user_id, limit=15):
+    """Fetch recent distinct work titles for the user."""
+    try:
+        query = """
+            SELECT DISTINCT w.work_name 
+            FROM work w
+            JOIN timesheets t ON w.timesheet_id = t.id
+            WHERE t.user_id = :user_id 
+            AND w.entry_type = 'work'
+            AND w.work_name IS NOT NULL 
+            AND w.work_name != '' 
+            AND w.work_name != 'Work'
+            ORDER BY w.created_at DESC
+            LIMIT :limit
+        """
+        result = conn.query(query, params={
+            "user_id": user_id,
+            "limit": limit
+        }, ttl=0)
+        
+        titles = [row['work_name'] for _, row in result.iterrows()]
+        return titles
+        
+    except Exception as e:
+        return []
+    
+# Helper function to get current IST time
+def get_ist_time():
+    ist = pytz.timezone('Asia/Kolkata')
+    return datetime.now(ist)
+
+# Helper function to get current IST time
+def get_ist_date():
+    ist = pytz.timezone('Asia/Kolkata')
+    return datetime.now(ist).date()
+    
 ###################################################################################################################################
 ##################################--------------- Dialogs----------------------------########################################
 ###################################################################################################################################
@@ -1006,7 +1036,6 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
 
     # --- Edit Form ---
     with st.form(f"edit_entry_form_{work_entry_row['id']}"):
-        st.subheader("Edit Entry Details")
 
         entry_type_selection = st.selectbox(
             "Entry Type",
@@ -1025,15 +1054,33 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
             max_value=end_date
         )
 
+        current_week_work_titles = get_recent_work_titles(
+            conn, st.session_state.user_id
+        )
+
         # Logic to display correct fields based on selected entry type
         if entry_type_selection == "Work":
             # Only use existing data if entry type hasn't changed
             work_name_value = '' if entry_type_changed else work_entry_row.get('work_name', '')
+            # Find the index of existing work title in current week titles
+            default_index = None
+            if work_name_value and work_name_value in current_week_work_titles:
+                default_index = current_week_work_titles.index(work_name_value)
+
+            work_name = st.selectbox(
+                "Work Title",
+                options=current_week_work_titles,
+                index= default_index,
+                format_func=lambda x: x,
+                placeholder="Select existing work or type new...",
+                key=f"work_title_select_{work_entry_row['id']}",
+                accept_new_options=True
+            )
+            
             work_desc_value = '' if entry_type_changed else (work_entry_row.get('work_description', '') or '')
+            work_description = st.text_area("Description", value=work_desc_value, placeholder="e.g., Implemented frontend and backend...")
             duration_value = 1.0 if entry_type_changed else float(work_entry_row.get('work_duration', 1.0))
             
-            work_name = st.text_input("Work Title", value=work_name_value, placeholder="e.g., Developed login page")
-            work_description = st.text_area("Description", value=work_desc_value, placeholder="e.g., Implemented frontend and backend...")
             col1, col2 = st.columns(2)
             with col1:
                 hours = st.number_input("Hours", min_value=0, max_value=8, value=int(duration_value), step=1)
@@ -1166,8 +1213,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
     entry_options = ("Work", "Holiday", "Leave", "Half Day", "No Internet", "Power Cut", "System Failure", "Other")
     entry_type = st.selectbox("Entry Type", entry_options, key="entry_type_modal")
 
-    ist = pytz.timezone('Asia/Kolkata')
-    today = datetime.now(ist).date()
+    today = get_ist_date()
     
     # Check if the previous week's timesheet is unsubmitted (draft or rejected) for the user
     prev_fiscal_week, prev_start_date, prev_end_date = get_previous_week_details()
@@ -1202,6 +1248,10 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
     with st.form("new_entry_form"):
         work_date = st.date_input("Date", value=default_date, min_value=min_date, max_value=max_date)
 
+        current_week_work_titles = get_recent_work_titles(
+            conn, st.session_state.user_id
+        )
+
         # Initialize variables
         work_name = None
         work_description = None
@@ -1209,7 +1259,15 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
         reason = None
 
         if entry_type == "Work":
-            work_name = st.text_input("Work Title", placeholder="e.g., Developed login page")
+            work_name = st.selectbox(
+                "Work Title",
+                options=current_week_work_titles,
+                index=None,
+                format_func=lambda x: x,
+                placeholder="Select existing work or type new...",
+                help="Select from your recent work titles or type a new one",
+                accept_new_options=True
+            )
             work_description = st.text_area("Description", placeholder="e.g., Implemented frontend and backend...")
             col1, col2 = st.columns(2)
             with col1:
@@ -1321,8 +1379,11 @@ def confirm_submission_dialog(conn, timesheet_id, current_status):
 def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=False, is_admin = False):
     """Dialog for viewing weekly timesheet details with a dynamic horizontal layout, including System Failure."""
     week_end_date = week_start_date + timedelta(days=6)
-    st.subheader(f"Week Summary for {username}", anchor=False)
-    st.caption(f"{week_start_date.strftime('%b %d')} - {week_end_date.strftime('%b %d, %Y')}")
+    col1, col2 = st.columns([2,7], vertical_alignment="bottom")
+    with col1:
+        st.subheader(f"Week Summary for {username}", anchor=False)
+    with col2:
+        st.caption(f"{week_start_date.strftime('%b %d')} - {week_end_date.strftime('%b %d, %Y')}")
 
     df = get_weekly_timesheet_details(conn, user_id, week_start_date)
 
@@ -1382,17 +1443,22 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                     render_compact_metric(item['label'], item['value'], item['help'])
         
         st.markdown("")  # Small spacer
-
-    st.divider()
+    
+    st.markdown("")
 
     # Render the detailed grid of daily entries
-    render_weekly_work_grid(conn, df, week_start_date, is_editable=False)
+    #render_weekly_work_grid(conn, df, week_start_date, is_editable=False)
+    render_grouped_timesheet(conn, df, week_start_date, is_editable=False)
+
+    st.markdown("")
 
     if review_notes:
         st.warning(f"**Manager's Feedback:** {review_notes}", icon="⚠️")
 
     # --- Manager Approval/Rejection Logic ---
-    if is_manager or is_admin and status == 'submitted':
+    if (is_manager or is_admin) and status == 'submitted':
+        
+        st.markdown("")
         with st.form(f"timesheet_action_form_{timesheet_id}", border=False):
             action_col1, action_col2 = st.columns(2)
             
@@ -1400,25 +1466,30 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                 if st.form_submit_button("Approve", use_container_width=True, type="primary"):
                     try:
                         with conn.session as s:
+                            # Update with IST timestamp
+                            ist_time = get_ist_time()
                             s.execute(
                                 text("""
                                     UPDATE timesheets 
                                     SET status = 'approved', 
-                                        reviewed_at = NOW(),
+                                        reviewed_at = :ist_time,
                                         review_notes = NULL
                                     WHERE id = :id
                                 """),
-                                {"id": timesheet_id, "manager_id": st.session_state.user_id}
+                                {"id": timesheet_id, "ist_time": ist_time}
                             )
                             s.commit()
-                        log_activity(
-                            conn, 
-                            st.session_state.user_id, 
-                            st.session_state.username, 
-                            st.session_state.session_id, 
-                            "APPROVE_TIMESHEET", 
-                            f"Approved timesheet ID: {timesheet_id} for user {username}"
-                        )
+                            
+                            # Log with IST time
+                            log_activity(
+                                conn, 
+                                st.session_state.user_id, 
+                                st.session_state.username, 
+                                st.session_state.session_id, 
+                                "APPROVE_TIMESHEET", 
+                                f"Approved timesheet ID: {timesheet_id} for user {username} at {ist_time.strftime('%Y-%m-%d %H:%M:%S IST')}"
+                            )
+                            
                         st.success(f"Timesheet for {username} approved successfully.")
                         time.sleep(1)
                         st.rerun()
@@ -1438,30 +1509,328 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                         else:
                             try:
                                 with conn.session as s:
+                                    # Update with IST timestamp
+                                    ist_time = get_ist_time()
                                     s.execute(
                                         text("""
                                             UPDATE timesheets 
                                             SET status = 'rejected', 
-                                                reviewed_at = NOW(),
+                                                reviewed_at = :ist_time,
                                                 review_notes = :notes
                                             WHERE id = :id
                                         """),
-                                        {"id": timesheet_id, "notes": notes.strip(), "manager_id": st.session_state.user_id}
+                                        {"id": timesheet_id, "notes": notes.strip(), "ist_time": ist_time}
                                     )
                                     s.commit()
-                                log_activity(
-                                    conn, 
-                                    st.session_state.user_id, 
-                                    st.session_state.username, 
-                                    st.session_state.session_id, 
-                                    "REQUEST_REVISION_TIMESHEET", 
-                                    f"Requested revision for timesheet ID: {timesheet_id} for user {username}"
-                                )
+                                    
+                                    # Log with IST time
+                                    log_activity(
+                                        conn, 
+                                        st.session_state.user_id, 
+                                        st.session_state.username, 
+                                        st.session_state.session_id, 
+                                        "REQUEST_REVISION_TIMESHEET", 
+                                        f"Requested revision for timesheet ID: {timesheet_id} for user {username} at {ist_time.strftime('%Y-%m-%d %H:%M:%S IST')} with notes: {notes.strip()}"
+                                    )
+                                    
                                 st.success(f"Revision requested for {username}'s timesheet.")
                                 time.sleep(1)
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Error requesting revision: {e}")
+
+###################################################################################################################################
+##################################--------------- User Interface ----------------------------########################################
+###################################################################################################################################
+
+
+def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=False):
+    """
+    Renders a unified timesheet in a grid format (Entry Name x Day of Week).
+    Includes daily total work hours at the bottom.
+    """
+    if work_df.empty:
+        st.info("No entries for this week. Click '➕ Add Entry' to get started.", icon="📝")
+        return
+
+    # --- 1. Define Week Details & Icon Mapping ---
+    days_of_week_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    week_dates = [(start_of_week_date + timedelta(days=i)) for i in range(6)]
+    icon_map = {
+        'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗', 'no_internet': '🌐',
+        'power_cut': '🔌', 'other': '❓', 'system_failure': '⚠️'
+    }
+
+    # --- 2. Create the Header Row ---
+    header_cols = st.columns([2, 1, 1, 1, 1, 1, 1])
+    header_cols[0].markdown("**Work**")
+    for i, day_name in enumerate(days_of_week_names):
+        # MODIFIED: Used a markdown header to make the day name slightly bigger and bolder
+        header_cols[i+1].markdown(f"##### {day_name}")
+        header_cols[i+1].caption(f"{week_dates[i].strftime('%d %b')}")
+
+    st.markdown("<hr style='margin-top:0; margin-bottom:1rem;'>", unsafe_allow_html=True)
+
+    # --- 3. Process and Display ALL Entries in a Unified Grid ---
+    unique_entry_names = work_df['work_name'].unique()
+
+    for entry_name in unique_entry_names:
+        data_cols = st.columns([1.5, 1, 1, 1, 1, 1, 1])
+        data_cols[0].markdown(f"**{entry_name}**")
+
+        for i, day_date in enumerate(week_dates):
+            day_entries = work_df[
+                (work_df['work_name'] == entry_name) &
+                (work_df['work_date'] == day_date)
+            ]
+
+            with data_cols[i+1]:
+                if not day_entries.empty:
+                    entry_type = day_entries.iloc[0]['entry_type']
+
+                    if entry_type == 'work':
+                        total_hours = day_entries['work_duration'].sum()
+                        with st.popover(f"`{total_hours:.1f} hrs`", use_container_width=True):
+                            st.markdown(f"**{entry_name}** on **{day_date.strftime('%a, %b %d')}**")
+                            # (Popover content for work entries remains the same)
+                            for _, entry_row in day_entries.iterrows():
+                                with st.container(border=True):
+                                    c1, c2 = st.columns([0.8, 0.2])
+                                    c1.caption(f"{entry_row.get('work_description', '_No description_')}")
+                                    c1.markdown(f"**`{float(entry_row['work_duration']):.2f} hrs`**")
+                                    if is_editable:
+                                        c2.button("⚙️", key=f"manage_{entry_row['id']}", on_click=manage_work_entry, args=(conn, entry_row, start_of_week_date, start_of_week_date + timedelta(days=5)), help="Manage this entry", type="tertiary")
+                    else:
+                        entry_row = day_entries.iloc[0]
+                        icon = icon_map.get(entry_type, '❓')
+                        duration = entry_row['work_duration']
+                        
+                        # MODIFIED: Create a dynamic popover label that includes hours if they exist
+                        popover_label = f"{icon}"
+                        if duration > 0:
+                            popover_label += f" `{duration:.1f} hrs`"
+
+                        with st.popover(popover_label, use_container_width=True):
+                            # (Popover content for other entries remains the same)
+                            st.markdown(f"{icon} **{entry_row['work_name']}** on **{day_date.strftime('%a, %b %d')}**")
+                            with st.container(border=True):
+                                c1, c2 = st.columns([0.8, 0.2])
+                                if entry_row.get('reason'):
+                                    c1.caption(f"_{entry_row['reason']}_")
+                                if duration > 0:
+                                    c1.markdown(f"**`{float(duration):.2f} hrs`**")
+                                else:
+                                    c1.markdown(f"**{entry_row['work_name']}**")
+                                if is_editable:
+                                    c2.button("⚙️", key=f"manage_{entry_row['id']}", on_click=manage_work_entry, args=(conn, entry_row, start_of_week_date, start_of_week_date + timedelta(days=5)), help="Manage this entry", type="tertiary")
+                else:
+                    st.markdown("<p style='text-align: center;'>—</p>", unsafe_allow_html=True)
+    
+    st.markdown("<hr style='margin-top:1rem; margin-bottom:1rem;'>", unsafe_allow_html=True)
+
+    # --- NEW: 4. Display Daily Total Work Hours at the Bottom with Conditional Formatting ---
+    total_cols = st.columns([1.5, 1, 1, 1, 1, 1, 1])
+    total_cols[0].markdown("**Total (Work)**")
+
+    # Filter for work entries only to calculate totals
+    work_entries_df = work_df[work_df['entry_type'] == 'work']
+    
+    TARGET_HOURS = 8.0  # Define target hours threshold
+    
+    for i, day_date in enumerate(week_dates):
+        day_total_hours = work_entries_df[work_entries_df['work_date'] == day_date]['work_duration'].sum()
+        
+        # Determine color based on hours
+        if day_total_hours >= TARGET_HOURS:
+            color = "#28a745"  # Green for at or above target
+        elif day_total_hours >= TARGET_HOURS * 0.75:  # 6+ hours
+            color = "#fd7e14"  # Orange for slightly below target
+        else:
+            color = "#dc3545"  # Red for significantly below target
+        
+        with total_cols[i+1]:
+            st.markdown(
+                f"<div style='text-align: center;'>"
+                f"<span style='background-color: #f7f7f7; padding: 3px 6px; "
+                f"border-radius: 4px; font-weight: 600; color: {color}; font-size: 0.8em;'>"
+                f"{day_total_hours:.1f} hrs</span></div>",
+                unsafe_allow_html=True
+            )
+    
+
+def inject_custom_css():
+    st.markdown("""
+        <style>
+            .day-card {
+                padding: 10px;
+                border-radius: 8px;
+                border: 1px solid #ddd;
+                height: 140px;
+                display: flex;
+                flex-direction: column;
+                justify-content: space-between;
+                margin-bottom: 10px;
+            }
+            .day-card:hover {
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+                border-color: #bbb;
+            }
+            .day-card-work { background-color: #D4EDDA; } /* Green */
+            .day-card-leave { background-color: #FEE2E2; } /* Red */
+            .day-card-half_day { background-color: #FFEDD5; } /* Orange */
+            .day-card-holiday { background-color: #F3E8FF; } /* Purple */
+            .day-card-power_cut { background-color: #D7CCC8; } /* Brown */
+            .day-card-no_internet { background-color: #FEF9C3; } /* Yellow */
+            .day-card-other { background-color: #DBEAFE; } /* Blue */
+            .day-card-weekend { background-color: #F5F5F5; } /* Grey for Sunday */
+            .day-card-empty { background-color: #FAFAFA; border-style: dashed; } /* Past empty */
+            .day-card-future { background-color: #ECEFF1; } /* Light gray for future */
+            .day-number { font-weight: bold; font-size: 1.2em; text-align: left; }
+            .day-name { font-size: 0.9em; color: #666; }
+            .day-summary { font-size: 0.85em; margin-top: 5px; line-height: 1.3; overflow-y: auto; max-height: 70px; }
+            .header-card {
+                padding-bottom: 0.75rem; /* 12px */
+                font-weight: 600;
+                font-size: 0.75rem; /* 12px */
+                text-align: center;
+                color: #313438; /* Slate 500 */
+                margin-bottom: 1.3rem; /* 8px */
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                border-bottom: 2px solid #d0d2d6; /* Light border instead of hr */
+                background-color: transparent;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 40px;
+            }
+            .status-indicator {
+                font-size: 0.8em;
+                text-align: center;
+                margin-bottom: 5px;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+def render_day_card(day, daily_data, is_current_month, is_weekend, is_future):
+    if not is_current_month:
+        st.markdown('<div class="day-card day-card-empty"></div>', unsafe_allow_html=True)
+        return
+
+    date_obj = day
+    status = daily_data.get('status', 'empty')
+    type_hours = daily_data.get('type_hours', {})
+    holiday_name = daily_data.get('holiday_name')
+
+    css_class = f"day-card-{status}" if status != 'empty' else "day-card-future" if is_future else "day-card-weekend" if is_weekend else "day-card-empty"
+
+    day_name = calendar.day_abbr[date_obj.weekday()]
+
+    summary_lines = []
+    work_hours = type_hours.get('work', 0)
+    non_work_types = {k: v for k, v in type_hours.items() if k != 'work'}
+
+    for typ, hours in sorted(non_work_types.items()):
+        if typ == 'holiday':
+            name = holiday_name or 'Holiday'
+            line = f"🏖️ {name}"
+        else:
+            display_name = {
+                'leave': 'Leave',
+                'half_day': 'Half Day',
+                'power_cut': 'Power Cut',
+                'no_internet': 'No Internet',
+                'other': 'Other',
+            }.get(typ, typ.replace('_', ' ').capitalize())
+            emoji = {
+                'leave': '🌴',
+                'half_day': '🌗',
+                'power_cut': '⚡',
+                'no_internet': '📶',
+                'system_failure': '⚠️',
+                'other': '🔍',
+            }.get(typ, '')
+            line = f"{emoji} {hours:.1f}h {display_name}"
+        summary_lines.append(line)
+
+    if work_hours > 0:
+        summary_lines.append(f"✅ {work_hours:.1f}h Work")
+
+    if not summary_lines:
+        if not is_weekend:
+            summary_lines.append("📅 No Activity")
+
+    summary_text = "<br>".join(summary_lines)
+
+    card_html = f"""
+    <div class="day-card {css_class}">
+        <div>
+            <div class="day-number">{date_obj.day}</div>
+            <div class="day-name">{day_name}</div>
+            <div class="day-summary">{summary_text}</div>
+        </div>
+    </div>
+    """
+    st.markdown(card_html, unsafe_allow_html=True)
+
+def render_work_entry(conn, work_row, is_editable, week_bounds):
+    """Renders a single work entry with one 'Manage' button and new icons."""
+    with st.container(border=True):
+        col1, col2 = st.columns([0.9, 0.1])
+        with col1:
+            entry_type = work_row.get('entry_type', 'work')
+            icon_map = {
+                'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗',
+                'no_internet': '🌐', 'power_cut': '🔌', 'other': '❓',
+                'system_failure': '⚠️'
+            }
+            if entry_type in icon_map:
+                st.markdown(f"{icon_map[entry_type]} **{work_row['work_name']}**")
+                # Only show reason caption if it's meaningful (not redundant)
+                if entry_type in ['holiday', 'leave', 'half_day', 'other'] and work_row.get('reason'):
+                    st.caption(f"Reason: **{work_row['reason']}**")
+            else:  # 'work' type
+                st.markdown(f"**{work_row['work_name']}**")
+                if work_row.get('work_description'):
+                    st.caption(f"{work_row['work_description']}")
+            st.markdown(f"**`{float(work_row['work_duration']):.2f} hrs`**")
+        with col2:
+            if is_editable:
+                st.button(
+                    "⚙️",
+                    key=f"manage_{work_row['id']}",
+                    on_click=manage_work_entry,
+                    args=(conn, work_row, week_bounds['start'], week_bounds['end']),
+                    use_container_width=True,
+                    help="Manage this entry (Edit or Delete)",
+                    type="tertiary"
+                )
+
+
+def render_weekly_work_grid(conn, work_df, start_of_week_date, is_editable=False):
+    """Displays work entries in a 6-column grid (Mon-Sat)."""
+    days_of_week = [(start_of_week_date + timedelta(days=i)) for i in range(6)]
+    cols = st.columns(6)
+
+    # Defines the date boundaries for the entire week
+    week_bounds = {'start': start_of_week_date, 'end': start_of_week_date + timedelta(days=5)}
+
+    for i, day_date in enumerate(days_of_week):
+        with cols[i]:
+            st.subheader(f"{day_date.strftime('%a')}", anchor=False)
+            st.caption(f"{day_date.strftime('%d %b')}")
+            day_work_df = work_df[work_df['work_date'] == day_date]
+
+            if not day_work_df.empty:
+                for _, row in day_work_df.iterrows():
+                    # Passes the full week_bounds dictionary down to the rendering function
+                    render_work_entry(conn, row, is_editable, week_bounds)
+
+                day_working_hours = day_work_df[day_work_df['entry_type'] == 'work']['work_duration'].sum()
+                if day_working_hours > 0:
+                    st.markdown(f"**Total Work: `{float(day_working_hours):.2f} hrs`**")
+            else:
+                st.info("_No entries._", icon="💤")
                                 
 
 ###################################################################################################################################
@@ -1512,7 +1881,7 @@ def my_timesheet_page(conn):
 
     st.markdown("---")
     work_df = get_weekly_work(conn, timesheet_id)
-    render_weekly_work_grid(conn, work_df, start_of_week, is_editable=is_editable)
+    render_grouped_timesheet(conn, work_df, start_of_week, is_editable=is_editable)
     st.markdown("---")
     total_logged_hours = work_df['work_duration'].sum()
     working_hours = work_df[work_df['entry_type'] == 'work']['work_duration'].sum()
@@ -1638,7 +2007,7 @@ def timesheet_history_page(conn):
         st.session_state.show_week_details_for = None
         
     if st.session_state.show_week_details_for:
-        show_weekly_dialog(conn, user_id, username, st.session_state.show_week_details_for, is_manager=False)
+        show_weekly_dialog(conn, user_id, username, st.session_state.show_week_details_for)
         st.session_state.show_week_details_for = None
 
 
@@ -1935,186 +2304,6 @@ def admin_dashboard(conn):
     if st.session_state.show_week_details_for:
         show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for, is_admin = True)
         st.session_state.show_week_details_for = None
-
-
-
-###################################################################################################################################
-##################################--------------- User Interface ----------------------------########################################
-###################################################################################################################################
-
-def inject_custom_css():
-    st.markdown("""
-        <style>
-            .day-card {
-                padding: 10px;
-                border-radius: 8px;
-                border: 1px solid #ddd;
-                height: 140px;
-                display: flex;
-                flex-direction: column;
-                justify-content: space-between;
-                margin-bottom: 10px;
-            }
-            .day-card:hover {
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-                border-color: #bbb;
-            }
-            .day-card-work { background-color: #D4EDDA; } /* Green */
-            .day-card-leave { background-color: #FEE2E2; } /* Red */
-            .day-card-half_day { background-color: #FFEDD5; } /* Orange */
-            .day-card-holiday { background-color: #F3E8FF; } /* Purple */
-            .day-card-power_cut { background-color: #D7CCC8; } /* Brown */
-            .day-card-no_internet { background-color: #FEF9C3; } /* Yellow */
-            .day-card-other { background-color: #DBEAFE; } /* Blue */
-            .day-card-weekend { background-color: #F5F5F5; } /* Grey for Sunday */
-            .day-card-empty { background-color: #FAFAFA; border-style: dashed; } /* Past empty */
-            .day-card-future { background-color: #ECEFF1; } /* Light gray for future */
-            .day-number { font-weight: bold; font-size: 1.2em; text-align: left; }
-            .day-name { font-size: 0.9em; color: #666; }
-            .day-summary { font-size: 0.85em; margin-top: 5px; line-height: 1.3; overflow-y: auto; max-height: 70px; }
-            .header-card {
-                padding-bottom: 0.75rem; /* 12px */
-                font-weight: 600;
-                font-size: 0.75rem; /* 12px */
-                text-align: center;
-                color: #313438; /* Slate 500 */
-                margin-bottom: 1.3rem; /* 8px */
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                border-bottom: 2px solid #d0d2d6; /* Light border instead of hr */
-                background-color: transparent;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                min-height: 40px;
-            }
-            .status-indicator {
-                font-size: 0.8em;
-                text-align: center;
-                margin-bottom: 5px;
-            }
-        </style>
-    """, unsafe_allow_html=True)
-
-def render_day_card(day, daily_data, is_current_month, is_weekend, is_future):
-    if not is_current_month:
-        st.markdown('<div class="day-card day-card-empty"></div>', unsafe_allow_html=True)
-        return
-
-    date_obj = day
-    status = daily_data.get('status', 'empty')
-    type_hours = daily_data.get('type_hours', {})
-    holiday_name = daily_data.get('holiday_name')
-
-    css_class = f"day-card-{status}" if status != 'empty' else "day-card-future" if is_future else "day-card-weekend" if is_weekend else "day-card-empty"
-
-    day_name = calendar.day_abbr[date_obj.weekday()]
-
-    summary_lines = []
-    work_hours = type_hours.get('work', 0)
-    non_work_types = {k: v for k, v in type_hours.items() if k != 'work'}
-
-    for typ, hours in sorted(non_work_types.items()):
-        if typ == 'holiday':
-            name = holiday_name or 'Holiday'
-            line = f"🏖️ {name}"
-        else:
-            display_name = {
-                'leave': 'Leave',
-                'half_day': 'Half Day',
-                'power_cut': 'Power Cut',
-                'no_internet': 'No Internet',
-                'other': 'Other',
-            }.get(typ, typ.replace('_', ' ').capitalize())
-            emoji = {
-                'leave': '🌴',
-                'half_day': '🌗',
-                'power_cut': '⚡',
-                'no_internet': '📶',
-                'system_failure': '⚠️',
-                'other': '🔍',
-            }.get(typ, '')
-            line = f"{emoji} {hours:.1f}h {display_name}"
-        summary_lines.append(line)
-
-    if work_hours > 0:
-        summary_lines.append(f"✅ {work_hours:.1f}h Work")
-
-    if not summary_lines:
-        if not is_weekend:
-            summary_lines.append("📅 No Activity")
-
-    summary_text = "<br>".join(summary_lines)
-
-    card_html = f"""
-    <div class="day-card {css_class}">
-        <div>
-            <div class="day-number">{date_obj.day}</div>
-            <div class="day-name">{day_name}</div>
-            <div class="day-summary">{summary_text}</div>
-        </div>
-    </div>
-    """
-    st.markdown(card_html, unsafe_allow_html=True)
-
-def render_work_entry(conn, work_row, is_editable, week_bounds):
-    """Renders a single work entry with one 'Manage' button and new icons."""
-    with st.container(border=True):
-        col1, col2 = st.columns([0.9, 0.1])
-        with col1:
-            entry_type = work_row.get('entry_type', 'work')
-            icon_map = {
-                'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗',
-                'no_internet': '🌐', 'power_cut': '🔌', 'other': '❓',
-                'system_failure': '⚠️'
-            }
-            if entry_type in icon_map:
-                st.markdown(f"{icon_map[entry_type]} **{work_row['work_name']}**")
-                # Only show reason caption if it's meaningful (not redundant)
-                if entry_type in ['holiday', 'leave', 'half_day', 'other'] and work_row.get('reason'):
-                    st.caption(f"Reason: **{work_row['reason']}**")
-            else:  # 'work' type
-                st.markdown(f"**{work_row['work_name']}**")
-                if work_row.get('work_description'):
-                    st.caption(f"{work_row['work_description']}")
-            st.markdown(f"**`{float(work_row['work_duration']):.2f} hrs`**")
-        with col2:
-            if is_editable:
-                st.button(
-                    "⚙️",
-                    key=f"manage_{work_row['id']}",
-                    on_click=manage_work_entry,
-                    args=(conn, work_row, week_bounds['start'], week_bounds['end']),
-                    use_container_width=True,
-                    help="Manage this entry (Edit or Delete)",
-                    type="tertiary"
-                )
-
-
-def render_weekly_work_grid(conn, work_df, start_of_week_date, is_editable=False):
-    """Displays work entries in a 6-column grid (Mon-Sat)."""
-    days_of_week = [(start_of_week_date + timedelta(days=i)) for i in range(6)]
-    cols = st.columns(6)
-
-    # Defines the date boundaries for the entire week
-    week_bounds = {'start': start_of_week_date, 'end': start_of_week_date + timedelta(days=5)}
-
-    for i, day_date in enumerate(days_of_week):
-        with cols[i]:
-            st.subheader(f"{day_date.strftime('%a')}", anchor=False)
-            st.caption(f"{day_date.strftime('%d %b')}")
-            day_work_df = work_df[work_df['work_date'] == day_date]
-
-            if not day_work_df.empty:
-                for _, row in day_work_df.iterrows():
-                    # Passes the full week_bounds dictionary down to the rendering function
-                    render_work_entry(conn, row, is_editable, week_bounds)
-
-                day_working_hours = day_work_df[day_work_df['entry_type'] == 'work']['work_duration'].sum()
-                if day_working_hours > 0:
-                    st.markdown(f"**Total Work: `{float(day_working_hours):.2f} hrs`**")
-            else:
-                st.info("_No entries._", icon="💤")
 
 
 
