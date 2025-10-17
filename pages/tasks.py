@@ -1037,6 +1037,7 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
     # --- Edit Form ---
     with st.form(f"edit_entry_form_{work_entry_row['id']}"):
 
+
         entry_type_selection = st.selectbox(
             "Entry Type",
             entry_types,
@@ -1068,7 +1069,7 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
                 default_index = current_week_work_titles.index(work_name_value)
 
             work_name = st.selectbox(
-                "Select Work",
+                "Work Title",
                 options=current_week_work_titles,
                 index= default_index,
                 format_func=lambda x: x,
@@ -1260,7 +1261,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
 
         if entry_type == "Work":
             work_name = st.selectbox(
-                "Select Work",
+                "Work Title",
                 options=current_week_work_titles,
                 index=None,
                 format_func=lambda x: x,
@@ -1590,7 +1591,7 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
 
                     if entry_type == 'work':
                         total_hours = day_entries['work_duration'].sum()
-                        with st.popover(f"`{total_hours:.1f} hrs`", use_container_width=True):
+                        with st.popover(f"`{total_hours:.1f} hrs`", width = "stretch"):
                             st.markdown(f"**{entry_name}** on **{day_date.strftime('%a, %b %d')}**")
                             # (Popover content for work entries remains the same)
                             for _, entry_row in day_entries.iterrows():
@@ -1955,6 +1956,14 @@ def render_weekly_work_grid(conn, work_df, start_of_week_date, is_editable=False
 ##################################--------------- Pages----------------------------########################################
 ###################################################################################################################################
 
+# Step 1: Check if user has already acknowledged the notice
+with conn.session as s:
+    result = s.execute(text("""
+        SELECT timesheet_update_ack FROM userss WHERE id = :user_id
+    """), {"user_id": user_id}).fetchone()
+    s.commit()
+
+user_has_ack = result and result[0] == 1
 
 def my_timesheet_page(conn):
     """Renders the main page for the user's timesheet."""
@@ -1996,6 +2005,46 @@ def my_timesheet_page(conn):
     if status == 'rejected':
         st.info("Your timesheet has been returned. Please make the required changes and resubmit.", icon="ℹ️")
         st.warning(f"**Manager's Feedback:** {notes}", icon="⚠️")
+
+    # Step 2: If not acknowledged, show the notification
+    if not user_has_ack:
+        if not user_has_ack:
+            st.info(
+                body="""
+        #### ⚙️ **Important Update: New Timesheet Entry Process**
+
+        We’ve improved how you log your daily work.  
+        You **no longer need to re-enter the same work every day.**  
+        From now on, **select your previous work entry** and simply **add today’s update** in the description.
+
+        ##### **Work Title Guidelines**
+        1. **Keep the title concise and specific.** All detailed information must go in the work description.  
+        2. **Include the Book ID** in the title when working on a book.  
+        3. If multiple tasks belong to the same work, **use the same work title** and add a separate description for each update.  
+        4. **Be detailed and clear** in your work descriptions.
+                """ )
+        ack = st.checkbox("I have read and understood the new timesheet entry process.")
+        if ack:
+            if st.button("Hide this message permanently"):
+                
+                    with conn.session as s:
+                        s.execute(text("""
+                            UPDATE userss
+                            SET timesheet_update_ack = 1
+                            WHERE id = :user_id
+                        """), {"user_id": user_id})
+                        s.commit()  
+                        ist_time = get_ist_time()            
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "ACKNOWLEDGE_NOTICE",
+                            f"Acknowledged timesheet update notice at {ist_time.strftime('%Y-%m-%d %H:%M:%S IST')}"
+                        )
+                        st.success("Acknowledgment saved. This message will not appear again.")
+                        st.rerun()
 
     st.markdown("---")
     work_df = get_weekly_work(conn, timesheet_id)
