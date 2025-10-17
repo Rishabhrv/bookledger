@@ -21,6 +21,7 @@ ACCESS_TO_BUTTON = {
     "Pending Work": "pending_books",
     "IJISEM": "ijisem",
     "Tasks": "tasks",
+    "Details": "details",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

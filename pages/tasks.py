@@ -1068,7 +1068,7 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
                 default_index = current_week_work_titles.index(work_name_value)
 
             work_name = st.selectbox(
-                "Work Title",
+                "Select Work",
                 options=current_week_work_titles,
                 index= default_index,
                 format_func=lambda x: x,
@@ -1260,7 +1260,7 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
 
         if entry_type == "Work":
             work_name = st.selectbox(
-                "Work Title",
+                "Select Work",
                 options=current_week_work_titles,
                 index=None,
                 format_func=lambda x: x,
@@ -1656,7 +1656,125 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
                 f"{day_total_hours:.1f} hrs</span></div>",
                 unsafe_allow_html=True
             )
-    
+
+#with st.badge
+
+# def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=False):
+#     """
+#     Renders a unified timesheet in a grid format (Entry Name x Day of Week).
+#     Includes daily total work hours at the bottom.
+#     """
+#     if work_df.empty:
+#         st.info("No entries for this week. Click '➕ Add Entry' to get started.", icon="📝")
+#         return
+
+#     # --- 1. Define Week Details & Icon Mapping ---
+#     days_of_week_names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+#     week_dates = [(start_of_week_date + timedelta(days=i)) for i in range(6)]
+#     icon_map = {
+#         'holiday': '🏖️', 'leave': '🌴', 'half_day': '🌗', 'no_internet': '🌐',
+#         'power_cut': '🔌', 'other': '❓', 'system_failure': '⚠️'
+#     }
+
+#     # --- 2. Create the Header Row ---
+#     header_cols = st.columns([2, 1, 1, 1, 1, 1, 1])
+#     header_cols[0].markdown("**Work**")
+#     for i, day_name in enumerate(days_of_week_names):
+#         header_cols[i+1].markdown(f"##### {day_name}")
+#         header_cols[i+1].caption(f"{week_dates[i].strftime('%d %b')}")
+
+#     st.markdown("<hr style='margin-top:0; margin-bottom:1rem;'>", unsafe_allow_html=True)
+
+#     # --- 3. Process and Display ALL Entries in a Unified Grid ---
+#     unique_entry_names = work_df['work_name'].unique()
+
+#     # --- MODIFIED: Create a color map to assign a unique color to each work name ---
+#     badge_colors = ["blue", "green", "orange", "red", "violet"]
+#     color_map = {
+#         name: badge_colors[i % len(badge_colors)]
+#         for i, name in enumerate(unique_entry_names)
+#     }
+
+#     for entry_name in unique_entry_names:
+#         data_cols = st.columns([1.5, 1, 1, 1, 1, 1, 1])
+
+#         # --- MODIFIED: Use st.badge for a more distinct UI in the 'Work' column ---
+#         assigned_color = color_map.get(entry_name, "gray") # Default to gray if not in map
+#         with data_cols[0]:
+#             st.badge(entry_name, color=assigned_color)
+
+#         for i, day_date in enumerate(week_dates):
+#             day_entries = work_df[
+#                 (work_df['work_name'] == entry_name) &
+#                 (work_df['work_date'] == day_date)
+#             ]
+
+#             with data_cols[i+1]:
+#                 if not day_entries.empty:
+#                     entry_type = day_entries.iloc[0]['entry_type']
+
+#                     if entry_type == 'work':
+#                         total_hours = day_entries['work_duration'].sum()
+#                         with st.popover(f"`{total_hours:.1f} hrs`", use_container_width=True):
+#                             st.markdown(f"**{entry_name}** on **{day_date.strftime('%a, %b %d')}**")
+#                             for _, entry_row in day_entries.iterrows():
+#                                 with st.container(border=True):
+#                                     c1, c2 = st.columns([0.8, 0.2])
+#                                     c1.caption(f"{entry_row.get('work_description', '_No description_')}")
+#                                     c1.markdown(f"**`{float(entry_row['work_duration']):.2f} hrs`**")
+#                                     if is_editable:
+#                                         c2.button("⚙️", key=f"manage_{entry_row['id']}", on_click=manage_work_entry, args=(conn, entry_row, start_of_week_date, start_of_week_date + timedelta(days=5)), help="Manage this entry", type="tertiary")
+#                     else:
+#                         entry_row = day_entries.iloc[0]
+#                         icon = icon_map.get(entry_type, '❓')
+#                         duration = entry_row['work_duration']
+
+#                         popover_label = f"{icon}"
+#                         if duration > 0:
+#                             popover_label += f" `{duration:.1f} hrs`"
+
+#                         with st.popover(popover_label, use_container_width=True):
+#                             st.markdown(f"{icon} **{entry_row['work_name']}** on **{day_date.strftime('%a, %b %d')}**")
+#                             with st.container(border=True):
+#                                 c1, c2 = st.columns([0.8, 0.2])
+#                                 if entry_row.get('reason'):
+#                                     c1.caption(f"_{entry_row['reason']}_")
+#                                 if duration > 0:
+#                                     c1.markdown(f"**`{float(duration):.2f} hrs`**")
+#                                 else:
+#                                     c1.markdown(f"**{entry_row['work_name']}**")
+#                                 if is_editable:
+#                                     c2.button("⚙️", key=f"manage_{entry_row['id']}", on_click=manage_work_entry, args=(conn, entry_row, start_of_week_date, start_of_week_date + timedelta(days=5)), help="Manage this entry", type="tertiary")
+#                 else:
+#                     st.markdown("<p style='text-align: center;'>—</p>", unsafe_allow_html=True)
+
+#     st.markdown("<hr style='margin-top:1rem; margin-bottom:1rem;'>", unsafe_allow_html=True)
+
+#     # --- 4. Display Daily Total Work Hours at the Bottom with Conditional Formatting ---
+#     total_cols = st.columns([1.5, 1, 1, 1, 1, 1, 1])
+#     total_cols[0].markdown("**Total (Work)**")
+
+#     work_entries_df = work_df[work_df['entry_type'] == 'work']
+#     TARGET_HOURS = 8.0
+
+#     for i, day_date in enumerate(week_dates):
+#         day_total_hours = work_entries_df[work_entries_df['work_date'] == day_date]['work_duration'].sum()
+
+#         if day_total_hours >= TARGET_HOURS:
+#             color = "#28a745"
+#         elif day_total_hours >= TARGET_HOURS * 0.75:
+#             color = "#fd7e14"
+#         else:
+#             color = "#dc3545"
+
+#         with total_cols[i+1]:
+#             st.markdown(
+#                 f"<div style='text-align: center;'>"
+#                 f"<span style='background-color: #f7f7f7; padding: 3px 6px; "
+#                 f"border-radius: 4px; font-weight: 600; color: {color}; font-size: 0.8em;'>"
+#                 f"{day_total_hours:.1f} hrs</span></div>",
+#                 unsafe_allow_html=True
+#             )
 
 def inject_custom_css():
     st.markdown("""

@@ -133,6 +133,14 @@ st.markdown("""
         .block-container {
             padding-top: 0px !important;  /* Small padding for breathing room */
         }
+            
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; font-size: 12px; }
+        .info-box { padding: 5px; border-radius: 6px; background-color: #f1f5f9; }
+        .info-label { font-weight: 600; color: #2c3e50; display: inline-block; margin-right: 4px; }
+        .book-title { font-size: 18px; color: #2c3e50; font-weight: 700; margin-bottom: 8px; }
+        .section-title { margin-top: 10px; margin-bottom: 5px; font-size: 16px; color: #2c3e50; font-weight: 600; }
+            
+        [data-testid="stElementToolbar"] {display: none;}
         </style>
             
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0" rel="stylesheet" />
@@ -141,9 +149,7 @@ st.markdown("""
 st.markdown(
     """
     <style>
-    [data-testid="stElementToolbar"] {
-        display: none;
-    }
+
     </style>
     """,
     unsafe_allow_html=True
@@ -485,6 +491,17 @@ def fetch_all_book_authors(book_ids, _conn):
             'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
             'emi2_transaction_id', 'emi3_transaction_id'
         ])
+
+# New function to fetch detailed print information for a specific book_id
+def fetch_print_details(book_id, conn):
+    query = """
+    SELECT pe.book_id, pe.print_id, bd.batch_id, pe.copies_planned, pb.print_sent_date, pb.print_receive_date, pb.status
+    FROM PrintEditions pe
+    LEFT JOIN BatchDetails bd ON pe.print_id = bd.print_id
+    LEFT JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
+    WHERE pe.book_id = :book_id
+    """
+    return conn.query(query, params={'book_id': book_id}, show_spinner=False)
 
 @st.cache_data
 def fetch_all_printeditions(book_ids, _conn):
@@ -6255,48 +6272,14 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
             # Get print status
             print_status = get_print_status(book_id, conn)
-            missing_book = print_status["book"]
-            missing_authors = print_status["authors"]
 
-            # Display checkbox and status
-            col1, col2 = st.columns([2, 3], vertical_alignment="center")
-            with col1:
-                st.checkbox(
-                    label="Ready to Print?",
-                    value=is_ready_to_print,
-                    key=f"ready_to_print_{book_id}",
-                    help="Automatically checked when all conditions are met.",
-                    disabled=True
-                )
-            with col2:
-                if is_ready_to_print:
-                    st.markdown(
-                        "<span style='background-color: #e6ffe6; color: green; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>All Set ✓</span>",
-                        unsafe_allow_html=True
-                    )
-                else:
-                    badges = []
-                    for item in missing_book:
-                        badges.append(f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {item}</span>")
-                    if missing_authors:
-                        count = len(missing_authors)
-                        badges.append(f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {count} Author(s)</span>")
-                    st.markdown(" ".join(badges), unsafe_allow_html=True)
-
-            # Expander with badge-style missing conditions
-            if missing_authors:
-                with st.expander("Why Not Ready?", expanded=True):
-                    for author in missing_authors:
-                        author_id = author['author_id']
-                        missing_conditions = author['missing']
-                        badges = [
-                            f"<span style='background-color: #ffe6e6; color: red; padding: 3px 6px; border-radius: 4px; font-size: 12px; margin-right: 5px;'>✗ {condition}</span>"
-                            for condition in missing_conditions
-                        ]
-                        st.markdown(
-                            f"<b>Author ID {author_id}:</b> {' '.join(badges)}",
-                            unsafe_allow_html=True
-                        )
+            st.checkbox(
+                label="Ready to Print?",
+                value=is_ready_to_print,
+                key=f"ready_to_print_{book_id}",
+                help="Automatically checked when all conditions are met.",
+                disabled=True
+            )
 
             # Fetch print editions data with batch details
             print_editions_query = f"""
@@ -6931,6 +6914,166 @@ def update_inventory_delivery_details(book_id, updates, conn):
     except Exception as e:
         st.error(f"❌ Error updating books table: {str(e)}")
         raise
+
+
+###################################################################################################################################
+##################################--------------- Book Details ----------------------------##################################
+###################################################################################################################################
+
+
+@st.dialog("Book Details", width="large")
+def show_book_details(book_id, book_row, authors_df, printeditions_df):
+    # Calculate days since enrolled
+    enrolled_date = book_row['date'] if pd.notnull(book_row['date']) else None
+    if enrolled_date:
+        # Convert both to date objects
+        today = datetime.now().date()
+        enrolled_date = enrolled_date.date() if hasattr(enrolled_date, 'date') else enrolled_date
+        days_since_enrolled = (today - enrolled_date).days
+    else:
+        days_since_enrolled = "N/A"
+    
+    # Count authors
+    author_count = len(authors_df[authors_df['book_id'] == book_id])
+
+    # Book Title and Archive Toggle
+
+    st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
+    # Book Info in Compact Grid Layout
+    st.markdown("<div class='info-grid'>", unsafe_allow_html=True)
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f"<div class='info-box'><span class='info-label'>Publisher:</span>{book_row['publisher']}</div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div class='info-box'><span class='info-label'>Enrolled:</span>{enrolled_date.strftime('%d %b %Y') if enrolled_date else 'N/A'}</div>", unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"<div class='info-box'><span class='info-label'>Since:</span>{days_since_enrolled} days</div>", unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"<div class='info-box'><span class='info-label'>Authors:</span>{author_count}</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # Author Checklists (Full Sequence)
+    st.markdown("<h4 class='section-title'>Author Checklist</h4>", unsafe_allow_html=True)
+    book_authors_df = authors_df[authors_df['book_id'] == book_id]
+    if not book_authors_df.empty:
+        checklist_columns = [
+            'welcome_mail_sent', 'author_details_sent', 'photo_recive',
+            'apply_isbn_not_applied', 'isbn_not_received',
+            'cover_agreement_sent', 'digital_book_sent', 'id_proof_recive',
+            'agreement_received', 'printing_confirmation'
+        ]
+        checklist_labels = [
+            'Welcome', 'Details', 'Photo', 'ISBN Apply', 'ISBN Recv',
+            'Cover/Agr', 'Digital', 'ID Proof', 'Agreement', 'Print Conf'
+        ]
+        
+        # Build HTML table for full checklist
+        table_html = """
+        <style>
+            .compact-table {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 12px;
+                color: #1f2937;
+                border-collapse: collapse;
+                width: 100%;
+            }
+            .compact-table th, .compact-table td {
+                padding: 8px 10px;
+                text-align: center;
+                border-bottom: 1px solid #e2e8f0;
+            }
+            .compact-table th {
+                background: #f1f5f9;
+                font-weight: 600;
+            }
+            .compact-table td {
+                color: #4b5563;
+            }
+        </style>
+        <table class='compact-table'>
+            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th>
+        """
+        for label in checklist_labels:
+            table_html += f"<th>{label}</th>"
+        table_html += "</tr>"
+        
+        for _, author in book_authors_df.iterrows():
+            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
+            for col, label in zip(checklist_columns, checklist_labels):
+                if col in ['apply_isbn_not_applied', 'isbn_not_received']:
+                    # Handle book-level ISBN fields
+                    if col == 'apply_isbn_not_applied':
+                        status = '✅' if book_row.get('apply_isbn', 0) == 1 else '❌'
+                    else:  # isbn_not_received
+                        status = '✅' if pd.notnull(book_row.get('isbn')) and book_row.get('apply_isbn', 0) == 1 else '❌'
+                else:
+                    # Handle author-level fields
+                    status = '✅' if author[col] else '❌'
+                table_html += f"<td>{status}</td>"
+            table_html += "</tr>"
+        table_html += "</table>"
+        st.markdown(table_html, unsafe_allow_html=True)
+    else:
+        st.info("No authors found for this book.")
+
+    # Operations and Print Editions in two columns
+    col_ops, col_print = st.columns(2)
+
+    # Operations Status
+    with col_ops:
+        st.markdown("<h4 class='section-title'>Operations Status</h4>", unsafe_allow_html=True)
+        operations = [
+            ('Writing', 'writing_start', 'writing_end'),
+            ('Proofreading', 'proofreading_start', 'proofreading_end'),
+            ('Formatting', 'formatting_start', 'formatting_end'),
+            ('Cover Design', 'cover_start', 'cover_end')
+        ]
+        # Check if book is publish-only or thesis-to-book
+        is_publish_only = book_row.get('is_publish_only', 0) == 1
+        is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
+        
+        table_html = "<table class='compact-table'><tr><th>Operation</th><th>Status</th></tr>"
+        for op_name, start_field, end_field in operations:
+            if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
+                status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
+            else:
+                start = book_row[start_field]
+                end = book_row[end_field]
+                if pd.notnull(start) and pd.notnull(end):
+                    status = '✅ Done'
+                elif pd.notnull(start):
+                    status = '⏳ Active'
+                else:
+                    status = '❌ Pending'
+            table_html += f"<tr><td>{op_name}</td><td>{status}</td></tr>"
+        table_html += "</table>"
+        st.markdown(table_html, unsafe_allow_html=True)
+
+    # Print Editions
+    with col_print:
+        st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
+        conn = connect_db()
+        book_print_details_df = fetch_print_details(book_id, conn)
+        if not book_print_details_df.empty:
+            table_html = "<table class='compact-table'><tr><th>Batch ID</th><th>Copies</th><th>Sent Date</th><th>Receive Date</th><th>Status</th></tr>"
+            for _, row in book_print_details_df.iterrows():
+                sent_date = row['print_sent_date'].strftime('%d %b %Y') if pd.notnull(row['print_sent_date']) else 'N/A'
+                receive_date = row['print_receive_date'].strftime('%d %b %Y') if pd.notnull(row['print_receive_date']) else 'N/A'
+                batch_id = row['batch_id'] if pd.notnull(row['batch_id']) else 'N/A'
+                copies = row['copies_planned'] if pd.notnull(row['copies_planned']) else 'N/A'
+                table_html += f"<tr><td>{batch_id}</td><td>{copies}</td><td>{sent_date}</td><td>{receive_date}</td><td>{row['status']}</td></tr>"
+            table_html += "</table>"
+            st.markdown(table_html, unsafe_allow_html=True)
+        else:
+            book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
+            if not book_printeditions_df.empty:
+                table_html = "<table class='compact-table'><tr><th>Print ID</th><th>Status</th></tr>"
+                for _, row in book_printeditions_df.iterrows():
+                    table_html += f"<tr><td>{row['print_id']}</td><td>{row['status']}</td></tr>"
+                table_html += "</table>"
+                st.markdown(table_html, unsafe_allow_html=True)
+            else:
+                st.info("No print editions found.")
 
 
 
@@ -7799,6 +7942,7 @@ isbn_icon = ":material/edit_document:"
 author_icon = ":material/manage_accounts:"
 ops_icon = ":material/manufacturing:"
 delivery_icon = ":material/local_shipping:"
+details_icon = ":material/info:"
 
 
 # Pagination Logic
@@ -7816,9 +7960,12 @@ st.session_state.current_page = max(1, min(st.session_state.current_page, total_
 start_idx = (st.session_state.current_page - 1) * page_size
 end_idx = min(start_idx + page_size, total_books)
 paginated_books = filtered_books.iloc[start_idx:end_idx]
+book_idss = paginated_books['book_id'].tolist()
+authors_data = fetch_all_book_authors(book_idss, conn)
+printeditions_data = fetch_all_printeditions(book_idss, conn)
 
 # Display the table
-column_size = [0.5, 3.8, 1, 0.95, 1.3, 2]
+column_size = [0.5, 3.8, 1, 0.95, 1.3, 2.3]
 render_start = time.time()
 # Main rendering loop (partial, focusing on col5)
 with st.container(border=False):
@@ -7883,7 +8030,7 @@ with st.container(border=False):
                 with col5:
                     st.markdown(get_status_pill(row["book_id"], row, authors_grouped, printeditions_grouped), unsafe_allow_html=True)
                 with col6:
-                    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([1, 1, 1, 1, 1], vertical_alignment="bottom")
+                    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5, btn_col6 = st.columns([1, 1, 1, 1, 1, 1], vertical_alignment="bottom")
                     with btn_col1:
                         # ISBN button (manage_isbn_dialog)
                         if is_button_allowed("manage_isbn_dialog"):
@@ -7927,8 +8074,13 @@ with st.container(border=False):
                                 edit_inventory_delivery_dialog(row['book_id'], conn)
                         else:
                             st.button(delivery_icon, key=f"delivery_{row['book_id']}", help="Not Authorised", disabled=True)
-                    # with st.popover("More Options", width="stretch"):
-                    #     st.write("hello")
+                    with btn_col6:
+                         if is_button_allowed("details"):
+                            if st.button(details_icon, key=f"details_{row['book_id']}", help="View Details"):
+                                show_book_details(row['book_id'], row, authors_data, printeditions_data)
+                         else:
+                            st.button(details_icon, key=f"details_{row['book_id']}", help="Not Authorised", disabled=True)
+
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('</div>', unsafe_allow_html=True)
@@ -7983,7 +8135,5 @@ with st.container(border=False):
 
 # End timing
 total_time = time.time() - start_time
-st.write(f"**Total Page Load Time:** {total_time:.2f} seconds")
-st.write(f"**Table Rendering Time:** {render_time:.2f} seconds")
-
-st.write(token)
+st.caption(f"**Total Page Load Time:** {total_time:.2f} seconds")
+st.caption(f"**Table Rendering Time:** {render_time:.2f} seconds")

@@ -1656,7 +1656,6 @@ with st.container(border=False):
         printeditions_df = fetch_all_printeditions(book_ids, conn)
         author_names_dict = fetch_all_author_names(book_ids, conn)
         authors_grouped = {book_id: group for book_id, group in authors_df.groupby('book_id')}
-        printeditions_grouped = {book_id: group for book_id, group in printeditions_df.groupby('book_id')}
 
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
