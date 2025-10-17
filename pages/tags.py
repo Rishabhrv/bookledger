@@ -3517,3 +3517,452 @@
 # #old_code()
 
 # new_code()
+
+# timeline_app.py
+
+# timeline_app.py
+
+import streamlit as st
+import pandas as pd
+from datetime import datetime, timedelta
+from sqlalchemy import text
+
+# --- 1. PAGE CONFIGURATION & STYLING ---
+
+st.set_page_config(
+    page_title="Book Production Timeline",
+    page_icon="📚",
+    layout="wide"
+)
+
+def load_css():
+    """Injects custom CSS for styling the timeline and metrics."""
+    st.markdown("""
+        <style>
+            /* Main container for the app */
+            .main .block-container {
+                padding-top: 2rem;
+                padding-left: 2rem;
+                padding-right: 2rem;
+            }
+
+            /* Sidebar styling */
+            [data-testid="stSidebar"] {
+                background-color: #f0f2f6;
+            }
+            
+            /* Style for Streamlit's native metric component */
+            [data-testid="stMetric"] {
+                background-color: #FFFFFF;
+                border: 1px solid #dee2e6;
+                padding: 1rem;
+                border-radius: 8px;
+                border-left: 5px solid #0d6efd;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            }
+
+            /* Timeline container */
+            .timeline-container {
+                border-left: 3px solid #6c757d;
+                padding: 1rem 0 1rem 2rem;
+                position: relative;
+            }
+
+            /* Individual timeline item */
+            .timeline-item {
+                margin-bottom: 2rem;
+                position: relative;
+            }
+
+            /* Icon for each timeline item */
+            .timeline-item::before {
+                content: attr(data-icon);
+                position: absolute;
+                left: -45px;
+                top: 0px;
+                font-size: 1.8rem;
+                background-color: #ffffff;
+                border-radius: 50%;
+                width: 35px;
+                height: 35px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .timeline-content {
+                background-color: #ffffff;
+                border: 1px solid #dee2e6;
+                border-radius: 8px;
+                padding: 1rem 1.5rem;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            }
+
+            .timeline-content h4 {
+                color: #0d6efd;
+                margin-bottom: 0.25rem;
+                font-weight: 600;
+            }
+
+            .timeline-content p {
+                margin-bottom: 0.25rem;
+                color: #495057;
+            }
+            
+            .timeline-content .reason {
+                font-style: italic;
+                color: #6c757d;
+                border-left: 3px solid #adb5bd;
+                padding-left: 10px;
+                margin-top: 5px;
+            }
+
+            .stage-header {
+                font-size: 2rem;
+                font-weight: bold;
+                margin-bottom: 1rem;
+                color: #343a40;
+                border-bottom: 2px solid #0d6efd;
+                padding-bottom: 0.5rem;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+load_css()
+
+# --- 2. DATABASE CONNECTION & DATA FETCHING ---
+
+def connect_db():
+    """Connects to the database using Streamlit's connection management."""
+    try:
+        @st.cache_resource
+        def get_connection():
+            return st.connection('mysql', type='sql')
+        return get_connection()
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
+
+def get_all_employees(conn):
+    """Fetches a unique list of all employees from all relevant roles."""
+    query = """
+        SELECT DISTINCT employee FROM (
+            SELECT writing_by AS employee FROM books WHERE writing_by IS NOT NULL
+            UNION
+            SELECT proofreading_by AS employee FROM books WHERE proofreading_by IS NOT NULL
+            UNION
+            SELECT formatting_by AS employee FROM books WHERE formatting_by IS NOT NULL
+            UNION
+            SELECT cover_by AS employee FROM books WHERE cover_by IS NOT NULL
+            UNION
+            SELECT worker AS employee FROM corrections WHERE worker IS NOT NULL
+        ) AS all_employees
+        ORDER BY employee;
+    """
+    try:
+        df = conn.query(query, ttl=3600)
+        return df['employee'].tolist()
+    except Exception as e:
+        st.error(f"Error fetching employees: {e}")
+        return []
+
+def get_employee_books_for_month(conn, employee, start_date, end_date):
+    """Fetches books an employee has worked on in the current month."""
+    query = """
+        SELECT book_id, title
+        FROM books
+        WHERE
+            (
+                writing_by = :employee OR
+                proofreading_by = :employee OR
+                formatting_by = :employee OR
+                cover_by = :employee OR
+                book_id IN (SELECT book_id FROM corrections WHERE worker = :employee)
+            )
+            AND
+            (
+                (writing_start BETWEEN :start_date AND :end_date) OR
+                (writing_end BETWEEN :start_date AND :end_date) OR
+                (proofreading_start BETWEEN :start_date AND :end_date) OR
+                (formatting_start BETWEEN :start_date AND :end_date) OR
+                (cover_start BETWEEN :start_date AND :end_date)
+            )
+        ORDER BY title;
+    """
+    params = {"employee": employee, "start_date": start_date, "end_date": end_date}
+    try:
+        df = conn.query(query, params=params)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching books for employee: {e}")
+        return pd.DataFrame()
+
+def get_book_data(conn, book_id):
+    """Fetches all related data for a single book."""
+    queries = {
+        "details": "SELECT * FROM books WHERE book_id = :book_id",
+        "holds": "SELECT * FROM holds WHERE book_id = :book_id ORDER BY hold_start",
+        "corrections": "SELECT * FROM corrections WHERE book_id = :book_id ORDER BY correction_start"
+    }
+    data = {}
+    try:
+        for key, query in queries.items():
+            data[key] = conn.query(query, params={"book_id": book_id}, ttl=60)
+    except Exception as e:
+        st.error(f"Error fetching book data: {e}")
+        return None
+    return data
+
+# --- 3. HELPER & CALCULATION FUNCTIONS ---
+
+def format_timedelta(td: timedelta):
+    """Formats a timedelta object into a human-readable string."""
+    if td is None or td.total_seconds() < 0:
+        return "N/A"
+    
+    days = td.days
+    hours, remainder = divmod(td.seconds, 3600)
+    minutes, _ = divmod(remainder, 60)
+    
+    parts = []
+    if days > 0:
+        parts.append(f"{days}d")
+    if hours > 0:
+        parts.append(f"{hours}h")
+    if minutes > 0:
+        parts.append(f"{minutes}m")
+        
+    return " ".join(parts) if parts else "0m"
+
+def calculate_stage_metrics(stage_name, details, holds, corrections):
+    """Calculates all key metrics for a single production stage."""
+    start_time = pd.to_datetime(details[f'{stage_name}_start'].iloc[0])
+    end_time = pd.to_datetime(details[f'{stage_name}_end'].iloc[0])
+    
+    metrics = {
+        'total_duration': None,
+        'paused_duration': timedelta(0),
+        'effective_duration': None,
+        'correction_duration': timedelta(0),
+        'timeline': []
+    }
+    
+    # Return early if stage hasn't started
+    if pd.isna(start_time):
+        return None, "Not Started"
+
+    # Add start event to timeline
+    metrics['timeline'].append({
+        'time': start_time,
+        'type': 'Start',
+        'icon': '▶️',
+        'details': f"{stage_name.capitalize()} process started."
+    })
+
+    # Filter holds and corrections for the current stage
+    stage_holds = holds[holds['section'] == stage_name]
+    stage_corrections = corrections[corrections['section'] == stage_name]
+
+    # Calculate paused time and add hold/resume events to timeline
+    for _, row in stage_holds.iterrows():
+        hold_start = pd.to_datetime(row['hold_start'])
+        resume_time = pd.to_datetime(row['resume_time'])
+        if pd.notna(hold_start) and pd.notna(resume_time):
+            pause_delta = resume_time - hold_start
+            metrics['paused_duration'] += pause_delta
+            metrics['timeline'].append({
+                'time': hold_start,
+                'type': 'Paused',
+                'icon': '⏸️',
+                'details': f"Paused for: {row.get('reason', 'No reason specified')}. Duration: {format_timedelta(pause_delta)}"
+            })
+            metrics['timeline'].append({
+                'time': resume_time,
+                'type': 'Resumed',
+                'icon': '🔄',
+                'details': "Work resumed."
+            })
+
+    # Calculate correction time and add correction events
+    for _, row in stage_corrections.iterrows():
+        corr_start = pd.to_datetime(row['correction_start'])
+        corr_end = pd.to_datetime(row['correction_end'])
+        if pd.notna(corr_start) and pd.notna(corr_end):
+            corr_delta = corr_end - corr_start
+            metrics['correction_duration'] += corr_delta
+            metrics['timeline'].append({
+                'time': corr_start,
+                'type': 'Correction',
+                'icon': '✍️',
+                'details': f"Correction started by {row['worker']}. Notes: {row.get('notes', 'N/A')}"
+            })
+            metrics['timeline'].append({
+                'time': corr_end,
+                'type': 'Correction End',
+                'icon': '✅',
+                'details': f"Correction finished. Duration: {format_timedelta(corr_delta)}"
+            })
+
+    # Check stage status and calculate final metrics
+    if pd.isna(end_time):
+        status = "In Progress"
+        now = pd.to_datetime(datetime.now())
+        metrics['total_duration'] = now - start_time
+        metrics['effective_duration'] = metrics['total_duration'] - metrics['paused_duration']
+    else:
+        status = "Completed"
+        metrics['total_duration'] = end_time - start_time
+        metrics['effective_duration'] = metrics['total_duration'] - metrics['paused_duration']
+        metrics['timeline'].append({
+            'time': end_time,
+            'type': 'End',
+            'icon': '🏁',
+            'details': f"{stage_name.capitalize()} process finished."
+        })
+
+    # Sort timeline chronologically
+    metrics['timeline'].sort(key=lambda x: x['time'])
+    
+    return metrics, status
+
+# --- 4. UI DISPLAY FUNCTIONS ---
+
+def display_timeline(book_data):
+    """Renders the complete timeline and metrics for a selected book."""
+    if not book_data or book_data['details'].empty:
+        st.warning("No data found for this book.")
+        return
+
+    details = book_data['details']
+    holds = book_data['holds']
+    corrections = book_data['corrections']
+
+    st.header(f"Timeline for: *{details['title'].iloc[0]}*")
+    st.markdown("---")
+
+    stages = ['writing', 'proofreading', 'formatting', 'cover']
+    stage_icons = {'writing': '🖋️', 'proofreading': '🧐', 'formatting': '🎨', 'cover': '🖼️'}
+    
+    total_effective_time = timedelta(0)
+
+    for stage in stages:
+        employee = details[f'{stage}_by'].iloc[0]
+        st.markdown(f"<h2 class='stage-header'>{stage_icons[stage]} {stage.capitalize()}</h2>", unsafe_allow_html=True)
+
+        if pd.isna(employee):
+            st.info(f"No employee assigned to the {stage} stage yet.")
+            st.markdown("<br>", unsafe_allow_html=True)
+            continue
+            
+        st.markdown(f"**Assigned To:** {employee}")
+
+        metrics, status = calculate_stage_metrics(stage, details, holds, corrections)
+        
+        if not metrics:
+            st.info(f"This stage has not started yet.")
+            st.markdown("<br>", unsafe_allow_html=True)
+            continue
+
+        # Display metric cards using st.metric
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric(label="Status", value=status)
+        col2.metric(label="Effective Work Time", value=format_timedelta(metrics['effective_duration']))
+        col3.metric(label="Time on Hold", value=format_timedelta(metrics['paused_duration']))
+        col4.metric(label="Correction Time", value=format_timedelta(metrics['correction_duration']))
+        
+        # Add to book totals
+        if metrics.get('effective_duration'):
+            total_effective_time += metrics['effective_duration']
+        
+        # Display detailed timeline log
+        with st.expander("Show Detailed Log"):
+            st.write("") # Spacer
+            st.markdown('<div class="timeline-container">', unsafe_allow_html=True)
+            for event in metrics['timeline']:
+                event_time = event['time'].strftime('%d %b %Y, %I:%M %p')
+                st.markdown(f"""
+                    <div class="timeline-item" data-icon="{event['icon']}">
+                        <div class="timeline-content">
+                            <h4>{event['type']}</h4>
+                            <p><strong>When:</strong> {event_time}</p>
+                            <p class="reason">{event['details']}</p>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+
+    # Calculate and display total book time
+    book_start = pd.to_datetime(details['writing_start'].iloc[0])
+    # Find the last recorded end time across all stages
+    final_end_dates = [pd.to_datetime(details[f'{s}_end'].iloc[0]) for s in stages]
+    valid_end_dates = [d for d in final_end_dates if pd.notna(d)]
+    book_end = max(valid_end_dates) if valid_end_dates else None
+
+    total_book_time = timedelta(0)
+    if book_start and book_end:
+        total_book_time = book_end - book_start
+
+    st.markdown("---")
+    st.header("📖 Book Summary Metrics")
+    col1, col2 = st.columns(2)
+    col1.metric(label="Total Book Lifecycle", value=format_timedelta(total_book_time))
+    col2.metric(label="Total Effective Work Time", value=format_timedelta(total_effective_time))
+
+
+# --- 5. MAIN APPLICATION LOGIC ---
+
+def main():
+    """Main function to run the Streamlit app."""
+    st.title("📚 Employee & Book Production Timeline")
+    st.markdown("Select an employee to view their work this month, then select a book to see its detailed production history.")
+
+    conn = connect_db()
+
+    # --- Sidebar for Filters ---
+    st.sidebar.header("🔍 Filters")
+    all_employees = get_all_employees(conn)
+    if not all_employees:
+        st.sidebar.warning("No employees found in the database.")
+        st.info("Please add employee and book data to the database to use this application.")
+        return
+
+    selected_employee = st.sidebar.selectbox(
+        "Select an Employee",
+        options=[""] + all_employees,
+        format_func=lambda x: "Select..." if x == "" else x
+    )
+
+    if selected_employee:
+        today = datetime.today()
+        start_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        # To get the end of the month, go to the first day of the next month and subtract one second
+        next_month_start = (start_of_month.replace(day=28) + timedelta(days=4)).replace(day=1)
+        end_of_month = next_month_start - timedelta(seconds=1)
+
+        employee_books_df = get_employee_books_for_month(conn, selected_employee, start_of_month, end_of_month)
+        
+        if not employee_books_df.empty:
+            book_options = dict(zip(employee_books_df['book_id'], employee_books_df['title']))
+            
+            selected_book_id = st.sidebar.selectbox(
+                f"Books worked on by {selected_employee} this month",
+                options=[""] + list(book_options.keys()),
+                format_func=lambda x: "Select..." if x == "" else book_options.get(x)
+            )
+
+            if selected_book_id:
+                book_data = get_book_data(conn, selected_book_id)
+                display_timeline(book_data)
+            else:
+                 st.info("Select a book from the sidebar to view its timeline.")
+        else:
+            st.sidebar.info(f"{selected_employee} has not worked on any books in the current month.")
+            st.info(f"No book activity found for {selected_employee} this month.")
+    else:
+        st.info("Select an employee from the sidebar to begin.")
+
+
+if __name__ == "__main__":
+    main()
