@@ -988,15 +988,13 @@ def get_recent_work_titles(conn, user_id, limit=15):
             ORDER BY w.created_at DESC
             LIMIT :limit
         """
-        result = conn.query(query, params={
-            "user_id": user_id,
-            "limit": limit
-        }, ttl=0)
-        
+        result = conn.query(query, params={"user_id": user_id, "limit": limit}, ttl=0)
         titles = [row['work_name'] for _, row in result.iterrows()]
+        if not titles:
+            st.warning("No recent work titles found. Please add a new work title.")
         return titles
-        
     except Exception as e:
+        st.error(f"Error fetching work titles: {e}")
         return []
     
 # Helper function to get current IST time
