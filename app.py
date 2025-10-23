@@ -2753,7 +2753,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
             # Book Details Section
             st.markdown("<h5 style='color: #4CAF50;'>Book Details</h5>", unsafe_allow_html=True)
             with st.container(border=True):
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 
                 # Get book image URL
                 image_url = get_book_image_url(conn, book_id)
@@ -2953,7 +2952,6 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         receive_isbn = bool(pd.notna(current_isbn))
         if not has_open_author_position(conn, book_id):
             with st.container(border=True):
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 apply_isbn = st.checkbox(
                     "ISBN Applied?",
                     value=apply_isbn,
