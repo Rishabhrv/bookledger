@@ -977,16 +977,19 @@ def get_recent_work_titles(conn, user_id, limit=15):
     """Fetch recent distinct work titles for the user."""
     try:
         query = """
-            SELECT DISTINCT w.work_name 
-            FROM work w
-            JOIN timesheets t ON w.timesheet_id = t.id
-            WHERE t.user_id = :user_id 
-            AND w.entry_type = 'work'
-            AND w.work_name IS NOT NULL 
-            AND w.work_name != '' 
-            AND w.work_name != 'Work'
-            ORDER BY w.created_at DESC
-            LIMIT :limit
+            SELECT DISTINCT work_name
+            FROM (
+                SELECT w.work_name, w.created_at
+                FROM work w
+                JOIN timesheets t ON w.timesheet_id = t.id
+                WHERE t.user_id = :user_id 
+                AND w.entry_type = 'work'
+                AND w.work_name IS NOT NULL 
+                AND w.work_name != '' 
+                AND w.work_name != 'Work'
+                ORDER BY w.created_at DESC
+                LIMIT :limit
+            ) AS subquery
         """
         result = conn.query(query, params={"user_id": user_id, "limit": limit}, ttl=0)
         titles = [row['work_name'] for _, row in result.iterrows()]
