@@ -177,10 +177,10 @@ def get_open_author_positions(conn):
             b.author_type,
             b.publisher,
             COUNT(ba.author_id) as author_count,
-            MAX(CASE WHEN ba.author_position = '1st' THEN 'Booked' ELSE NULL END) as position_1,
-            MAX(CASE WHEN ba.author_position = '2nd' THEN 'Booked' ELSE NULL END) as position_2,
-            MAX(CASE WHEN ba.author_position = '3rd' THEN 'Booked' ELSE NULL END) as position_3,
-            MAX(CASE WHEN ba.author_position = '4th' THEN 'Booked' ELSE NULL END) as position_4
+            MAX(CASE WHEN ba.author_position = '1st' THEN CONCAT('Booked by ', ba.publishing_consultant) ELSE NULL END) as position_1,
+            MAX(CASE WHEN ba.author_position = '2nd' THEN CONCAT('Booked by ', ba.publishing_consultant) ELSE NULL END) as position_2,
+            MAX(CASE WHEN ba.author_position = '3rd' THEN CONCAT('Booked by ', ba.publishing_consultant) ELSE NULL END) as position_3,
+            MAX(CASE WHEN ba.author_position = '4th' THEN CONCAT('Booked by ', ba.publishing_consultant) ELSE NULL END) as position_4
         FROM books b
         LEFT JOIN book_authors ba ON b.book_id = ba.book_id
         WHERE b.author_type IN ('Double', 'Triple', 'Multiple')
@@ -310,7 +310,7 @@ def open_author_positions_page():
         filtered_df['date_str'] = filtered_df['date'].dt.strftime('%Y-%m-%d')
         
         # Define column widths (adjusted for publisher column)
-        column_widths = [0.6, 2.5, 0.9, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8]
+        column_widths = [0.6, 2.5, 0.9, 0.7, 0.7, 0.9, 0.9, 0.9, 0.9]
         
         with st.container(border=True):
             # Table Headers
@@ -330,7 +330,6 @@ def open_author_positions_page():
                 cols = st.columns(column_widths)
                 cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                 cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
-                
                 
                 cols[2].markdown(
                     f'<div class="table-row">{book["date_str"]} <span class="date-pill">{book["days_since"]}</span></div>',
@@ -364,10 +363,9 @@ def open_author_positions_page():
                 for i, pos in enumerate(['position_1', 'position_2', 'position_3', 'position_4'], 5):
                     status = book[pos]
                     status_class = {
-                        'Booked': 'position-occupied',
                         'Vacant': 'position-vacant',
                         'N/A': 'position-na'
-                    }.get(status, '')
+                    }.get(status, 'position-occupied')  # Default to occupied for 'Booked by' names
                     cols[i].markdown(
                         f'<div class="pill-badge {status_class}">{status}</div>',
                         unsafe_allow_html=True
