@@ -6172,10 +6172,11 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
         .print-run-table-header,
         .print-run-table-row {
-            display: grid;
-            grid-template-columns: 0.5fr 0.5fr 1.2fr 1.2fr 0.4fr 0.4fr 2fr 0.8fr;
+            display: flex;
+            justify-content: space-between;
             padding: 4px 6px;
             align-items: center;
+            font-size: 11px;
             box-sizing: border-box;
             min-width: 100%;
         }

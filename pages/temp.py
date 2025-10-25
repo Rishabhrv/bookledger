@@ -2,6 +2,14 @@ import streamlit as st
 import pandas as pd
 from datetime import timedelta, datetime
 
+# Set page configuration
+st.set_page_config(
+    layout="wide",  # Set layout to wide mode
+    initial_sidebar_state="collapsed",
+    page_icon="chart_with_upwards_trend",  
+     page_title="Book History",
+)
+
 # Database connection
 def connect_db():
     try:

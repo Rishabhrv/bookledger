@@ -197,10 +197,11 @@ def get_ready_to_print_books(conn):
         AND pe.edition_number = (SELECT MIN(edition_number) FROM PrintEditions WHERE book_id = b.book_id)
     WHERE 
         b.print_status = 0
-        AND b.writing_complete = 1
-        AND b.proofreading_complete = 1
-        AND b.formatting_complete = 1
-        AND b.cover_page_complete = 1
+        AND (
+            (b.is_publish_only = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
+            OR
+            (b.writing_complete = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
+        )
         AND b.book_id IN (
             SELECT ba2.book_id
             FROM book_authors ba2

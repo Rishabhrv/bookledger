@@ -40,7 +40,7 @@ VALID_APPS = {
     "IJISEM": "ijisem",
     "Tasks": "tasks",
     "Sales": "sales"
-} # you have to add in database if you are adding here
+} 
 
 # Configuration
 FLASK_AUTH_URL = st.secrets["general"]["FLASK_AUTH_URL"]
