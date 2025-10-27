@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import pytz
 from sqlalchemy import text
 import time
-from constants import connect_db
-from constants import log_activity
+from constants import connect_db, get_page_url, log_activity
+from urllib.parse import urlencode, quote
 import uuid
 from auth import validate_token
 import calendar
@@ -2484,6 +2484,14 @@ def main():
         page = st.radio("Navigation", pages, index=default_index, label_visibility="collapsed")
         st.markdown("---")
         # You can add logout button or other info here
+        if user_app == "tasks":
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            message_url = get_page_url('prints', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button("💬 Message", message_url, use_container_width=True)
 
     page_map = {
         "My Timesheet": my_timesheet_page,

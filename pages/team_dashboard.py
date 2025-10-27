@@ -888,7 +888,7 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
         ])
 
     # Render UI
-    col1, col2, col3 = st.columns([8, 1, 1], vertical_alignment="bottom")
+    col1, col2, col3, col4 = st.columns([8, 1, 1, 1], vertical_alignment="bottom")
     with col1:
         st.subheader(f"Metrics of {selected_month}")
         st.caption(f"Welcome {st.session_state.username}!")
@@ -896,7 +896,7 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
         if st.button(":material/refresh: Refresh", key=f"refresh_{section}", type="tertiary"):
             st.cache_data.clear()
     with col3:
-        if st.session_state.role == "user":
+        if role_user == "user" and user_app == "operations":
             click_id = str(uuid.uuid4())
             query_params = {
                 "click_id": click_id,
@@ -905,6 +905,19 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
             tasks_url = get_page_url('tasks', token) + f"&{urlencode(query_params, quote_via=quote)}"
             st.link_button(
                 ":material/checklist: Tasks",
+                url=tasks_url,
+                type="tertiary"
+            )
+    with col4:
+        if role_user == "user" and user_app == "operations":
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            tasks_url = get_page_url('tasks', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                ":material/chat: Message",
                 url=tasks_url,
                 type="tertiary"
             )
