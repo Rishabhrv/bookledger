@@ -1620,7 +1620,7 @@ with scrol3:
             width="content"
         )
 
-        full_url = get_page_url("prints", token) + f"&{urlencode(query_params, quote_via=quote)}"
+        full_url = get_page_url("chat", token) + f"&{urlencode(query_params, quote_via=quote)}"
         st.link_button(
             label="💬 Message",
             url=full_url,

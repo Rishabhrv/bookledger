@@ -168,7 +168,7 @@ BUTTON_CONFIG = {
     "messages": {
         "label": "Message",
         "icon": "💬",
-        "page_path": "adsearch",
+        "page_path": "chat",
         "permission": "messages",
         "type": "new_tab",
     },
@@ -994,7 +994,7 @@ def manage_users(conn):
     app_display_names = list(VALID_APPS.keys())
     app_db_values = {display: db_value for display, db_value in VALID_APPS.items()}
     FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
-    LEVEL_SUPPORT_APPS = ["Tasks", "Operations", "Sales"]
+    LEVEL_SUPPORT_APPS = ["IJISEM", "Tasks", "Operations", "Sales"]
 
     # Create 3 tabs
     tab1, tab2, tab3 = st.tabs(["👥 Users Table", "✏️ Edit User", "➕ Add User"])

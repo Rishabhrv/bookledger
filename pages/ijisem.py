@@ -5,9 +5,9 @@ from datetime import datetime
 from auth import validate_token
 import altair as alt
 from time import sleep
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity, connect_db, get_page_url
 import uuid
+from urllib.parse import urlencode, quote
 
 ########################################################################################################################
 ##################################--------------- Page Config ----------------------------#############################
@@ -35,6 +35,7 @@ validate_token()
 user_role = st.session_state.get("role", None)
 user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
+token = st.session_state.token
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
@@ -1647,7 +1648,7 @@ def all_filters(df):
             st.session_state.page = 0
 
     # UI and Filter Logic
-    col1, col2, col3 = st.columns([5, 3, 1], vertical_alignment="center")
+    col1, col2, col3, col4 = st.columns([5, 3, 1, 1], vertical_alignment="center")
     with col1:
         search_query = st.text_input(
             "Search by Paper ID or Title",
@@ -1740,7 +1741,31 @@ def all_filters(df):
     with col3:
         if st.button(":material/add: Add Paper", key="add_paper_button", width="stretch"):
             add_paper_dialog(conn)
+    
+    with col4:
+        with st.popover("More", width="stretch", help="More Options"):
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            full_url = get_page_url("tasks", token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                label="🕒 Timesheet",
+                url=full_url,
+                type="tertiary",
+                width="content"
+            )
 
+            full_url = get_page_url("chat", token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                label="💬 Message",
+                url=full_url,
+                type="tertiary",
+                width="content"
+            )
+
+    # Function to apply filters
     def apply_filters(df, search_query, filters):
         filtered_df = df.copy()
         applied_filters = False

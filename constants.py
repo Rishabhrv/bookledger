@@ -29,6 +29,7 @@ ACCESS_TO_BUTTON = {
 }
 
 BASE_URL  = st.secrets["general"]["BASE_URL"]
+CHAT_URL  = st.secrets["general"]["CHAT_URL"]
 
 # Predefined list of educational subjects
 VALID_SUBJECTS = [
@@ -55,7 +56,13 @@ def connect_db():
 
 def get_page_url(page_path, token):
     """Generate a URL with the token as a query parameter."""
-    return f"{BASE_URL}/{page_path}?token={token}"
+    # Decide which base URL to use based on the path
+    if page_path.startswith("chat"):
+        base = CHAT_URL
+    else:
+        base = BASE_URL
+
+    return f"{base}/{page_path}?token={token}"
 
 def log_activity(conn, user_id, username, session_id, action, details):
     try:

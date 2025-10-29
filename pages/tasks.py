@@ -255,7 +255,8 @@ def get_or_create_timesheet(conn, user_id, fiscal_week):
         # Safe to create new timesheet
         manager_id = st.session_state.get("report_to")
         if manager_id == "Unknown" or not manager_id:
-            manager_id = None
+            st.error("Manager not assigned. Cannot create timesheet. Contact admin for assistance.")
+            st.stop()
 
         with conn.session as s:
             s.execute(text("INSERT INTO timesheets (user_id, manager_id, fiscal_week, status) VALUES (:user_id, :manager_id, :fiscal_week, 'draft')"),
@@ -2490,7 +2491,7 @@ def main():
                 "click_id": click_id,
                 "session_id": st.session_state.session_id
             }
-            message_url = get_page_url('prints', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            message_url = get_page_url('chat', token) + f"&{urlencode(query_params, quote_via=quote)}"
             st.link_button("💬 Message", message_url, use_container_width=True)
 
     page_map = {
