@@ -82,7 +82,7 @@ def log_activity(conn, user_id, username, session_id, action, details):
         st.error(f"Error logging activity: {e}")
 
 
-def clean_old_logs(conn, days_to_keep=30):
+def clean_old_logs(conn, days_to_keep=180):
     """
     Delete activity_log entries older than `days_to_keep` days and log the cleanup action.
 

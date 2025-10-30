@@ -133,74 +133,89 @@ def get_week_dates_from_fiscal_week(fiscal_week):
 def determine_timesheet_week_to_display(conn, user_id):
     """
     Determines which week's timesheet to display.
-    STRICT: If ANY previous timesheet is pending, force user to complete it first.
+    STRICT: Forces user to fill ALL missing weeks before current week.
+    Checks both for missing weeks AND pending (draft/rejected) weeks.
     """
     today = get_ist_date()
     current_fiscal_week, current_start_of_week, current_end_of_week = get_current_week_details()
 
-    # Check for ANY pending timesheets (draft or rejected) from previous weeks
     try:
-        pending_query = """
+        # Get all existing timesheets for this user
+        existing_query = """
             SELECT fiscal_week, status 
             FROM timesheets 
-            WHERE user_id = :user_id AND status IN ('draft', 'rejected')
-            AND fiscal_week < :current_fiscal_week
-            ORDER BY fiscal_week DESC
-            LIMIT 1
+            WHERE user_id = :user_id
+            ORDER BY fiscal_week ASC
         """
-        pending_df = conn.query(pending_query, params={
-            "user_id": user_id, 
-            "current_fiscal_week": current_fiscal_week
-        }, ttl=0)
+        existing_df = conn.query(existing_query, params={"user_id": user_id}, ttl=0)
         
-        if not pending_df.empty:
-            pending_fiscal_week = pending_df.iloc[0]['fiscal_week']
-            pending_status = pending_df.iloc[0]['status']
+        if existing_df.empty:
+            # No timesheets at all, show current week
+            return current_fiscal_week, current_start_of_week, current_end_of_week, False
+        
+        # Get the earliest timesheet week
+        earliest_week = existing_df.iloc[0]['fiscal_week']
+        
+        # Check each week from earliest to current
+        for week in range(earliest_week, current_fiscal_week):
+            week_exists = week in existing_df['fiscal_week'].values
             
-            # Get dates for the pending week
-            try:
-                year = datetime.now().isocalendar()[0]
-                pending_start = datetime.fromisocalendar(year, pending_fiscal_week, 1).date()
-                pending_end = pending_start + timedelta(days=5)
-                date_range = f"{pending_start.strftime('%b %d')} - {pending_end.strftime('%d, %Y')}"
-                
-                st.warning(
-                    f"⚠️ **Pending Timesheet Detected:** Week {pending_fiscal_week} ({date_range}) "
-                    f"is still in **{pending_status.upper()}** status. "
-                    "You must complete and submit it before accessing the current week."
-                )
-                
-                # Return the pending week details so user can complete it
-                return pending_fiscal_week, pending_start, pending_end, True
-                
-            except ValueError:
-                st.error("Error calculating dates for pending timesheet.")
-                return current_fiscal_week, current_start_of_week, current_end_of_week, False
+            if not week_exists:
+                # This week is MISSING - user must fill it first
+                try:
+                    year = datetime.now().isocalendar()[0]
+                    missing_start = datetime.fromisocalendar(year, week, 1).date()
+                    missing_end = missing_start + timedelta(days=5)
+                    date_range = f"{missing_start.strftime('%b %d')} - {missing_end.strftime('%d, %Y')}"
+                    
+                    st.warning(
+                        f"⚠️ **Missing Timesheet Detected:** Week {week} ({date_range}) "
+                        "has not been filled. You must complete all previous weeks before accessing the current week."
+                    )
+                    
+                    return week, missing_start, missing_end, True
+                except ValueError:
+                    st.error(f"Error calculating dates for week {week}")
+                    continue
+            else:
+                # Week exists, check if it's pending (draft/rejected)
+                week_status = existing_df[existing_df['fiscal_week'] == week].iloc[0]['status']
+                if week_status in ['draft', 'rejected']:
+                    try:
+                        year = datetime.now().isocalendar()[0]
+                        pending_start = datetime.fromisocalendar(year, week, 1).date()
+                        pending_end = pending_start + timedelta(days=5)
+                        date_range = f"{pending_start.strftime('%b %d')} - {pending_end.strftime('%d, %Y')}"
+                        
+                        st.warning(
+                            f"⚠️ **Pending Timesheet Detected:** Week {week} ({date_range}) "
+                            f"is in **{week_status.upper()}** status. "
+                            "You must complete and submit it before accessing the current week."
+                        )
+                        
+                        return week, pending_start, pending_end, True
+                    except ValueError:
+                        st.error(f"Error calculating dates for week {week}")
+                        continue
+        
+        # Check Monday grace period for previous week
+        if today.weekday() == 0:  # Monday
+            prev_fiscal_week, prev_start_of_week, prev_end_of_week = get_previous_week_details()
+            
+            if prev_fiscal_week in existing_df['fiscal_week'].values:
+                prev_status = existing_df[existing_df['fiscal_week'] == prev_fiscal_week].iloc[0]['status']
+                if prev_status in ['draft', 'rejected']:
+                    st.warning(
+                        "**Monday Grace Period:** Previous week's timesheet is pending. "
+                        "Please complete and submit it now."
+                    )
+                    return prev_fiscal_week, prev_start_of_week, prev_end_of_week, True
 
     except Exception as e:
-        st.error(f"Error checking pending timesheets: {e}")
-        # Fallback to current week on error
+        st.error(f"Error checking timesheets: {e}")
         return current_fiscal_week, current_start_of_week, current_end_of_week, False
 
-    # Check Monday specifically for previous week
-    if today.weekday() == 0:  # Monday
-        prev_fiscal_week, prev_start_of_week, prev_end_of_week = get_previous_week_details()
-        
-        try:
-            prev_query = "SELECT status FROM timesheets WHERE user_id = :user_id AND fiscal_week = :fiscal_week"
-            prev_df = conn.query(prev_query, params={"user_id": user_id, "fiscal_week": prev_fiscal_week}, ttl=0)
-            
-            if not prev_df.empty and prev_df.iloc[0]['status'] in ['draft', 'rejected']:
-                st.warning(
-                    "**Monday Grace Period:** Previous week's timesheet is pending. "
-                    "Please complete and submit it now."
-                )
-                return prev_fiscal_week, prev_start_of_week, prev_end_of_week, True
-                
-        except Exception as e:
-            st.error(f"Error checking Monday previous week: {e}")
-
-    # No pending timesheets found, show current week
+    # All previous weeks are complete, show current week
     return current_fiscal_week, current_start_of_week, current_end_of_week, False
 
 
@@ -214,7 +229,7 @@ def get_week_dates_from_week_number(year, week_number):
         return ""
 
 def get_or_create_timesheet(conn, user_id, fiscal_week):
-    """Fetches or creates a timesheet for the specified week. Blocks creation if previous weeks are pending."""
+    """Fetches or creates a timesheet for the specified week. Blocks creation if previous weeks are missing or pending."""
     try:
         # First, check if timesheet already exists for this week
         query = "SELECT id, status, review_notes FROM timesheets WHERE user_id = :user_id AND fiscal_week = :fiscal_week"
@@ -223,34 +238,41 @@ def get_or_create_timesheet(conn, user_id, fiscal_week):
         if not df.empty:
             return df.iloc[0]['id'], df.iloc[0]['status'], df.iloc[0]['review_notes']
 
-        # Before creating new timesheet, check for ANY pending previous timesheets
-        current_fiscal_week, _, _ = get_current_week_details()
+        # Before creating new timesheet, check for missing or pending previous weeks
+        # Get all existing timesheets
+        existing_query = """
+            SELECT fiscal_week, status 
+            FROM timesheets 
+            WHERE user_id = :user_id
+            ORDER BY fiscal_week ASC
+        """
+        existing_df = conn.query(existing_query, params={"user_id": user_id}, ttl=0)
         
-        # Block creation if trying to create current week but previous weeks have pending timesheets
-        if fiscal_week == current_fiscal_week:
-            pending_query = """
-                SELECT fiscal_week, status 
-                FROM timesheets 
-                WHERE user_id = :user_id AND status IN ('draft', 'rejected')
-                AND fiscal_week < :current_fiscal_week
-                ORDER BY fiscal_week DESC
-                LIMIT 1
-            """
-            pending_df = conn.query(pending_query, params={
-                "user_id": user_id, 
-                "current_fiscal_week": current_fiscal_week
-            }, ttl=0)
+        if not existing_df.empty:
+            earliest_week = existing_df.iloc[0]['fiscal_week']
             
-            if not pending_df.empty:
-                pending_fiscal_week = pending_df.iloc[0]['fiscal_week']
-                pending_status = pending_df.iloc[0]['status']
+            # Check all weeks from earliest to the week we're trying to create
+            for week in range(earliest_week, fiscal_week):
+                week_exists = week in existing_df['fiscal_week'].values
                 
-                st.error(
-                    f"❌ **Cannot create current week's timesheet!** "
-                    f"Week {pending_fiscal_week} is still in **{pending_status.upper()}** status. "
-                    "Please complete and submit all previous pending timesheets first."
-                )
-                return None, None, None
+                if not week_exists:
+                    # Missing week found - block creation
+                    st.error(
+                        f"❌ **Cannot create week {fiscal_week}'s timesheet!** "
+                        f"Week {week} is missing. "
+                        "Please complete all previous weeks first."
+                    )
+                    return None, None, None
+                else:
+                    # Check if week is pending
+                    week_status = existing_df[existing_df['fiscal_week'] == week].iloc[0]['status']
+                    if week_status in ['draft', 'rejected']:
+                        st.error(
+                            f"❌ **Cannot create week {fiscal_week}'s timesheet!** "
+                            f"Week {week} is still in **{week_status.upper()}** status. "
+                            "Please complete and submit all previous pending timesheets first."
+                        )
+                        return None, None, None
 
         # Safe to create new timesheet
         manager_id = st.session_state.get("report_to")
