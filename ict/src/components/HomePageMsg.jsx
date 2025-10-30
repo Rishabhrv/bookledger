@@ -3,28 +3,76 @@ import React, { useState, useEffect, useRef } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faBars,
-  faBold,
-  faItalic,
-  faStrikethrough,
-  faLink,
-  faListUl,
-  faListOl,
-  faPlus,
-  faFaceSmile,
-  faAt,
-  faFile,
+  faPaperclip,
   faCircleDown,
+  faFile,
+  faFilePdf,
+  faFileWord,
+  faFileExcel,
+  faFilePowerpoint,
+  faFileLines,
+  faFileZipper,
 } from "@fortawesome/free-solid-svg-icons";
-import Backimage from "./faf22eaf-7d73-4f8b-9dc2-c60cf5387878.jpg";
+import {
+  Smile,
+  Send,
+} from "lucide-react";
 import { createSocket, getSocket } from "../socket";
 import ChatUserInfo from "./ChatUserInfo";
 
-const HomePageMsg = ({ token, conversation, user }) => {
+const HomePageMsg = ({ token, conversation, user, onNewMessage }) => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const socketRef = useRef(null);
   const messagesRef = useRef(null);
-   const [showInfo, setShowInfo] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+
+   // ✅ Initialize socket
+  useEffect(() => {
+    if (!token) return;
+    const s = createSocket(token);
+    socketRef.current = s;
+
+    s.on("connect", () => {
+      // console.log("Socket connected");
+    });
+
+    // ✅ Handle new messages safely
+    s.on("new_message", (msg) => {
+      if (conversation && msg.conversation_id === conversation.id) {
+        setMessages((prev) => {
+          const exists = prev.some((m) => {
+            const mIST = toIST(m.timestamp);
+            const msgIST = toIST(msg.timestamp);
+            return (
+              m.message === msg.message &&
+              m.sender_id === msg.sender_id &&
+              Math.abs(mIST - msgIST) < 2000
+            );
+          });
+          return exists ? msg : [...prev, msg];
+        });
+
+        // 🔹 Notify parent about last message update
+    if (typeof onNewMessage === "function") {
+      onNewMessage({
+        conversationId: msg.conversation_id,
+        message: msg.message,
+        message_type: msg.message_type,
+        timestamp: msg.timestamp,
+      });
+    }
+      }
+    });
+
+    s.on("auth_error", (d) => {
+      console.error("socket auth error", d);
+    });
+
+    return () => {
+      if (s) s.off("new_message");
+    };
+  }, [token, conversation, onNewMessage]);
 
    
 
@@ -72,44 +120,6 @@ const handleFileChange = async (e) => {
     return new Date(new Date(dateStr).getTime() - 5.5 * 60 * 60 * 1000);
   };
 
-
-  // ✅ Initialize socket
-  useEffect(() => {
-    if (!token) return;
-    const s = createSocket(token);
-    socketRef.current = s;
-
-    s.on("connect", () => {
-      // console.log("Socket connected");
-    });
-
-    // ✅ Handle new messages safely
-    s.on("new_message", (msg) => {
-      if (conversation && msg.conversation_id === conversation.id) {
-        setMessages((prev) => {
-          const exists = prev.some((m) => {
-            const mIST = toIST(m.timestamp);
-            const msgIST = toIST(msg.timestamp);
-            return (
-              m.message === msg.message &&
-              m.sender_id === msg.sender_id &&
-              Math.abs(mIST - msgIST) < 2000
-            );
-          });
-          return exists ? msg : [...prev, msg];
-        });
-      }
-    });
-
-    s.on("auth_error", (d) => {
-      console.error("socket auth error", d);
-    });
-
-    return () => {
-      if (s) s.off("new_message");
-    };
-  }, [token, conversation]);
-
   // ✅ Fetch messages when conversation changes
   useEffect(() => {
     if (!conversation) {
@@ -138,6 +148,7 @@ const handleFileChange = async (e) => {
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
     }
   }, [messages]);
+
 
   // ✅ Send message
   const sendMessage = () => {
@@ -171,226 +182,289 @@ const handleFileChange = async (e) => {
   }
 
   return (
-    <div className="flex w-full p-2 ml-5">
+    <div className="flex w-full">
       <div className="w-full">
         {/* Header */}
-        <div className="flex border-b border-gray-200 py-3 justify-between">
+        <div className="flex border-b border-gray-200 py-4 px-6 justify-between">
           <div className="flex">
-            <div className="bg-gray-200 p-2 rounded-full px-3">
-              <h1 className="font-semibold text-gray-500 text-lg">
-  {conversation
-    ? (conversation.other_username || conversation.username || "U")[0].toUpperCase()
-    : "U"}
-</h1>
+            <div className="relative">
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-semibold bg-gradient-to-br from-[#f37c7c] to-[#ef6061] text-white">
+              <h1 className="font-semibold text-lg">
+                {conversation
+                  ? (conversation.other_username || conversation.username || "U")[0].toUpperCase()
+                  : "U"}
+              </h1>
             </div>
-            <div className="p-1 pl-3">
-              <h3 className="text-sm font-semibold text-gray-600">
+                  <div className="absolute bottom-0 left-8 w-3 h-3 bg-green-500 rounded-full border-2 border-white"></div>
+              
+            </div>
+            
+            <div className="pl-3">
+              <h3 className="text-sm font-semibold text-gray-900 ">
   {conversation
     ? conversation.other_username || conversation.username || "No conversation selected"
     : "No conversation selected"}
 </h3>
-              <p className="text-xs">Online</p>
+              <p className="text-xs mt-1">Online</p>
             </div>
           </div>
           <div
         className="p-2 cursor-pointer hover:text-gray-600"
         onClick={() => setShowInfo(!showInfo)}
       >
-        <FontAwesomeIcon icon={faBars} />
+        <FontAwesomeIcon icon={faBars} className="text-gray-500"/>
       </div>
         </div>
 
-        {/* Messages */}
-        <div
-          style={{
-            backgroundImage: `url(${Backimage})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            width: "100%",
-          }}
-          className="h-105 pt-4 overflow-y-auto p-4 hide-scrollbar"
-          ref={messagesRef}
-        >
-          {messages.map((msg, idx) => {
-  const mine = msg.sender_id === user?.id;
 
 
-
-  return (
-    <div
-      key={idx}
-      className={`flex ${mine ? "justify-end" : "justify-start"} mb-2`}
-    >
-      <div
-        className={`${
-          mine ? "bg-gray-200" : "bg-blue-200"
-        } w-fit max-w-xs p-2 rounded-lg shadow-lg`}
-      >
-        {(() => {
-  const fileUrl = msg.message;
-  const fileName = fileUrl.split("/").pop();
-  const isImage = msg.message_type === "image" || /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrl);
-  const isFile = msg.message_type === "file" || /\.(pdf|docx?|txt|zip|rar)$/i.test(fileUrl);
-
-  if (isImage) {
-    return (
-      <div className="relative group">
-        <img
-          src={fileUrl}
-          alt="sent"
-          className="max-w-[200px] rounded-lg cursor-pointer transition-transform duration-200 group-hover:scale-[1.03]"
-          onClick={() => window.open(fileUrl, "_blank")}
-        />
-        <button
-  onClick={async () => {
-    if (!fileUrl) return;
-    try {
-      const response = await fetch(fileUrl, { mode: "cors" });
-      const blob = await response.blob();
-      const blobUrl = window.URL.createObjectURL(blob);
-
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = fileName || "download";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-
-      // Clean up the blob URL
-      window.URL.revokeObjectURL(blobUrl);
-    } catch (error) {
-      console.error("Download failed:", error);
-    }
+      {/* Messages */}
+<div
+  style={{
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    width: "100%",
   }}
-  className="absolute bottom-1 right-1 text-gray-500 rounded-md text-lg opacity-0 group-hover:opacity-100 transition"
+  className="h-105 pt-4 overflow-y-auto p-4 px-8 hide-scrollbar"
+  ref={messagesRef}
 >
-  <FontAwesomeIcon icon={faCircleDown} />
-</button>
+  {(() => {
+    if (!messages.length) return <p className="text-center text-gray-400">No messages yet</p>;
 
-      </div>
-    );
-  } else if (isFile) {
-    return (
-      <div className="bg-white flex items-center space-x-3 border border-gray-300 rounded-lg p-2">
-        <div className="bg-gray-200 w-8 h-8 flex items-center justify-center rounded-full text-sm">
-          <FontAwesomeIcon icon={faFile} className="text-gray-500"/>
-        </div>
-        <div className="flex-1">
-          <p className="text-xs font-semibold text-gray-800 w-32 break-words whitespace-normal">
-            {fileName}
-          </p>
-          <button
-            onClick={() => {
-              const a = document.createElement("a");
-              a.href = fileUrl;
-              a.download = fileName;
-              a.click();
-            }}
-            className="text-[10px] text-blue-600"
-          >
-            Download
-          </button>
-        </div>
-      </div>
-    );
-  } else {
-    return <p className="text-sm text-gray-800 break-words">{msg.message}</p>;
-  }
-})()}
+    // ✅ Group messages by date
+    const grouped = messages.reduce((acc, msg) => {
+      const date = new Date(msg.timestamp);
+      const dateKey = date.toLocaleDateString("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+      if (!acc[dateKey]) acc[dateKey] = [];
+      acc[dateKey].push(msg);
+      return acc;
+    }, {});
 
+    // ✅ Helper to show "Today", "Yesterday", or date
+    const formatDateHeader = (dateStr) => {
+      const today = new Date();
+      const msgDate = new Date(dateStr);
+      const diffDays = Math.floor(
+        (today.setHours(0, 0, 0, 0) - msgDate.setHours(0, 0, 0, 0)) /
+          (1000 * 60 * 60 * 24)
+      );
 
-        <p className="text-right text-[9px] pt-1">
-          {(() => {
-            const ts = msg.timestamp;
-            const match = ts?.match(/\d{2}:\d{2}:\d{2}/);
-            if (!match) return "";
-            const [h, m] = match[0].split(":").map(Number);
-            let hours = h;
-            const ampm = hours >= 12 ? "PM" : "AM";
-            hours = hours % 12 || 12;
-            return `${hours.toString().padStart(2, "0")}:${m
-              .toString()
-              .padStart(2, "0")} ${ampm}`;
-          })()}
-        </p>
-      </div>
-    </div>
-  );
-})}
+      if (diffDays === 0) return "Today";
+      if (diffDays === 1) return "Yesterday";
+      return msgDate.toLocaleDateString("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+    };
 
+    return Object.keys(grouped).map((dateKey) => (
+      <div key={dateKey}>
+        {/* 📅 Date header */}
+        <div className="flex justify-center my-3">
+          <span className="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded-full shadow-sm">
+            {formatDateHeader(dateKey)}
+          </span>
         </div>
 
-        {/* Input Box */}
-        <div className="w-full border border-gray-300 rounded-lg bg-white shadow-sm pb-2 mt-2">
-          <div className="flex items-center space-x-2 text-gray-600 bg-gray-100 mb-2 p-2">
-            <button className="font-bold">
-              <FontAwesomeIcon icon={faBold} />
-            </button>
-            <button className="italic">
-              <FontAwesomeIcon icon={faItalic} />
-            </button>
-            <button className="line-through">
-              <FontAwesomeIcon icon={faStrikethrough} />
-            </button>
-            <span>|</span>
-            <button>
-              <FontAwesomeIcon icon={faLink} />
-            </button>
-            <button>
-              <FontAwesomeIcon icon={faListUl} />
-            </button>
-            <button>
-              <FontAwesomeIcon icon={faListOl} />
-            </button>
-          </div>
+        {/* 💬 Messages for this date */}
+        {grouped[dateKey].map((msg, idx) => {
+          const mine = msg.sender_id === user?.id;
+          return (
+            <div
+              key={idx}
+              className={`flex ${mine ? "justify-end" : "justify-start"} mb-2`}
+            >
+              <div>
+                <div
+                  className={`w-fit max-w-xs px-3 py-2 rounded-2xl ${
+                    mine
+                      ? "bg-[#f37c7c] text-white rounded-br-sm"
+                      : "bg-gray-100 text-gray-900 rounded-bl-sm"
+                  }`}
+                >
+                  {(() => {
+                    const fileUrl = msg.message;
+                    const fileName = fileUrl.split("/").pop();
+                    let isImage = false;
+                    let isFile = false;
+                    if (msg.message_type === "text") {
+                      // Always treat as text, even if it looks like a file
+                      isImage = false;
+                      isFile = false;
+                    } else if (msg.message_type === "image" || /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrl)) {
+                      isImage = true;
+                    } else if (msg.message_type === "file" || /\.(pdf|docx?|txt|zip|rar)$/i.test(fileUrl)) {
+                      isFile = true;
+                    }
 
-          <textarea
-            className="w-full h-12 outline-none resize-none text-sm px-2"
-            placeholder="Type a message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
-          />
+                    if (isImage) {
+                      return (
+                        <div className="relative group">
+                  <img
+                    src={fileUrl}
+                    alt="sent"
+                    className="max-w-[200px] rounded-lg cursor-pointer transition-transform duration-200 group-hover:scale-[1.03]"
+                    onClick={() => window.open(fileUrl, "_blank")}
+                  />
+                  <button
+                    onClick={async () => {
+                      if (!fileUrl) return;
+                      try {
+                        const response = await fetch(fileUrl, { mode: "cors" });
+                        const blob = await response.blob();
+                        const blobUrl = window.URL.createObjectURL(blob);
+                  
+                        const link = document.createElement("a");
+                        link.href = blobUrl;
+                        link.download = fileName || "download";
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                  
+                        // Clean up the blob URL
+                        window.URL.revokeObjectURL(blobUrl);
+                      } catch (error) {
+                        console.error("Download failed:", error);
+                      }
+                    }}
+                    className="absolute bottom-1 right-1 text-gray-500 rounded-md text-lg opacity-0 group-hover:opacity-100 transition"
+                  >
+                    <FontAwesomeIcon icon={faCircleDown} />
+                  </button>
+                </div>
+                      );
+                    } else if (isFile) {
+                      const ext = fileName.split(".").pop().toLowerCase();
+                      let fileIcon = faFile;
+                      let iconColor = "text-gray-500";
 
-          <div className="flex justify-between items-center mt-2 text-gray-600 px-2 pb-2">
-            <div className="flex space-x-3">
-  <label className="bg-gray-200 rounded-full font-semibold text-sm px-1 shadow-sm cursor-pointer">
-    <FontAwesomeIcon icon={faPlus} />
-    <input
-      type="file"
-      className="hidden"
-      onChange={handleFileChange}
-      accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    />
-  </label>
-  <button>Aa</button>
-  <button>
-    <FontAwesomeIcon icon={faFaceSmile} />
-  </button>
-  <button>
-    <FontAwesomeIcon icon={faAt} />
-  </button>
+                      if (["pdf"].includes(ext)) {
+                        fileIcon = faFilePdf;
+                        iconColor = "text-red-300";
+                      } else if (["doc", "docx"].includes(ext)) {
+                        fileIcon = faFileWord;
+                        iconColor = "text-blue-300";
+                      } else if (["xls", "xlsx", "csv"].includes(ext)) {
+                        fileIcon = faFileExcel;
+                        iconColor = "text-green-300";
+                      } else if (["zip", "rar", "7z"].includes(ext)) {
+                        fileIcon = faFileZipper;
+                        iconColor = "text-yellow-300";
+                      } else if (["ppt", "pptx"].includes(ext)) {
+                        fileIcon = faFilePowerpoint;
+                        iconColor = "text-orange-300";
+                      } else if (["txt"].includes(ext)) {
+                        fileIcon = faFileLines;
+                        iconColor = "text-gray-300";
+                      }
+
+                      return (
+                        <div className="bg-white flex items-center space-x-3 border border-gray-300 rounded-lg p-2">
+                          <div className="bg-gray-100 w-8 h-8 flex items-center justify-center rounded-full text-sm">
+                            <FontAwesomeIcon icon={fileIcon} className={iconColor} />
+                          </div>
+                          <div className="flex-1">
+                            <p className="text-xs font-semibold text-gray-800 w-44 break-words whitespace-normal">
+                              {fileName}
+                            </p>
+                            <button
+                              onClick={() => {
+                                const a = document.createElement("a");
+                                a.href = fileUrl;
+                                a.download = fileName;
+                                a.click();
+                              }}
+                              className="text-[10px] text-blue-600"
+                            >
+                              Download
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    } else {
+                      return <p className="text-sm break-words">{msg.message}</p>;
+                    }
+                  })()}
+                </div>
+                <p className={`text-xs pt-1 text-gray-500 ${mine ? "text-right" : "text-left"}`}>
+                  {(() => {
+                    const ts = msg.timestamp;
+                    const match = ts?.match(/\d{2}:\d{2}:\d{2}/);
+                    if (!match) return "";
+                    const [h, m] = match[0].split(":").map(Number);
+                    let hours = h;
+                    const ampm = hours >= 12 ? "PM" : "AM";
+                    hours = hours % 12 || 12;
+                    return `${hours.toString().padStart(2, "0")}:${m
+                      .toString()
+                      .padStart(2, "0")} ${ampm}`;
+                  })()}
+                </p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    ));
+  })()}
 </div>
 
-            <div className="flex items-center space-x-2">
+
+        {/* Input Box */}
+        <div className="flex gap-2 border-t border-gray-300 px-4 py-2">
+          <div className="w-full rounded-lg bg-gray-100 pb-2 mt-2">
+              <textarea
+                className="w-full h-12 outline-none resize-none text-sm p-3"
+                placeholder="Type a message..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendMessage();
+                  }
+                }}
+              />
+
+              <div className="flex justify-between items-center mt-2 text-gray-600 px-2 pb-2">
+                <div className="flex space-x-3">
+                  <label className=" font-semibold text-lg px-1 text-gray-500 cursor-pointer">
+                    <FontAwesomeIcon icon={faPaperclip} />
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={handleFileChange}
+                      accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    />
+                  </label>
+                  <button>
+                    <Smile className="w-5 h-5 text-gray-600" />
+                  </button>
+                </div>
+              </div>
+          </div>
+            <div className="flex items-center space-x-2 mt-auto pt-auto">
               <button
                 onClick={sendMessage}
-                className="bg-gray-600 rounded-lg shadow-ms px-2 text-white"
+                className="w-12 h-12 bgcolor-500 hover:bg-[#f37c7c] rounded-xl flex items-center justify-center transition-colors flex-shrink-0"
               >
-                ▶ Send
+                <Send className="w-5 h-5 text-white" />
               </button>
             </div>
-          </div>
         </div>
       </div>
       {showInfo && (
         <div className="mt-2 z-10">
-          <ChatUserInfo />
+          <ChatUserInfo
+            token={token}
+            conversation={conversation}
+            user={user}
+          />
         </div>
       )}
 

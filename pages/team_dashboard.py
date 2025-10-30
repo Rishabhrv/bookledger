@@ -919,7 +919,9 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
             st.link_button(
                 ":material/chat: Message",
                 url=tasks_url,
-                type="tertiary"
+                type="tertiary",
+                disabled=True,
+                help="Messaging feature coming soon!"
             )
 
     # Metrics rendering

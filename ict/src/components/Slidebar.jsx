@@ -1,48 +1,35 @@
 // src/components/Slidebar.jsx
 import React from "react";
 import { Link } from "react-router-dom";
-import "../css/SlideBar.css";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faHouseChimney, faComment, faUserGroup } from "@fortawesome/free-solid-svg-icons";
+import { faHouseChimney } from "@fortawesome/free-solid-svg-icons";
 
 const Slidebar = ({ user }) => {
+  const userInitials = user?.username ? user.username.slice(0, 2).toUpperCase() : "JD";
+
   return (
-   <div className="SliderBar w-17 bg-gray-50 h-screen m-2 mb-0 rounded-lg text-center pt-5 flex flex-col justify-between">
-  {/* --- Top section --- */}
-  <div>
-    <Link to="/chatapp">
-      <div className="bg-gray-500 p-2 m-3 rounded-lg hover:bg-gray-600 transition">
-        <FontAwesomeIcon className="icon text-white" icon={faHouseChimney} />
+    <div className="w-25 bgcolor flex flex-col items-center py-4 space-y-3 h-screen rounded-r-2xl shadow-md">
+      {/* --- Logo / Top Icon --- */}
+      <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center font-bold text-bgcolor text-xl">
+        C
       </div>
-    </Link>
 
-    <Link to="/chats">
-      <div className="bg-gray-500 p-2 m-3 rounded-lg mt-5 hover:bg-gray-600 transition">
-        <FontAwesomeIcon className="icon text-white" icon={faComment} />
+      {/* --- Main Nav Buttons --- */}
+      <div className="flex-1 flex flex-col items-center space-y-4 mt-4">
+        <Link
+          to="/chat"
+          className="w-12 h-12 bgcolor-100 rounded-xl flex items-center justify-center hover:bgcolor transition-colors"
+        >
+          <FontAwesomeIcon icon={faHouseChimney} className="text-white text-lg" />
+        </Link>
+
       </div>
-    </Link>
 
-    <Link to="/chatgroup">
-      <div className="bg-gray-500 p-2 m-3 rounded-lg mt-5 hover:bg-gray-600 transition">
-        <FontAwesomeIcon className="icon text-white" icon={faUserGroup} />
+      {/* --- Bottom User Icon --- */}
+      <div className="w-12 h-12 rounded-full bgcolor-500 flex items-center justify-center text-white font-semibold">
+        {userInitials}
       </div>
-    </Link>
-  </div>
-
-  {/* --- Bottom section (User info) --- */}
-  <div className="mb-6">
-    {user ? (
-      <div>
-        <div className="text-sm font-semibold uppercase bg-gray-200 py-3 m-2 rounded-full">
-          {user.username ? user.username.slice(0, 2) : ""}
-        </div>
-      </div>
-    ) : (
-      <div className="text-sm text-gray-400">Not logged</div>
-    )}
-  </div>
-</div>
-
+    </div>
   );
 };
 

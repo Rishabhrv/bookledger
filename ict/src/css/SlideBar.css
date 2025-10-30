@@ -6,3 +6,21 @@
   color: #818181;
   text-shadow: 0 0 5px #777777;
 } 
+
+.bgcolor{
+  background-color: #f07171;
+}
+
+
+.bgcolor-100{
+  background-color: #f37c7c;
+}
+
+.bgcolor-500{
+  background-color: #e93535;
+}
+
+
+.text-bgcolor{
+  color :#ef6061;
+}

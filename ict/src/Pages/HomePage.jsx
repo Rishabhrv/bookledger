@@ -2,9 +2,10 @@ import React, { useState, useEffect } from "react";
 import Slidebar from "../components/Slidebar";
 import HomePageUsers from "../components/HomePageUsers";
 import HomePageMsg from "../components/HomePageMsg";
+import '../css/SlideBar.css'
 
-const FLASK_AUTH_URL = "http://localhost:5001/auth/validate_and_details";
-const FLASK_LOGIN_URL = "http://localhost:5001/login";
+const FLASK_AUTH_URL = process.env.REACT_APP_FLASK_AUTH_URL;
+const FLASK_LOGIN_URL = process.env.REACT_APP_FLASK_LOGIN_URL;
 
 // ✅ Allowed roles and apps
 const VALID_ROLES = ["admin", "user"];
@@ -48,10 +49,13 @@ const redirectToLogin = (message) => {
   window.location.href = FLASK_LOGIN_URL;
 };
 
+
 const HomePage = () => {
   const [token, setToken] = useState(localStorage.getItem("token"));
   const [user, setUser] = useState(null);
   const [selectedConv, setSelectedConv] = useState(null);
+  const [lastMessageUpdate, setLastMessageUpdate] = useState(null);
+  
 
   // ✅ Main token + user validation logic
   const validateToken = async (activeToken) => {
@@ -134,10 +138,9 @@ const HomePage = () => {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get("token");
-    const activeToken = urlToken || localStorage.getItem("token");
+    const activeToken = urlToken;
 
     if (urlToken) {
-      localStorage.setItem("token", urlToken);
       setToken(urlToken);
     } else if (activeToken) {
       setToken(activeToken);
@@ -199,6 +202,8 @@ const checkTokenExpiry = (token) => {
 if (checkTokenExpiry(token)) return;
 
 
+
+
   if (!token || !user) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -209,6 +214,9 @@ if (checkTokenExpiry(token)) return;
     );
   }
 
+  
+
+
   return (
     <div className="flex">
       <Slidebar user={user} />
@@ -216,8 +224,9 @@ if (checkTokenExpiry(token)) return;
         token={token}
         onSelectConversation={(conv) => setSelectedConv(conv)}
         user={user}
+        lastMessageUpdate={lastMessageUpdate}
       />
-      <HomePageMsg token={token} conversation={selectedConv} user={user} />
+      <HomePageMsg token={token} conversation={selectedConv} user={user} onNewMessage={(data) => setLastMessageUpdate(data)}/>
     </div>
   );
 };

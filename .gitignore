@@ -194,12 +194,11 @@ book_info.py
 logs
 **/*.backup.*
 **/*.back.*
-
 node_modules
 bower_components
-
 *.sublime*
-
 psd
 thumb
 sketch
+ict/build/
+ict/node_modules/
