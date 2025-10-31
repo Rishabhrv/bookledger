@@ -1,20 +1,18 @@
-// src/App.jsx
 import "./App.css";
-import { BrowserRouter as Router, Routes, Route} from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import HomePage from "./Pages/HomePage";
 
 function AppRoutes() {
-
   return (
     <Routes>
-      <Route path="/chat" element={<HomePage />} />
+      <Route path="/" element={<HomePage />} />
     </Routes>
   );
 }
 
 function App() {
   return (
-    <Router>
+    <Router basename="/chat">
       <AppRoutes />
     </Router>
   );

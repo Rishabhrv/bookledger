@@ -10,11 +10,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Pull the code
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      # 2️⃣ Set up Node.js 24 LTS for React build
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -22,26 +20,28 @@ jobs:
           cache: 'npm'
           cache-dependency-path: ict/package-lock.json
 
-      # 3️⃣ Build React app
       - name: Build React app
         working-directory: ict
         run: |
           npm ci
           npm run build
 
-      # 4️⃣ Set up SSH
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # 5️⃣ Copy build folder to VPS
+      # 👇 Add this step BEFORE rsync or SSH usage
+      - name: Add VPS to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H 178.16.137.226 >> ~/.ssh/known_hosts
+
       - name: Upload React build to VPS
         run: |
           echo "🚀 Uploading build files to VPS..."
           rsync -avz --delete ict/build/ rishabhvyas@178.16.137.226:/home/rishabhvyas/bookledger/ict/build/
 
-      # 6️⃣ Deploy backend (Flask/Streamlit)
       - name: Deploy backend on VPS
         run: |
           ssh -o StrictHostKeyChecking=no rishabhvyas@178.16.137.226 << 'EOF'
