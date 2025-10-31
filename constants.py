@@ -22,12 +22,14 @@ ACCESS_TO_BUTTON = {
     "IJISEM": "ijisem",
     "Tasks": "tasks",
     "Details": "details",
+    "Message": "messages",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
 }
 
 BASE_URL  = st.secrets["general"]["BASE_URL"]
+CHAT_URL  = st.secrets["general"]["CHAT_URL"]
 
 # Predefined list of educational subjects
 VALID_SUBJECTS = [
@@ -54,7 +56,13 @@ def connect_db():
 
 def get_page_url(page_path, token):
     """Generate a URL with the token as a query parameter."""
-    return f"{BASE_URL}/{page_path}?token={token}"
+    # Decide which base URL to use based on the path
+    if page_path.startswith("chat"):
+        base = CHAT_URL
+    else:
+        base = BASE_URL
+
+    return f"{base}/{page_path}?token={token}"
 
 def log_activity(conn, user_id, username, session_id, action, details):
     try:
@@ -115,3 +123,31 @@ def clean_old_logs(conn, days_to_keep=180):
                 )
     except Exception as e:
         st.error(f"Error cleaning old logs: {str(e)}")
+
+
+def initialize_click_and_session_id():
+    # Initialize session state from query parameters
+    if "session_id" not in st.session_state:
+        session_id = st.query_params.get("session_id", [None])[0]
+        if not session_id:
+            st.error("Session not initialized.")
+            st.stop()
+        if session_id:
+            st.session_state.session_id = session_id
+        
+    if "click_id" not in st.session_state:
+        click_id = st.query_params.get("click_id", [None])[0]
+        if not click_id:
+            st.error("Click ID not found in URL.")
+            st.stop()
+        if click_id:
+            st.session_state.click_id = click_id
+    
+    return st.session_state.session_id, st.session_state.click_id
+
+def clean_url_params():
+    # ✅ Clean URL after extracting values
+    if "session_id" in st.query_params:
+        del st.query_params["session_id"]
+    if "click_id" in st.query_params:
+        del st.query_params["click_id"]

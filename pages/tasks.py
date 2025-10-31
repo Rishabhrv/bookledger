@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import pytz
 from sqlalchemy import text
 import time
-from constants import connect_db
-from constants import log_activity
+from constants import connect_db, get_page_url, log_activity, initialize_click_and_session_id, clean_url_params
+from urllib.parse import urlencode, quote
 import uuid
 from auth import validate_token
 import calendar
@@ -19,6 +19,7 @@ st.markdown("<style> .main > div { padding-top: 0rem !important; } .block-contai
 
 validate_token()
 
+
 role = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_access = st.session_state.get("access", [])
@@ -28,9 +29,6 @@ start_date = st.session_state.get("start_date", None)
 level = st.session_state.get("level", "Unknown")
 report_to = st.session_state.get("report_to", "Unknown")
 token = st.session_state.token
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-
 
 conn = connect_db()
 
@@ -43,20 +41,15 @@ if "activity_logged" not in st.session_state:
 
 # Handle session ID logic
 if user_app in ["main", "operations", "sales"]:
-    query_params = st.query_params
-    session_id = query_params.get("session_id", [None])[0]
-    click_id = query_params.get("click_id", [None])[0]
-
-    if not session_id:
-        st.error("Session not initialized. Please access this page from the main dashboard.")
-        st.stop()
-
-    st.session_state.session_id = session_id
+    initialize_click_and_session_id()
 else:
     # for 'tasks' or any other direct access app
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
-    click_id = None
+
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
+
 
 # Ensure user_id and username are set
 if not all(key in st.session_state for key in ["user_id", "username"]):
@@ -277,7 +270,8 @@ def get_or_create_timesheet(conn, user_id, fiscal_week):
         # Safe to create new timesheet
         manager_id = st.session_state.get("report_to")
         if manager_id == "Unknown" or not manager_id:
-            manager_id = None
+            st.error("Manager not assigned. Cannot create timesheet. Contact admin for assistance.")
+            st.stop()
 
         with conn.session as s:
             s.execute(text("INSERT INTO timesheets (user_id, manager_id, fiscal_week, status) VALUES (:user_id, :manager_id, :fiscal_week, 'draft')"),
@@ -2506,6 +2500,17 @@ def main():
         page = st.radio("Navigation", pages, index=default_index, label_visibility="collapsed")
         st.markdown("---")
         # You can add logout button or other info here
+        if user_app == "tasks":
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            message_url = get_page_url('chat', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            if st.session_state.user_id in [27,24]:  # Example user IDs allowed to see the message button
+                st.link_button("💬 Message", message_url, use_container_width=True)
+            else:
+                st.button("💬 Message", disabled=True, use_container_width=True, help="Messaging feature coming soon!")
 
     page_map = {
         "My Timesheet": my_timesheet_page,

@@ -165,13 +165,14 @@ BUTTON_CONFIG = {
         "permission": "advance_search",
         "type": "new_tab",
     },
-    "tasks": {
-        "label": "Tasks",
-        "icon": "🕒",
-        "page_path": "tasks",
-        "permission": "tasks",
+    "messages": {
+        "label": "Message",
+        "icon": "💬",
+        "page_path": "chat",
+        "permission": "messages",
         "type": "new_tab",
     },
+
     "team_dashboard": {
         "label": "Operations",
         "icon": "📈",
@@ -184,6 +185,13 @@ BUTTON_CONFIG = {
         "icon": "⚠️",
         "page_path": "pending_books",
         "permission": "pending_books",
+        "type": "new_tab",
+    },
+    "tasks": {
+        "label": "Tasks",
+        "icon": "🕒",
+        "page_path": "tasks",
+        "permission": "tasks",
         "type": "new_tab",
     },
     "dashboard": {
@@ -986,7 +994,7 @@ def manage_users(conn):
     app_display_names = list(VALID_APPS.keys())
     app_db_values = {display: db_value for display, db_value in VALID_APPS.items()}
     FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
-    LEVEL_SUPPORT_APPS = ["Tasks", "Operations", "Sales"]
+    LEVEL_SUPPORT_APPS = ["IJISEM", "Tasks", "Operations", "Sales"]
 
     # Create 3 tabs
     tab1, tab2, tab3 = st.tabs(["👥 Users Table", "✏️ Edit User", "➕ Add User"])
@@ -6935,12 +6943,17 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     # Count authors
     author_count = len(authors_df[authors_df['book_id'] == book_id])
 
+    if book_row.get('deliver', 0) == 0:
+        deliver_status = "Undelivered"
+    else:
+        deliver_status = "Delivered"
+
     # Book Title and Archive Toggle
 
     st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
     # Book Info in Compact Grid Layout
     st.markdown("<div class='info-grid'>", unsafe_allow_html=True)
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.markdown(f"<div class='info-box'><span class='info-label'>Publisher:</span>{book_row['publisher']}</div>", unsafe_allow_html=True)
     with col2:
@@ -6949,6 +6962,8 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         st.markdown(f"<div class='info-box'><span class='info-label'>Since:</span>{days_since_enrolled} days</div>", unsafe_allow_html=True)
     with col4:
         st.markdown(f"<div class='info-box'><span class='info-label'>Authors:</span>{author_count}</div>", unsafe_allow_html=True)
+    with col5:
+        st.markdown(f"<div class='info-box'><span class='info-label'>Status:</span>{deliver_status}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Author Checklists (Full Sequence)

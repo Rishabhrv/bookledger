@@ -5,9 +5,9 @@ from datetime import datetime
 from auth import validate_token
 import altair as alt
 from time import sleep
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity, connect_db, get_page_url, clean_url_params, initialize_click_and_session_id
 import uuid
+from urllib.parse import urlencode, quote
 
 ########################################################################################################################
 ##################################--------------- Page Config ----------------------------#############################
@@ -28,16 +28,22 @@ icon_image = small_logo
 ##################################--------------- Token Validation ----------------------------######################
 #######################################################################################################################
 
-
 # Run validation
 validate_token()
 
 user_role = st.session_state.get("role", None)
 user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+token = st.session_state.token
 
+if user_app == 'main' or user_role == 'admin':
+    initialize_click_and_session_id()
+else:
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
 
 if user_role != 'admin' and not (
     (user_role == 'user' and user_app == 'main' and 'IJISEM' in user_access) or 
@@ -61,6 +67,62 @@ st.markdown("""
         }
             <style>
             """, unsafe_allow_html=True)
+
+
+########################################################################################################################
+##################################--------------- Database Connection ----------------------------######################
+#######################################################################################################################
+
+
+# Database connection
+@st.cache_resource
+def connect_db_ijisem():
+    try:
+        def get_connection():
+            return st.connection('ijisem', type='sql')
+        conn = get_connection()
+        return conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
+
+conn_main = connect_db()
+conn = connect_db_ijisem()
+
+if user_app == 'ijisem':
+    if "activity_logged" not in st.session_state:
+        log_activity(
+                    conn_main,
+                    st.session_state.user_id,
+                    st.session_state.username,
+                    st.session_state.session_id,
+                    "logged in",
+                    f"App: {st.session_state.app}"
+                )
+        st.session_state.activity_logged = True
+
+if user_app == 'main' or user_role == 'admin':
+
+    # Initialize logged_click_ids if not present
+    if "logged_click_ids" not in st.session_state:
+        st.session_state.logged_click_ids = set()
+
+    # Log navigation if click_id is present and not already logged
+    if click_id and click_id not in st.session_state.logged_click_ids:
+        try:
+            log_activity(
+                conn_main,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "navigated to page",
+                f"Page: IJISEM"
+            )
+            st.session_state.logged_click_ids.add(click_id)
+        except Exception as e:
+            st.error(f"Error logging navigation: {str(e)}")
+
+
 
 ########################################################################################################################
 ##################################--------------- CSS Style ----------------------------######################
@@ -192,67 +254,6 @@ st.markdown("""
             
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@1" rel="stylesheet" />
 """, unsafe_allow_html=True)
-
-########################################################################################################################
-##################################--------------- Database Connection ----------------------------######################
-#######################################################################################################################
-
-
-# Database connection
-@st.cache_resource
-def connect_db_ijisem():
-    try:
-        def get_connection():
-            return st.connection('ijisem', type='sql')
-        conn = get_connection()
-        return conn
-    except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
-
-conn_main = connect_db()
-conn = connect_db_ijisem()
-
-
-if user_app == 'ijisem':
-    if "activity_logged" not in st.session_state:
-        log_activity(
-                    conn_main,
-                    st.session_state.user_id,
-                    st.session_state.username,
-                    st.session_state.session_id,
-                    "logged in",
-                    f"App: {st.session_state.app}"
-                )
-        st.session_state.activity_logged = True
-
-if user_app == 'main':
-    # Initialize session state from query parameters
-    query_params = st.query_params
-    click_id = query_params.get("click_id", [None])
-    session_id = query_params.get("session_id", [None])
-
-    # Set session_id in session state
-    st.session_state.session_id = session_id
-
-    # Initialize logged_click_ids if not present
-    if "logged_click_ids" not in st.session_state:
-        st.session_state.logged_click_ids = set()
-
-    # Log navigation if click_id is present and not already logged
-    if click_id and click_id not in st.session_state.logged_click_ids:
-        try:
-            log_activity(
-                conn_main,
-                st.session_state.user_id,
-                st.session_state.username,
-                st.session_state.session_id,
-                "navigated to page",
-                f"Page: IJISEM"
-            )
-            st.session_state.logged_click_ids.add(click_id)
-        except Exception as e:
-            st.error(f"Error logging navigation: {str(e)}")
 
 
 ########################################################################################################################
@@ -1647,7 +1648,7 @@ def all_filters(df):
             st.session_state.page = 0
 
     # UI and Filter Logic
-    col1, col2, col3 = st.columns([5, 3, 1], vertical_alignment="center")
+    col1, col2, col3, col4 = st.columns([5, 3, 1, 1], vertical_alignment="center")
     with col1:
         search_query = st.text_input(
             "Search by Paper ID or Title",
@@ -1740,7 +1741,31 @@ def all_filters(df):
     with col3:
         if st.button(":material/add: Add Paper", key="add_paper_button", width="stretch"):
             add_paper_dialog(conn)
+    
+    with col4:
+        with st.popover("More", width="stretch", help="More Options"):
+            click_id = str(uuid.uuid4())
+            query_params = {
+                "click_id": click_id,
+                "session_id": st.session_state.session_id
+            }
+            full_url = get_page_url("tasks", token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                label="🕒 Timesheet",
+                url=full_url,
+                type="tertiary",
+                width="content"
+            )
 
+            full_url = get_page_url("chat", token) + f"&{urlencode(query_params, quote_via=quote)}"
+            st.link_button(
+                label="💬 Message",
+                url=full_url,
+                type="tertiary",
+                width="content"
+            )
+
+    # Function to apply filters
     def apply_filters(df, search_query, filters):
         filtered_df = df.copy()
         applied_filters = False
@@ -2240,6 +2265,7 @@ def main():
             if selected_page != st.session_state.page + 1:
                 st.session_state.page = selected_page - 1
                 st.rerun()
+
 
 
 if __name__ == "__main__":

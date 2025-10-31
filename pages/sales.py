@@ -1316,7 +1316,7 @@ with c3:
         st.cache_data.clear()
 
 # Search bar and filters
-srcol1, srcol2, scrol3, scrol4 = st.columns([4, 3, 1, 1.5], gap="small")
+srcol1, srcol2, scrol3= st.columns([5, 3, 1,], gap="small")
 with srcol1:
     search_query = st.text_input(
         "🔎 Search Books",
@@ -1606,29 +1606,34 @@ if applied_filters:
     st.success(f"Applied Filters: {', '.join(applied_filters)}")
 
 with scrol3:
-    click_id = str(uuid.uuid4())
-    query_params = {
-        "click_id": click_id,
-        "session_id": st.session_state.session_id
-    }
-    full_url = get_page_url("tasks", token) + f"&{urlencode(query_params, quote_via=quote)}"
-    st.link_button(
-        label="Timesheet",
-        url=full_url,
-        type="secondary",
-        width="stretch"
-    )
+    with st.popover("More", width="stretch", help="More Options"):
+        click_id = str(uuid.uuid4())
+        query_params = {
+            "click_id": click_id,
+            "session_id": st.session_state.session_id
+        }
+        full_url = get_page_url("tasks", token) + f"&{urlencode(query_params, quote_via=quote)}"
+        st.link_button(
+            label="🕒 Timesheet",
+            url=full_url,
+            type="tertiary",
+            width="content"
+        )
 
-with scrol4:
-    full_url = get_page_url("author_positions", token) + f"&{urlencode(query_params, quote_via=quote)}"
-    st.link_button(
-        label="Open Positions",
-        url=full_url,
-        type="primary",
-        width="stretch"
-    )
-
-
+        full_url = get_page_url("chat", token) + f"&{urlencode(query_params, quote_via=quote)}"
+        st.link_button(
+            label="💬 Message",
+            url=full_url,
+            type="tertiary",
+            width="content"
+        )
+        full_url = get_page_url("author_positions", token) + f"&{urlencode(query_params, quote_via=quote)}"
+        st.link_button(
+            label="📚 Open Positions",
+            url=full_url,
+            type="tertiary",
+            width="content"
+        )
 
 
 # Pagination

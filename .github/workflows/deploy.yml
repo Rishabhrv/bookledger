@@ -23,10 +23,19 @@ jobs:
           ssh -o StrictHostKeyChecking=no rishabhvyas@178.16.137.226 << 'EOF'
           cd /home/rishabhvyas/bookledger
           git fetch origin main
-          git reset --hard origin/main  # Ensure server matches GitHub repo
-          git clean -fd                # Remove untracked files/folders
+          git reset --hard origin/main
+          git clean -fd
           
+          # Install React dependencies and build
+          cd ict
+          npm install              # Install packages from package.json
+          npm run build           # Compile React app to build/
+          cd ..
+          
+          # Install Python dependencies
           source /home/rishabhvyas/bookledger/venv/bin/activate
           pip install -r requirements.txt
+          
+          # Restart Streamlit service
           sudo systemctl restart newcrm.service
           EOF
