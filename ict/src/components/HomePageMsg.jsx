@@ -12,6 +12,10 @@ import {
   faFilePowerpoint,
   faFileLines,
   faFileZipper,
+  faTrash,
+  faShareFromSquare,
+  faReply,
+  faEllipsisVertical,
 } from "@fortawesome/free-solid-svg-icons";
 import {
   Smile,
@@ -26,6 +30,7 @@ const HomePageMsg = ({ token, conversation, user, onNewMessage }) => {
   const socketRef = useRef(null);
   const messagesRef = useRef(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [showMenu, setShowMenu] = useState(null);
 
    // ✅ Initialize socket
   useEffect(() => {
@@ -77,34 +82,35 @@ const HomePageMsg = ({ token, conversation, user, onNewMessage }) => {
    
 
 const handleFileChange = async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
 
-
-  // Upload to backend
   const formData = new FormData();
-  formData.append("file", file);
+  files.forEach((file) => formData.append("file", file)); // 👈 append all
+  formData.append("username", user.username);
 
   try {
     const res = await fetch("http://localhost:5001/upload_file", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
       body: formData,
     });
+
     const data = await res.json();
 
-    if (res.ok && data.url) {
+    if (res.ok && data.urls && Array.isArray(data.urls)) {
       const s = getSocket();
-      const payload = {
-  token,
-  conversation_id: conversation.id,
-  message: data.url,
-  message_type: file.type.startsWith("image/") ? "image" : "file", // ✅ correct key
-};
 
-      s.emit("send_message", payload);
+      data.urls.forEach((url, i) => {
+        const file = files[i];
+        const payload = {
+          token,
+          conversation_id: conversation.id,
+          message: url,
+          message_type: file.type.startsWith("image/") ? "image" : "file",
+        };
+        s.emit("send_message", payload);
+      });
     } else {
       console.error("File upload failed:", data);
     }
@@ -112,6 +118,8 @@ const handleFileChange = async (e) => {
     console.error("Upload error:", err);
   }
 };
+
+
 
 
   // ✅ Helper to convert UTC → IST
@@ -169,6 +177,7 @@ const handleFileChange = async (e) => {
     }
   };
 
+
     // ✅ If no conversation selected, show empty state
   if (!conversation) {
     return (
@@ -180,6 +189,8 @@ const handleFileChange = async (e) => {
       </div>
     );
   }
+
+  
 
   return (
     <div className="flex w-full">
@@ -219,200 +230,250 @@ const handleFileChange = async (e) => {
 
 
       {/* Messages */}
-<div
-  style={{
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    width: "100%",
-  }}
-  className="h-105 pt-4 overflow-y-auto p-4 px-8 hide-scrollbar"
-  ref={messagesRef}
->
-  {(() => {
-    if (!messages.length) return <p className="text-center text-gray-400">No messages yet</p>;
+        <div
+          style={{
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            width: "100%",
+          }}
+          className="h-105 pt-4 overflow-y-auto p-4 px-8 hide-scrollbar"
+          ref={messagesRef}
+        >
+        {(() => {
+          if (!messages.length) return <p className="text-center text-gray-400">No messages yet</p>;
+      
+          // ✅ Group messages by date
+          const grouped = messages.reduce((acc, msg) => {
+            const date = new Date(msg.timestamp);
+            const dateKey = date.toLocaleDateString("en-IN", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            });
+            if (!acc[dateKey]) acc[dateKey] = [];
+            acc[dateKey].push(msg);
+            return acc;
+          }, {});
 
-    // ✅ Group messages by date
-    const grouped = messages.reduce((acc, msg) => {
-      const date = new Date(msg.timestamp);
-      const dateKey = date.toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
-      if (!acc[dateKey]) acc[dateKey] = [];
-      acc[dateKey].push(msg);
-      return acc;
-    }, {});
+          // ✅ Helper to show "Today", "Yesterday", or date
+          const formatDateHeader = (dateStr) => {
+            const today = new Date();
+            const msgDate = new Date(dateStr);
+            const diffDays = Math.floor(
+              (today.setHours(0, 0, 0, 0) - msgDate.setHours(0, 0, 0, 0)) /
+                (1000 * 60 * 60 * 24)
+            );
+      
+            if (diffDays === 0) return "Today";
+            if (diffDays === 1) return "Yesterday";
+            return msgDate.toLocaleDateString("en-IN", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            });
+          };
 
-    // ✅ Helper to show "Today", "Yesterday", or date
-    const formatDateHeader = (dateStr) => {
-      const today = new Date();
-      const msgDate = new Date(dateStr);
-      const diffDays = Math.floor(
-        (today.setHours(0, 0, 0, 0) - msgDate.setHours(0, 0, 0, 0)) /
-          (1000 * 60 * 60 * 24)
-      );
-
-      if (diffDays === 0) return "Today";
-      if (diffDays === 1) return "Yesterday";
-      return msgDate.toLocaleDateString("en-IN", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
-    };
-
-    return Object.keys(grouped).map((dateKey) => (
-      <div key={dateKey}>
-        {/* 📅 Date header */}
-        <div className="flex justify-center my-3">
-          <span className="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded-full shadow-sm">
-            {formatDateHeader(dateKey)}
-          </span>
-        </div>
-
-        {/* 💬 Messages for this date */}
-        {grouped[dateKey].map((msg, idx) => {
-          const mine = msg.sender_id === user?.id;
-          return (
-            <div
-              key={idx}
-              className={`flex ${mine ? "justify-end" : "justify-start"} mb-2`}
-            >
-              <div>
-                <div
-                  className={`w-fit max-w-xs px-3 py-2 rounded-2xl ${
-                    mine
-                      ? "bg-[#f37c7c] text-white rounded-br-sm"
-                      : "bg-gray-100 text-gray-900 rounded-bl-sm"
-                  }`}
-                >
-                  {(() => {
-                    const fileUrl = msg.message;
-                    const fileName = fileUrl.split("/").pop();
-                    let isImage = false;
-                    let isFile = false;
-                    if (msg.message_type === "text") {
-                      // Always treat as text, even if it looks like a file
-                      isImage = false;
-                      isFile = false;
-                    } else if (msg.message_type === "image" || /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrl)) {
-                      isImage = true;
-                    } else if (msg.message_type === "file" || /\.(pdf|docx?|txt|zip|rar)$/i.test(fileUrl)) {
-                      isFile = true;
-                    }
-
-                    if (isImage) {
-                      return (
-                        <div className="relative group">
-                  <img
-                    src={fileUrl}
-                    alt="sent"
-                    className="max-w-[200px] rounded-lg cursor-pointer transition-transform duration-200 group-hover:scale-[1.03]"
-                    onClick={() => window.open(fileUrl, "_blank")}
-                  />
-                  <button
-                    onClick={async () => {
-                      if (!fileUrl) return;
-                      try {
-                        const response = await fetch(fileUrl, { mode: "cors" });
-                        const blob = await response.blob();
-                        const blobUrl = window.URL.createObjectURL(blob);
-                  
-                        const link = document.createElement("a");
-                        link.href = blobUrl;
-                        link.download = fileName || "download";
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-                  
-                        // Clean up the blob URL
-                        window.URL.revokeObjectURL(blobUrl);
-                      } catch (error) {
-                        console.error("Download failed:", error);
-                      }
-                    }}
-                    className="absolute bottom-1 right-1 text-gray-500 rounded-md text-lg opacity-0 group-hover:opacity-100 transition"
-                  >
-                    <FontAwesomeIcon icon={faCircleDown} />
-                  </button>
-                </div>
-                      );
-                    } else if (isFile) {
-                      const ext = fileName.split(".").pop().toLowerCase();
-                      let fileIcon = faFile;
-                      let iconColor = "text-gray-500";
-
-                      if (["pdf"].includes(ext)) {
-                        fileIcon = faFilePdf;
-                        iconColor = "text-red-300";
-                      } else if (["doc", "docx"].includes(ext)) {
-                        fileIcon = faFileWord;
-                        iconColor = "text-blue-300";
-                      } else if (["xls", "xlsx", "csv"].includes(ext)) {
-                        fileIcon = faFileExcel;
-                        iconColor = "text-green-300";
-                      } else if (["zip", "rar", "7z"].includes(ext)) {
-                        fileIcon = faFileZipper;
-                        iconColor = "text-yellow-300";
-                      } else if (["ppt", "pptx"].includes(ext)) {
-                        fileIcon = faFilePowerpoint;
-                        iconColor = "text-orange-300";
-                      } else if (["txt"].includes(ext)) {
-                        fileIcon = faFileLines;
-                        iconColor = "text-gray-300";
-                      }
-
-                      return (
-                        <div className="bg-white flex items-center space-x-3 border border-gray-300 rounded-lg p-2">
-                          <div className="bg-gray-100 w-8 h-8 flex items-center justify-center rounded-full text-sm">
-                            <FontAwesomeIcon icon={fileIcon} className={iconColor} />
-                          </div>
-                          <div className="flex-1">
-                            <p className="text-xs font-semibold text-gray-800 w-44 break-words whitespace-normal">
-                              {fileName}
-                            </p>
-                            <button
-                              onClick={() => {
-                                const a = document.createElement("a");
-                                a.href = fileUrl;
-                                a.download = fileName;
-                                a.click();
-                              }}
-                              className="text-[10px] text-blue-600"
-                            >
-                              Download
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    } else {
-                      return <p className="text-sm break-words">{msg.message}</p>;
-                    }
-                  })()}
-                </div>
-                <p className={`text-xs pt-1 text-gray-500 ${mine ? "text-right" : "text-left"}`}>
-                  {(() => {
-                    const ts = msg.timestamp;
-                    const match = ts?.match(/\d{2}:\d{2}:\d{2}/);
-                    if (!match) return "";
-                    const [h, m] = match[0].split(":").map(Number);
-                    let hours = h;
-                    const ampm = hours >= 12 ? "PM" : "AM";
-                    hours = hours % 12 || 12;
-                    return `${hours.toString().padStart(2, "0")}:${m
-                      .toString()
-                      .padStart(2, "0")} ${ampm}`;
-                  })()}
-                </p>
+          return Object.keys(grouped).map((dateKey) => (
+            <div key={dateKey}>
+              {/* 📅 Date header */}
+              <div className="flex justify-center my-3">
+                <span className="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded-full shadow-sm">
+                  {formatDateHeader(dateKey)}
+                </span>
               </div>
+      
+              {/* 💬 Messages for this date */}
+              {grouped[dateKey].map((msg, idx) => {
+                const mine = msg.sender_id === user?.id;
+                return (
+                  <div
+                    key={idx}
+                    className={`flex ${mine ? "justify-end" : "justify-start"} mb-2 group relative`}
+                  >
+                  <div>
+                    <div className="flex">
+                      <div
+                        className={`w-fit max-w-xs px-3 py-2 rounded-2xl ${
+                          mine
+                            ? "bg-[#f37c7c] text-white rounded-br-sm"
+                            : "bg-gray-100 text-gray-900 rounded-bl-sm"
+                        }`}
+                      >
+                        {(() => {
+                          const fileUrl = msg.message;
+                          const fileName = fileUrl.split("/").pop();
+                          let isImage = false;
+                          let isFile = false;
+                          if (msg.message_type === "text") {
+                            // Always treat as text, even if it looks like a file
+                            isImage = false;
+                            isFile = false;
+                          } else if (msg.message_type === "image" || /\.(jpg|jpeg|png|gif|webp)$/i.test(fileUrl)) {
+                            isImage = true;
+                          } else if (msg.message_type === "file" || /\.(pdf|docx?|txt|zip|rar)$/i.test(fileUrl)) {
+                            isFile = true;
+                          }
+
+                          if (isImage) {
+                            return (
+                              <div className="relative group">
+                                <img
+                                  src={fileUrl}
+                                  alt="sent"
+                                  className="max-w-[200px] rounded-lg cursor-pointer transition-transform duration-200 group-hover:scale-[1.03]"
+                                  onClick={() => window.open(fileUrl, "_blank")}
+                                />
+                                <button
+                                  onClick={async () => {
+                                    if (!fileUrl) return;
+                                    try {
+                                      const response = await fetch(fileUrl, { mode: "cors" });
+                                      const blob = await response.blob();
+                                      const blobUrl = window.URL.createObjectURL(blob);
+                                      const link = document.createElement("a");
+                                      link.href = blobUrl;
+                                      link.download = fileName || "download";
+                                      document.body.appendChild(link);
+                                      link.click();
+                                      document.body.removeChild(link);
+                                      // Clean up the blob URL
+                                      window.URL.revokeObjectURL(blobUrl);
+                                    } catch (error) {
+                                      console.error("Download failed:", error);
+                                    }
+                                  }}
+                                  className="absolute bottom-1 right-1 text-gray-500 rounded-md text-lg opacity-0 group-hover:opacity-100 transition"
+                                >
+                                  <FontAwesomeIcon icon={faCircleDown} />
+                                </button>
+                              </div>
+                            );
+                          } else if (isFile) {
+                            const ext = fileName.split(".").pop().toLowerCase();
+                            let fileIcon = faFile;
+                            let iconColor = "text-gray-500";
+                            if (["pdf"].includes(ext)) {
+                              fileIcon = faFilePdf;
+                              iconColor = "text-red-300";
+                            } else if (["doc", "docx"].includes(ext)) {
+                              fileIcon = faFileWord;
+                              iconColor = "text-blue-300";
+                            } else if (["xls", "xlsx", "csv"].includes(ext)) {
+                              fileIcon = faFileExcel;
+                              iconColor = "text-green-300";
+                            } else if (["zip", "rar", "7z"].includes(ext)) {
+                              fileIcon = faFileZipper;
+                              iconColor = "text-yellow-300";
+                            } else if (["ppt", "pptx"].includes(ext)) {
+                              fileIcon = faFilePowerpoint;
+                              iconColor = "text-orange-300";
+                            } else if (["txt"].includes(ext)) {
+                              fileIcon = faFileLines;
+                              iconColor = "text-gray-300";
+                            }
+                              return (
+                                <div className="bg-white flex items-center space-x-3 border border-gray-300 rounded-lg p-2">
+                                  <div className="bg-gray-100 w-8 h-8 flex items-center justify-center rounded-full text-sm">
+                                    <FontAwesomeIcon icon={fileIcon} className={iconColor} />
+                                  </div>
+                                  <div className="flex-1">
+                                    <p className="text-xs font-semibold text-gray-800 w-44 break-words whitespace-normal">
+                                      {fileName}
+                                    </p>
+                                    <button
+                                      onClick={() => {
+                                        const a = document.createElement("a");
+                                        a.href = fileUrl;
+                                        a.download = fileName;
+                                        a.click();
+                                      }}
+                                      className="text-[10px] text-blue-600"
+                                    >
+                                      Download
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            } else {
+                              return <p className="text-sm break-words">{msg.message}</p>;
+                            }
+                        })()}
+                      </div>
+                      {/* 🕹 Three-dot menu (visible on hover) */}
+                        <button
+                          className="opacity-0 group-hover:opacity-100 ml-2 mt-1 text-gray-400 hover:text-gray-600 transition"
+                          onClick={() => setShowMenu(showMenu === idx ? null : idx)}
+                        >
+                          <FontAwesomeIcon icon={faEllipsisVertical} />
+                        </button>
+                      {/* 📋 Popup Menu */}
+                        {showMenu === idx && (
+                          <div
+                            className={`absolute ${
+                              mine ? "left-0" : "right-0"
+                            } -top-0  bg-white border border-gray-200 rounded-lg shadow-md z-20 flex `}
+                          >
+                            <button
+                              onClick={() => console.log("Reply:", msg.id)}
+                              className="block w-full text-xs px-2 py-2 hover:bg-gray-100 text-gray-700 text-left"
+                            >
+                              <FontAwesomeIcon icon={faReply} className="" /> 
+                            </button>
+                            <button
+                              onClick={() => console.log("Forward:", msg.id)}
+                              className="block w-full text-xs px-2 py-2 hover:bg-gray-100 text-gray-700 text-left"
+                            >
+                              <FontAwesomeIcon icon={faShareFromSquare} className="" /> 
+                            </button>
+                            {mine ? 
+                            <button
+                                onClick={async () => {   // ✅ add async here
+                                  if (!window.confirm("Delete this message?")) return;
+                                  try {
+                                    const res = await fetch(`http://localhost:5001/delete_message/${msg.id}`, {
+                                      method: "DELETE",
+                                      headers: { Authorization: `Bearer ${token}` },
+                                    });
+                                    if (res.ok) {
+                                      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+                                      const s = getSocket();
+                                      if (s) s.emit("delete_message", { id: msg.id, conversation_id: conversation.id });
+                                    }
+                                  } catch (err) {
+                                    console.error("Delete error:", err);
+                                  }
+                                }}
+                                className="text-sm px-3 py-2 hover:bg-red-100 text-red-500 text-left"
+                              >
+                                <FontAwesomeIcon icon={faTrash} />
+                              </button>
+                            : ""}
+                            
+                          </div>
+                        )}
+                    </div>
+                    <p className={`text-xs pt-1 text-gray-500 ${mine ? "text-right" : "text-left"}`}>
+                      {(() => {
+                        const ts = msg.timestamp;
+                        const match = ts?.match(/\d{2}:\d{2}:\d{2}/);
+                        if (!match) return "";
+                        const [h, m] = match[0].split(":").map(Number);
+                        let hours = h;
+                        const ampm = hours >= 12 ? "PM" : "AM";
+                        hours = hours % 12 || 12;
+                        return `${hours.toString().padStart(2, "0")}:${m
+                          .toString()
+                          .padStart(2, "0")} ${ampm}`;
+                      })()}
+                    </p>
+                  </div>
+                </div>
+                );
+              })}
             </div>
-          );
-        })}
+          ));
+        })()}
       </div>
-    ));
-  })()}
-</div>
 
 
         {/* Input Box */}
@@ -436,11 +497,12 @@ const handleFileChange = async (e) => {
                   <label className=" font-semibold text-lg px-1 text-gray-500 cursor-pointer">
                     <FontAwesomeIcon icon={faPaperclip} />
                     <input
-                      type="file"
-                      className="hidden"
-                      onChange={handleFileChange}
-                      accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    />
+  type="file"
+  multiple
+  className="hidden"
+  onChange={handleFileChange}
+  accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+/>
                   </label>
                   <button>
                     <Smile className="w-5 h-5 text-gray-600" />

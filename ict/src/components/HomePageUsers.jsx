@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faThumbtack, faFile, faImage } from "@fortawesome/free-solid-svg-icons";
-import { Plus, Search } from "lucide-react";
+import {  Search, MessagesSquare  } from "lucide-react";
 
 const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate }) => {
   const [convos, setConvos] = useState([]);
@@ -9,6 +9,8 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeChat, setActiveChat] = useState(null);
+  const [showAllUsers, setShowAllUsers] = useState(false);
+
 
   // 🔹 Fetch existing conversations
   useEffect(() => {
@@ -55,7 +57,11 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
     return () => clearTimeout(timer);
   }, [searchTerm, convos, token]);
 
-  const listToShow = searchTerm ? searchResults : convos;
+  const listToShow = showAllUsers
+  ? searchResults
+  : searchTerm
+  ? searchResults
+  : convos;
 
   // 🔹 Create new conversation
   const createConversation = async (otherUserId) => {
@@ -117,14 +123,50 @@ const timeAgo = (dateString) => {
 
 
   return (
-    <div className="w-90 min-w-90 bg-white border-r border-gray-200 flex flex-col">
+    <div className="w-80 min-w-90 bg-white border-r border-gray-200 flex flex-col">
       {/* Header */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="p-4 border-b border-gray-200 pt-4">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-2xl font-bold text-gray-900">Messages</h2>
-          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">{user.username}</h2>
+          </div>
+          <div className="flex">
+            {/* <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
             <Plus className="w-5 h-5 text-gray-600" />
-          </button>
+          </button> */}
+          <button
+  onClick={async () => {
+    setLoading(true);
+    setShowAllUsers(true); // ✅ tell component to show all users
+    try {
+      const res = await fetch(`http://localhost:5001/all_users`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      const userList = Array.isArray(data) ? data : [];
+
+      // Tag them as "no conversation"
+      const existingUsernames = new Set(convos.map((c) => c.other_username));
+      const result = userList.map((u) => ({
+        ...u,
+        hasConversation: existingUsernames.has(u.username),
+      }));
+
+      setSearchResults(result);
+      setSearchTerm(""); // clear search bar
+    } catch (err) {
+      console.error("Error fetching all users:", err);
+    } finally {
+      setLoading(false);
+    }
+  }}
+  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+  title="Show all users"
+>
+  <MessagesSquare className="w-5 h-5 text-gray-600" />
+</button>
+
+          </div>
         </div>
 
         {/* Search */}
@@ -194,7 +236,7 @@ const timeAgo = (dateString) => {
                 <div className="flex-1 min-w-0 text-left">
                   <div className="flex items-center justify-between mb-1">
                     <h3 className="font-semibold text-gray-900 truncate">{name}</h3>
-                    <span className="text-xs text-gray-500 ml-2">{timeAgo(c.last_time)}{console.log(c.last_time)}</span>
+                    <span className="text-xs text-gray-500 ml-2">{timeAgo(c.last_time)}</span>
                   </div>
 
                   <p className="text-sm text-gray-600 truncate flex items-center gap-1">
@@ -226,7 +268,7 @@ const timeAgo = (dateString) => {
 
                 {/* Unread or New chat */}
                 {!c.hasConversation ? (
-                  <button
+                  <div
                     onClick={(e) => {
                       e.stopPropagation();
                       createConversation(c.id);
@@ -235,7 +277,7 @@ const timeAgo = (dateString) => {
                     title="Start Conversation"
                   >
                     <FontAwesomeIcon icon={faThumbtack} />
-                  </button>
+                  </div>
                 ) : (
                   c.unread > 0 && (
                     <div className="flex-shrink-0 w-5 h-5 bgcolor-500 rounded-full flex items-center justify-center text-xs text-white font-semibold">

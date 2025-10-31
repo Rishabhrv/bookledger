@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faHouseChimney } from "@fortawesome/free-solid-svg-icons";
 
-const Slidebar = ({ user }) => {
+const Slidebar = ({ user, token }) => {
   const userInitials = user?.username ? user.username.slice(0, 2).toUpperCase() : "JD";
 
   return (
@@ -17,7 +17,7 @@ const Slidebar = ({ user }) => {
       {/* --- Main Nav Buttons --- */}
       <div className="flex-1 flex flex-col items-center space-y-4 mt-4">
         <Link
-          to="/chat"
+          to={`/chat?token=${encodeURIComponent(token)}`}
           className="w-12 h-12 bgcolor-100 rounded-xl flex items-center justify-center hover:bgcolor transition-colors"
         >
           <FontAwesomeIcon icon={faHouseChimney} className="text-white text-lg" />

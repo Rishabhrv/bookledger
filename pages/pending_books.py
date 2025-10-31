@@ -4,8 +4,7 @@ from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
 from auth import validate_token
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
 import time
 from sqlalchemy.sql import text
 
@@ -21,10 +20,13 @@ icon_image = small_logo
 )
 
 validate_token()
+initialize_click_and_session_id()
 
 user_role = st.session_state.get("role", None)
 user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
 
 
 if user_role != 'admin' and not (
@@ -376,14 +378,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 conn = connect_db()
-
-# Initialize session state from query parameters
-query_params = st.query_params
-click_id = query_params.get("click_id", [None])[0]  # Extract first element, default to None
-session_id = query_params.get("session_id", [None])[0]  # Extract first element, default to None
-
-# Set session_id in session state
-st.session_state.session_id = session_id
 
 # Initialize logged_click_ids if not present
 if "logged_click_ids" not in st.session_state:

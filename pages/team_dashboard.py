@@ -8,8 +8,7 @@ import os
 import datetime
 import altair as alt
 from auth import validate_token
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity, connect_db, get_page_url, clean_url_params, initialize_click_and_session_id
 import uuid
 from datetime import datetime, timezone, timedelta, time
 from time import sleep
@@ -112,20 +111,14 @@ if "logged_click_ids" not in st.session_state:
 if "activity_logged" not in st.session_state:
     st.session_state.activity_logged = False
 
-# Determine session_id based on access method
-user_app = st.session_state.get("app", None)
-if user_app == "main":
-    query_params = st.query_params
-    session_id = query_params.get("session_id", [None])
-    click_id = query_params.get("click_id", [None])
-    if not session_id:
-        st.error("Session not initialized. Please access this page from the main dashboard.")
-        st.stop()
-    st.session_state.session_id = session_id
+if user_app == 'main' or role_user == 'admin':
+    initialize_click_and_session_id()
 else:
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
-    click_id = None
+
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
 
 # Ensure user_id and username are set
 if not all(key in st.session_state for key in ["user_id", "username"]):
@@ -147,21 +140,22 @@ if user_app == "operations" and not st.session_state.activity_logged:
     except Exception as e:
         st.error(f"Error logging login: {str(e)}")
 
-# Log page access if coming from main page and click_id is new
-if user_app == "main" and click_id and click_id not in st.session_state.logged_click_ids:
-    try:
-        log_activity(
-            conn,
-            st.session_state.user_id,
-            st.session_state.username,
-            st.session_state.session_id,
-            "navigated to page",
-            f"Page: team_dashboard"
-        )
-        st.session_state.logged_click_ids.add(click_id)
-    except Exception as e:
-        st.error(f"Error logging navigation: {str(e)}")
+if user_app == 'main' or role_user == 'admin':
 
+    # Log navigation if click_id is present and not already logged
+    if click_id and click_id not in st.session_state.logged_click_ids:
+        try:
+            log_activity(
+                conn,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "navigated to page",
+                f"Page: Team Dashboard"
+            )
+            st.session_state.logged_click_ids.add(click_id)
+        except Exception as e:
+            st.error(f"Error logging navigation: {str(e)}")
 
 # --- Updated CSS ---
 st.markdown("""

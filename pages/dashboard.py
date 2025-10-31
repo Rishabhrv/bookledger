@@ -7,11 +7,9 @@ from datetime import datetime
 import time
 import numpy as np
 import datetime
-import seaborn as sns
 import time
 from auth import validate_token
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
 
 
 logo = "logo/logo_black.png"
@@ -40,10 +38,14 @@ icon_image = small_logo
 )
 
 validate_token()
+initialize_click_and_session_id()
 
 user_role = st.session_state.get("role", "Guest")
 user_app = st.session_state.get("app", None)
 user_access = st.session_state.get("access", None)
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
+
 
 # Access Control Logic
 if user_role == "admin":
@@ -69,13 +71,6 @@ if not st.session_state.visited:
 
 conn = connect_db()
 
-# Initialize session state from query parameters
-query_params = st.query_params
-click_id = query_params.get("click_id", [None])
-session_id = query_params.get("session_id", [None])
-
-# Set session_id in session state
-st.session_state.session_id = session_id
 
 # Initialize logged_click_ids if not present
 if "logged_click_ids" not in st.session_state:

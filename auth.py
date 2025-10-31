@@ -54,6 +54,7 @@ def clear_auth_session():
         if key in st.session_state:
             del st.session_state[key]
 
+
 @st.dialog("Authentication Failed", dismissible=False)
 def error_dialog(error_message):
     st.error(error_message)
@@ -69,8 +70,7 @@ def validate_token():
         'exp' in st.session_state and 
         st.session_state.exp > current_time + 300):  # 5-minute buffer
         logger.info("Using cached token validation")
-        return
-
+    
     # Token fetching
     if 'token' not in st.session_state:
         token = st.query_params.get("token")
@@ -78,6 +78,10 @@ def validate_token():
             logger.error("No token provided")
             error_dialog("Access denied: Please log in first.")
         st.session_state.token = token if isinstance(token, str) else token[0]
+
+        #  # ✅ Clean URL by removing token parameter (security best practice)
+        # if "token" in st.query_params:
+        #     del st.query_params["token"]
 
     token = st.session_state.token
 
