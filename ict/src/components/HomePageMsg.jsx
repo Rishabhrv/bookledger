@@ -90,7 +90,7 @@ const handleFileChange = async (e) => {
   formData.append("username", user.username);
 
   try {
-    const res = await fetch("http://localhost:5001/upload_file", {
+    const res = await fetch("https://auth.agkit.in/upload_file", {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
@@ -135,7 +135,7 @@ const handleFileChange = async (e) => {
       return;
     }
 
-    fetch(`http://localhost:5001/messages/${conversation.id}`, {
+    fetch(`https://auth.agkit.in/messages/${conversation.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -430,7 +430,7 @@ const handleFileChange = async (e) => {
                                 onClick={async () => {   // ✅ add async here
                                   if (!window.confirm("Delete this message?")) return;
                                   try {
-                                    const res = await fetch(`http://localhost:5001/delete_message/${msg.id}`, {
+                                    const res = await fetch(`https://auth.agkit.in/delete_message/${msg.id}`, {
                                       method: "DELETE",
                                       headers: { Authorization: `Bearer ${token}` },
                                     });

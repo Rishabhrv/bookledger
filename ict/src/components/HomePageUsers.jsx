@@ -14,7 +14,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
 
   // 🔹 Fetch existing conversations
   useEffect(() => {
-    fetch("http://localhost:5001/conversations", {
+    fetch("https://auth.agkit.in/conversations", {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -37,7 +37,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
 
     setLoading(true);
     const timer = setTimeout(() => {
-      fetch(`http://localhost:5001/users?search=${encodeURIComponent(searchTerm)}`, {
+      fetch(`https://auth.agkit.in/users?search=${encodeURIComponent(searchTerm)}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => r.json())
@@ -66,7 +66,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
   // 🔹 Create new conversation
   const createConversation = async (otherUserId) => {
     try {
-      const res = await fetch("http://localhost:5001/createConversation", {
+      const res = await fetch("https://auth.agkit.in/createConversation", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -139,7 +139,7 @@ const timeAgo = (dateString) => {
     setLoading(true);
     setShowAllUsers(true); // ✅ tell component to show all users
     try {
-      const res = await fetch(`http://localhost:5001/all_users`, {
+      const res = await fetch(`https://auth.agkit.in/all_users`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
