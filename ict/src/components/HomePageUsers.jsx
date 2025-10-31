@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faThumbtack, faFile, faImage } from "@fortawesome/free-solid-svg-icons";
+import { faFile, faImage, faPlus } from "@fortawesome/free-solid-svg-icons";
 import {  Search, MessagesSquare  } from "lucide-react";
+
+const API_URL = process.env.REACT_APP_API_URL;
 
 const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate }) => {
   const [convos, setConvos] = useState([]);
@@ -14,7 +16,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
 
   // 🔹 Fetch existing conversations
   useEffect(() => {
-    fetch("https://auth.agkit.in/conversations", {
+    fetch(`${API_URL}/conversations`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -37,7 +39,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
 
     setLoading(true);
     const timer = setTimeout(() => {
-      fetch(`https://auth.agkit.in/users?search=${encodeURIComponent(searchTerm)}`, {
+      fetch(`${API_URL}/users?search=${encodeURIComponent(searchTerm)}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((r) => r.json())
@@ -66,7 +68,7 @@ const HomePageUsers = ({ token, onSelectConversation, user, lastMessageUpdate })
   // 🔹 Create new conversation
   const createConversation = async (otherUserId) => {
     try {
-      const res = await fetch("https://auth.agkit.in/createConversation", {
+      const res = await fetch(`${API_URL}/createConversation`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -139,7 +141,7 @@ const timeAgo = (dateString) => {
     setLoading(true);
     setShowAllUsers(true); // ✅ tell component to show all users
     try {
-      const res = await fetch(`https://auth.agkit.in/all_users`, {
+      const res = await fetch(`${API_URL}/all_users`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
@@ -183,7 +185,7 @@ const timeAgo = (dateString) => {
       </div>
 
       {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="overflow-y-auto h-125 hide-scrollbar">
         {loading && <div className="p-4 text-gray-500">Searching...</div>}
 
         {Array.isArray(listToShow) && listToShow.length > 0 ? (
@@ -196,7 +198,6 @@ const timeAgo = (dateString) => {
               <button
                 key={c.id || c.user_id}
                 onClick={() => {
-                                  console.log(c);
                   if (c.hasConversation) {
                     const convo = convos.find(
                       (conv) =>
@@ -273,10 +274,10 @@ const timeAgo = (dateString) => {
                       e.stopPropagation();
                       createConversation(c.id);
                     }}
-                    className="text-yellow-500 hover:text-gray-500"
+                    className="text-white hover:text-gray-300 text-xs cursor-pointer bgcolor-100 rounded-lg p-2 py-1"
                     title="Start Conversation"
                   >
-                    <FontAwesomeIcon icon={faThumbtack} />
+                    Connect <FontAwesomeIcon icon={faPlus} />
                   </div>
                 ) : (
                   c.unread > 0 && (

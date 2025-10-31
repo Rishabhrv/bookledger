@@ -2,6 +2,8 @@
 import React, { useEffect, useState, useRef } from "react";
 import { createSocket } from "../socket";
 
+const API_URL = process.env.REACT_APP_API_URL;
+
 const HomePageGroupMsg = ({ token, user, group, onNewMessage }) => {
   const [messages, setMessages] = useState([]);
   const socketRef = useRef(null);
@@ -10,7 +12,7 @@ const HomePageGroupMsg = ({ token, user, group, onNewMessage }) => {
     if (!group) return;
 
     // Fetch group messages
-    fetch(`http://localhost:5001/groupMessages/${group.id}`, {
+    fetch(`${API_URL}/groupMessages/${group.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())

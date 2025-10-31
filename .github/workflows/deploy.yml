@@ -21,21 +21,42 @@ jobs:
       - name: Deploy to VPS
         run: |
           ssh -o StrictHostKeyChecking=no rishabhvyas@178.16.137.226 << 'EOF'
+          set -e
           cd /home/rishabhvyas/bookledger
+
+          echo "🔄 Updating code from Git..."
           git fetch origin main
           git reset --hard origin/main
           git clean -fd
-          
-          # Install React dependencies and build
+
+          echo "📦 Setting up Node.js 18 using nvm..."
+          export NVM_DIR="$HOME/.nvm"
+          if [ ! -d "$NVM_DIR" ]; then
+            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+          fi
+          source "$NVM_DIR/nvm.sh"
+          nvm install 18
+          nvm use 18
+          nvm alias default 18
+
+          echo "🧰 Node version: $(node -v)"
+          echo "🧰 NPM version: $(npm -v)"
+
+          echo "⚙️ Installing React dependencies and building..."
           cd ict
-          npm install              # Install packages from package.json
-          npm run build           # Compile React app to build/
+          rm -rf node_modules package-lock.json build
+          npm install
+          npm run build
           cd ..
-          
-          # Install Python dependencies
+
+          echo "🐍 Activating Python virtual environment..."
           source /home/rishabhvyas/bookledger/venv/bin/activate
+
+          echo "📦 Installing Python dependencies..."
           pip install -r requirements.txt
-          
-          # Restart Streamlit service
+
+          echo "🚀 Restarting Streamlit service..."
           sudo systemctl restart newcrm.service
+
+          echo "✅ Deployment complete!"
           EOF

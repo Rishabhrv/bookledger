@@ -24,6 +24,8 @@ import {
 import { createSocket, getSocket } from "../socket";
 import ChatUserInfo from "./ChatUserInfo";
 
+const API_URL = process.env.REACT_APP_API_URL;
+
 const HomePageMsg = ({ token, conversation, user, onNewMessage }) => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -31,6 +33,14 @@ const HomePageMsg = ({ token, conversation, user, onNewMessage }) => {
   const messagesRef = useRef(null);
   const [showInfo, setShowInfo] = useState(false);
   const [showMenu, setShowMenu] = useState(null);
+  const [popupMsg, setPopupMsg] = useState(""); // ✅ popup message state
+const [showPopup, setShowPopup] = useState(false); // ✅ visibility state
+
+const showErrorPopup = (message) => {
+  setPopupMsg(message);
+  setShowPopup(true);
+  setTimeout(() => setShowPopup(false), 4000); // auto close after 4 sec
+};
 
    // ✅ Initialize socket
   useEffect(() => {
@@ -86,11 +96,11 @@ const handleFileChange = async (e) => {
   if (!files.length) return;
 
   const formData = new FormData();
-  files.forEach((file) => formData.append("file", file)); // 👈 append all
+  files.forEach((file) => formData.append("file", file));
   formData.append("username", user.username);
 
   try {
-    const res = await fetch("https://auth.agkit.in/upload_file", {
+    const res = await fetch(`${API_URL}/upload_file`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
@@ -112,12 +122,16 @@ const handleFileChange = async (e) => {
         s.emit("send_message", payload);
       });
     } else {
+      const errMsg = data.error || "File upload failed. Please try again.";
+      showErrorPopup(errMsg);
       console.error("File upload failed:", data);
     }
   } catch (err) {
     console.error("Upload error:", err);
+    showErrorPopup("Upload failed due to network error.");
   }
 };
+
 
 
 
@@ -135,7 +149,7 @@ const handleFileChange = async (e) => {
       return;
     }
 
-    fetch(`https://auth.agkit.in/messages/${conversation.id}`, {
+    fetch(`${API_URL}/messages/${conversation.id}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -239,6 +253,12 @@ const handleFileChange = async (e) => {
           className="h-105 pt-4 overflow-y-auto p-4 px-8 hide-scrollbar"
           ref={messagesRef}
         >
+
+          {showPopup && (
+  <div className="fixed top-10 left-1/2 transform -translate-x-1/2 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all duration-300">
+    {popupMsg}
+  </div>
+)}
         {(() => {
           if (!messages.length) return <p className="text-center text-gray-400">No messages yet</p>;
       
@@ -430,7 +450,7 @@ const handleFileChange = async (e) => {
                                 onClick={async () => {   // ✅ add async here
                                   if (!window.confirm("Delete this message?")) return;
                                   try {
-                                    const res = await fetch(`https://auth.agkit.in/delete_message/${msg.id}`, {
+                                    const res = await fetch(`${API_URL}/delete_message/${msg.id}`, {
                                       method: "DELETE",
                                       headers: { Authorization: `Bearer ${token}` },
                                     });
