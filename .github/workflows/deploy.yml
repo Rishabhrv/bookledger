@@ -6,59 +6,22 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: 'npm'
-          cache-dependency-path: ict/package-lock.json
-
-      - name: Build React app
-        working-directory: ict
-        run: |
-          npm ci
-          npm run build
-
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.5.3
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # 👇 Add this step BEFORE rsync or SSH usage
-      - name: Add VPS to known_hosts
-        run: |
-          mkdir -p ~/.ssh
-          ssh-keyscan -H 178.16.137.226 >> ~/.ssh/known_hosts
-
-      - name: Upload React build to VPS
-        run: |
-          echo "🚀 Uploading build files to VPS..."
-          rsync -avz --delete ict/build/ rishabhvyas@178.16.137.226:/home/rishabhvyas/bookledger/ict/build/
-
-      - name: Deploy backend on VPS
+      - name: Deploy to VPS
         run: |
           ssh -o StrictHostKeyChecking=no rishabhvyas@178.16.137.226 << 'EOF'
-          set -e
           cd /home/rishabhvyas/bookledger
-
-          echo "🔄 Updating backend code..."
           git fetch origin main
-          git reset --hard origin/main
-          git clean -fd
-
-          echo "🐍 Activating Python environment..."
-          source /home/rishabhvyas/bookledger/venv/bin/activate
-          pip install -r requirements.txt
-
-          echo "🔁 Restarting Streamlit service..."
-          sudo systemctl restart newcrm.service
-
-          echo "✅ Backend updated and service restarted!"
-          EOF
+          git reset --hard origin/main  # Ensure server matches GitHub repo
+          git clean -fd                # Remove untracked files/folders
