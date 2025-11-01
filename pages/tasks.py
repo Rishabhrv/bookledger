@@ -2506,7 +2506,7 @@ def main():
                 "click_id": click_id,
                 "session_id": st.session_state.session_id
             }
-            message_url = get_page_url('chat', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            message_url = get_page_url('/', token) + f"&{urlencode(query_params, quote_via=quote)}"
             if st.session_state.user_id in [27,24]:  # Example user IDs allowed to see the message button
                 st.link_button("💬 Message", message_url, use_container_width=True)
             else:
