@@ -32,6 +32,7 @@ token = st.session_state.token
 
 conn = connect_db()
 
+CHAT_URL  = st.secrets["general"]["CHAT_URL"]
 
 # Initialize session state
 if "logged_click_ids" not in st.session_state:

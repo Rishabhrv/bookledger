@@ -59,10 +59,10 @@ def get_page_url(page_path, token):
     # Decide which base URL to use based on the path
     if page_path.startswith("/"):
         base = CHAT_URL
+        return f"{base}?token={token}"
     else:
         base = BASE_URL
-
-    return f"{base}/{page_path}?token={token}"
+        return f"{base}/{page_path}?token={token}"
 
 def log_activity(conn, user_id, username, session_id, action, details):
     try:
