@@ -2501,17 +2501,13 @@ def main():
         page = st.radio("Navigation", pages, index=default_index, label_visibility="collapsed")
         st.markdown("---")
         # You can add logout button or other info here
-        if user_app == "tasks":
-            click_id = str(uuid.uuid4())
-            query_params = {
-                "click_id": click_id,
-                "session_id": st.session_state.session_id
-            }
-            message_url = get_page_url('/', token) + f"&{urlencode(query_params, quote_via=quote)}"
-            if st.session_state.user_id in [27,24]:  # Example user IDs allowed to see the message button
-                st.link_button("💬 Message", message_url, use_container_width=True)
-            else:
-                st.button("💬 Message", disabled=True, use_container_width=True, help="Messaging feature coming soon!")
+        click_id = str(uuid.uuid4())
+        query_params = {
+            "click_id": click_id,
+            "session_id": st.session_state.session_id
+        }
+        message_url = get_page_url('/', token) + f"&{urlencode(query_params, quote_via=quote)}"
+        st.link_button("💬 Message", message_url, use_container_width=True, help= "Connect with Team")
 
     page_map = {
         "My Timesheet": my_timesheet_page,

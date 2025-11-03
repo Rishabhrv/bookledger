@@ -909,13 +909,13 @@ def render_metrics(books_df, selected_month, section, user_role, holds_df=None):
                 "click_id": click_id,
                 "session_id": st.session_state.session_id
             }
-            tasks_url = get_page_url('chat', token) + f"&{urlencode(query_params, quote_via=quote)}"
+            tasks_url = get_page_url('/', token) + f"&{urlencode(query_params, quote_via=quote)}"
             st.link_button(
                 ":material/chat: Message",
                 url=tasks_url,
                 type="tertiary",
-                disabled=True,
-                help="Messaging feature coming soon!"
+                disabled=False,
+                help="Connect with Team"
             )
 
     # Metrics rendering
