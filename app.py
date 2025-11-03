@@ -7364,38 +7364,30 @@ with srcol1:
 
 
 with srcol3:
-    # Callback function to update the tags filter in session state
+    # Callback functions
     def update_tags_filter():
-        """
-        This function is called when the multiselect widget changes.
-        It updates 'tags_filter' in the session state with the current value
-        of the widget. The widget's value is accessed via its key.
-        """
         widget_key = f"tags_multiselect_{st.session_state.clear_filters_trigger}"
-        
-        # ✅ This safety check prevents the KeyError
         if widget_key in st.session_state:
             st.session_state.tags_filter = st.session_state[widget_key]
 
-    # Callback function to update the subject filter in session state
     def update_subject_filter():
-        """
-        This function is called when the subject pills widget changes.
-        It updates 'subject_filter' in the session state with the current value
-        of the widget. The widget's value is accessed via its key.
-        """
         widget_key = f"subject_pills_{st.session_state.clear_filters_trigger}"
         if widget_key in st.session_state:
             st.session_state.subject_filter = st.session_state[widget_key]
 
+    def update_consultant_filter():
+        widget_key = f"consultant_pills_{st.session_state.clear_filters_trigger}"
+        if widget_key in st.session_state:
+            st.session_state.consultant_filter = st.session_state[widget_key]
+
     # Popover for filtering
-    with st.popover("Filter by Date, Status, Publisher, Subject", width="stretch"):
-        # Extract unique publishers, years, and author types from the dataset
+    with st.popover("🔍 Filters", width="stretch"):
+        # Extract unique data
         unique_publishers = sorted(books['publisher'].dropna().unique())
         unique_years = sorted(books['date'].dt.year.unique())
         unique_author_types = sorted(books['author_type'].dropna().unique())
 
-        # Fetch unique tags from database
+        # Fetch unique tags
         with conn.session as s:
             tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != '' AND tags != '[]'")
             all_tags = s.execute(tag_query).fetchall()
@@ -7410,321 +7402,293 @@ with srcol3:
                     continue
             unique_tags = sorted(tag_counts.keys(), key=lambda x: (-tag_counts[x], x))
 
-        # Use session state to manage filter values
-        if 'year_filter' not in st.session_state:
-            st.session_state.year_filter = None
-        if 'month_filter' not in st.session_state:
-            st.session_state.month_filter = None
-        if 'start_date_filter' not in st.session_state:
-            st.session_state.start_date_filter = None
-        if 'end_date_filter' not in st.session_state:
-            st.session_state.end_date_filter = None
-        if 'status_filter' not in st.session_state:
-            st.session_state.status_filter = None
-        if 'publisher_filter' not in st.session_state:
-            st.session_state.publisher_filter = None
-        if 'isbn_filter' not in st.session_state:
-            st.session_state.isbn_filter = None
-        if 'author_type_filter' not in st.session_state:
-            st.session_state.author_type_filter = None
-        if 'multiple_open_positions_filter' not in st.session_state:
-            st.session_state.multiple_open_positions_filter = None
-        if 'publish_only_filter' not in st.session_state:
-            st.session_state.publish_only_filter = None
-        if 'thesis_to_book_filter' not in st.session_state:
-            st.session_state.thesis_to_book_filter = None
-        if 'tags_filter' not in st.session_state:
-            st.session_state.tags_filter = []
-        if 'subject_filter' not in st.session_state:
-            st.session_state.subject_filter = None
-        if 'clear_filters_trigger' not in st.session_state:
-            st.session_state.clear_filters_trigger = 0
+        # Fetch unique consultants
+        with conn.session as s:
+            consultant_query = text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != ''")
+            unique_consultants = sorted([row[0] for row in s.execute(consultant_query).fetchall()])
 
-        # Reset button at the top
-        if st.button(":material/restart_alt: Reset Filters", key="clear_filters", help="Clear all filters", width="stretch", type="secondary"):
-            st.session_state.year_filter = None
-            st.session_state.month_filter = None
-            st.session_state.start_date_filter = None
-            st.session_state.end_date_filter = None
-            st.session_state.status_filter = None
-            st.session_state.publisher_filter = None
-            st.session_state.isbn_filter = None
-            st.session_state.author_type_filter = None
-            st.session_state.multiple_open_positions_filter = None
-            st.session_state.publish_only_filter = None
-            st.session_state.thesis_to_book_filter = None
+        # Initialize session state
+        for key, default in [
+            ('year_filter', None), ('month_filter', None), ('start_date_filter', None),
+            ('end_date_filter', None), ('status_filter', None), ('publisher_filter', None),
+            ('isbn_filter', None), ('author_type_filter', None), ('multiple_open_positions_filter', None),
+            ('publish_only_filter', None), ('thesis_to_book_filter', None), ('tags_filter', []),
+            ('subject_filter', None), ('consultant_filter', None), ('clear_filters_trigger', 0),
+            ('active_filter_section', None)
+        ]:
+            if key not in st.session_state:
+                st.session_state[key] = default
+
+
+            
+        if st.button("🔄 Reset Filters", key="clear_filters", width="stretch"):
+            for key in ['year_filter', 'month_filter', 'start_date_filter', 'end_date_filter',
+                        'status_filter', 'publisher_filter', 'isbn_filter', 'author_type_filter',
+                        'multiple_open_positions_filter', 'publish_only_filter', 'thesis_to_book_filter',
+                        'subject_filter', 'consultant_filter', 'active_filter_section']:
+                st.session_state[key] = None
             st.session_state.tags_filter = []
-            st.session_state.subject_filter = None
             st.session_state.clear_filters_trigger += 1
             st.rerun()
+        st.write("**Filter By:**")
 
-        # Tabs for filter categories
-        tabs = st.tabs(["Status", "Subject", "Type", "Date"])
+        # Filter category pills
+        filter_categories = [
+            "Date", "Publisher", "Book Status", "ISBN Status", 
+            "Subject", "Tags", "Consultant", "Author Type", "Book Type"
+        ]
+        
+        selected_filter = st.radio(
+            "Select a filter category",
+            options=filter_categories,
+            key=f"filter_category_{st.session_state.clear_filters_trigger}",
+            label_visibility="collapsed",
+            index = None
+        )
+        
+        st.session_state.active_filter_section = selected_filter
 
-        with tabs[3]:  # Date tab
-            # Date Filters
-            year_options = [str(year) for year in unique_years]
-            selected_year = st.pills(
-                "Year:",
-                options=year_options,
-                key=f"year_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
-            )
-            if selected_year:
-                st.session_state.year_filter = int(selected_year)
-            elif selected_year is None and "year_pills_callback" not in st.session_state:
-                st.session_state.year_filter = None
 
-            # Month filter
-            if st.session_state.year_filter:
-                year_books = books[books['date'].dt.year == st.session_state.year_filter]
-                unique_months = sorted(year_books['date'].dt.month.unique())
-                month_names = {
-                    1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr",
-                    5: "May", 6: "Jun", 7: "Jul", 8: "Aug",
-                    9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
-                }
-                month_options = [month_names[month] for month in unique_months]
-                selected_month = st.pills(
-                    "Month",
-                    options=month_options,
-                    key=f"month_pills_{st.session_state.clear_filters_trigger}",
-                    label_visibility='visible'
+        # Show selected filter section
+        if st.session_state.active_filter_section == "Date":
+            st.subheader("📅 Date Filters")
+            col_y1, col_y2 = st.columns(2)
+            with col_y1:
+                year_options = [str(year) for year in unique_years]
+                selected_year = st.pills(
+                    "Year",
+                    options=year_options,
+                    key=f"year_pills_{st.session_state.clear_filters_trigger}"
                 )
-                if selected_month:
-                    st.session_state.month_filter = next(
-                        (num for num, name in month_names.items() if name == selected_month),
-                        None
-                    )
-                elif selected_month is None and "month_pills_callback" not in st.session_state:
-                    st.session_state.month_filter = None
-            else:
-                st.session_state.month_filter = None
+                st.session_state.year_filter = int(selected_year) if selected_year else None
 
-            st.caption('Filter by Range:')
-            # Date range filter
-            min_date = books['date'].min().date()
-            max_date = books['date'].max().date()
-            start_date_key = f"start_date_{st.session_state.clear_filters_trigger}"
-            end_date_key = f"end_date_{st.session_state.clear_filters_trigger}"
-            st.session_state.start_date_filter = st.date_input(
-                "Start Date",
-                value=st.session_state.start_date_filter,
-                min_value=min_date,
-                max_value=max_date,
-                key=start_date_key,
-                label_visibility="visible"
-            )
-            st.session_state.end_date_filter = st.date_input(
-                "End Date",
-                value=st.session_state.end_date_filter,
-                min_value=min_date,
-                max_value=max_date,
-                key=end_date_key,
-                label_visibility="visible"
-            )
+            with col_y2:
+                if st.session_state.year_filter:
+                    year_books = books[books['date'].dt.year == st.session_state.year_filter]
+                    unique_months = sorted(year_books['date'].dt.month.unique())
+                    month_names = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+                                 7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+                    month_options = [month_names[month] for month in unique_months]
+                    selected_month = st.pills(
+                        "Month",
+                        options=month_options,
+                        key=f"month_pills_{st.session_state.clear_filters_trigger}"
+                    )
+                    st.session_state.month_filter = next((num for num, name in month_names.items() if name == selected_month), None) if selected_month else None
+                else:
+                    st.session_state.month_filter = None
+                    st.info("Select a year first", icon="ℹ️")
+
+            st.caption("**Or filter by date range:**")
+            col_d1, col_d2 = st.columns(2)
+            min_date, max_date = books['date'].min().date(), books['date'].max().date()
+            with col_d1:
+                st.session_state.start_date_filter = st.date_input(
+                    "From", value=st.session_state.start_date_filter,
+                    min_value=min_date, max_value=max_date,
+                    key=f"start_date_{st.session_state.clear_filters_trigger}"
+                )
+            with col_d2:
+                st.session_state.end_date_filter = st.date_input(
+                    "To", value=st.session_state.end_date_filter,
+                    min_value=min_date, max_value=max_date,
+                    key=f"end_date_{st.session_state.clear_filters_trigger}"
+                )
+            
             if st.session_state.start_date_filter and st.session_state.end_date_filter:
                 if st.session_state.start_date_filter > st.session_state.end_date_filter:
-                    st.error("Start Date must be before End Date.")
-                    st.session_state.start_date_filter = None
-                    st.session_state.end_date_filter = None
+                    st.error("Start date must be before end date")
 
-        # Status Filters
-        with tabs[0]:  # Status tab
-            publisher_options = unique_publishers
+        elif st.session_state.active_filter_section == "Publisher":
+            st.subheader("🏢 Publisher")
             selected_publisher = st.pills(
-                "Publisher:",
-                options=publisher_options,
+                "Select Publisher",
+                options=unique_publishers,
                 key=f"publisher_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
+                label_visibility="collapsed"
             )
-            if selected_publisher:
-                st.session_state.publisher_filter = selected_publisher
-            elif selected_publisher is None and "publisher_pills_callback" not in st.session_state:
-                st.session_state.publisher_filter = None
+            st.session_state.publisher_filter = selected_publisher
 
-            # Status filter
+        elif st.session_state.active_filter_section == "Book Status":
+            st.subheader("📊 Book Status")
             status_options = ["Delivered", "On Going"]
             if user_role == "admin":
                 status_options.append("Pending Payment")
             selected_status = st.pills(
-                "Book Status:",
+                "Select Status",
                 options=status_options,
                 key=f"status_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
+                label_visibility="collapsed"
             )
             st.session_state.status_filter = selected_status
 
-            # ISBN filter
-            isbn_options = ["Not Applied", "Not Received"]
+        elif st.session_state.active_filter_section == "ISBN Status":
+            st.subheader("📖 ISBN Status")
             selected_isbn = st.pills(
-                "ISBN Status:",
-                options=isbn_options,
+                "Select ISBN Status",
+                options=["Not Applied", "Not Received"],
                 key=f"isbn_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
+                label_visibility="collapsed"
             )
             st.session_state.isbn_filter = selected_isbn
 
-        # Author Filters
-        with tabs[2]:  # Author tab
-            # Author type filter
-            author_type_options = ["Single", "Double", "Triple", "Multiple"]
-            selected_author_type = st.pills(
-                "Author Type:",
-                options=author_type_options,
-                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
-            )
-            st.session_state.author_type_filter = selected_author_type
-
-            # Book Type filters
-            with st.container():
-                col1, col2, col3 = st.columns([1,1,0.9], gap="small")
-                with col1:
-                    # Publish Only filter
-                    publish_only_options = ["Publish Only"]
-                    selected_publish_only = st.pills(
-                        "Book Type:",
-                        options=publish_only_options,
-                        key=f"publish_only_pills_{st.session_state.clear_filters_trigger}",
-                        label_visibility='visible'
-                    )
-                    st.session_state.publish_only_filter = selected_publish_only
-                with col2:
-                    # Thesis to Book filter
-                    thesis_to_book_options = ["Thesis to Book"]
-                    selected_thesis_to_book = st.pills(
-                        "Thesis Type:",
-                        options=thesis_to_book_options,
-                        key=f"thesis_to_book_pills_{st.session_state.clear_filters_trigger}",
-                        label_visibility='hidden'
-                    )
-                    st.session_state.thesis_to_book_filter = selected_thesis_to_book
-
-            # Multiple with open positions filter
-            multiple_open_positions_options = ["Open Positions"]
-            selected_multiple_open_positions = st.pills(
-                "Multiple Authors:",
-                options=multiple_open_positions_options,
-                key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
-            )
-            st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open_positions else None
-
-        # Subject and Tags Filters
-        with tabs[1]:  # Subject tab
-            # Subject filter
+        elif st.session_state.active_filter_section == "Subject":
+            st.subheader("📚 Subject")
             selected_subject = st.pills(
-                "Subject:",
+                "Select Subject",
                 options=VALID_SUBJECTS,
                 on_change=update_subject_filter,
                 key=f"subject_pills_{st.session_state.clear_filters_trigger}",
-                label_visibility='visible'
+                label_visibility="collapsed"
             )
             st.session_state.subject_filter = selected_subject
 
-            # Tag filter with searchable multiselect
+        elif st.session_state.active_filter_section == "Tags":
+            st.subheader("🏷️ Tags")
             selected_tags = st.multiselect(
-                "Filter by Tags:",
+                "Select Tags (max 5)",
                 options=unique_tags,
                 on_change=update_tags_filter,
                 default=st.session_state.tags_filter,
                 key=f"tags_multiselect_{st.session_state.clear_filters_trigger}",
                 max_selections=5,
                 placeholder="Search or select up to 5 tags",
-                help="Select up to 5 tags to filter books"
+                label_visibility="collapsed"
             )
             st.session_state.tags_filter = selected_tags
 
-        # Collect applied filters after all selections
+        elif st.session_state.active_filter_section == "Consultant":
+            st.subheader("👤 Consultant")
+            selected_consultant = st.pills(
+                "Select Consultant",
+                options=unique_consultants,
+                on_change=update_consultant_filter,
+                key=f"consultant_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility="collapsed"
+            )
+            st.session_state.consultant_filter = selected_consultant
+
+        elif st.session_state.active_filter_section == "Author Type":
+            st.subheader("✍️ Author Type")
+            selected_author_type = st.pills(
+                "Select Author Type",
+                options=["Single", "Double", "Triple", "Multiple"],
+                key=f"author_type_pills_{st.session_state.clear_filters_trigger}",
+                label_visibility="collapsed"
+            )
+            st.session_state.author_type_filter = selected_author_type
+
+            if selected_author_type == "Multiple":
+                st.caption("**Filter Multiple Authors:**")
+                selected_multiple_open = st.pills(
+                    "Multiple Author Status",
+                    options=["Open Positions"],
+                    key=f"multiple_open_positions_pills_{st.session_state.clear_filters_trigger}",
+                    label_visibility="collapsed"
+                )
+                st.session_state.multiple_open_positions_filter = "Multiple with Open Positions" if selected_multiple_open else None
+
+        elif st.session_state.active_filter_section == "Book Type":
+            st.subheader("📕 Book Type")
+            col_t1, col_t2 = st.columns(2)
+            with col_t1:
+                selected_publish_only = st.pills(
+                    "Publish Only",
+                    options=["Publish Only"],
+                    key=f"publish_only_pills_{st.session_state.clear_filters_trigger}"
+                )
+                st.session_state.publish_only_filter = selected_publish_only
+
+            with col_t2:
+                selected_thesis_to_book = st.pills(
+                    "Thesis to Book",
+                    options=["Thesis to Book"],
+                    key=f"thesis_to_book_pills_{st.session_state.clear_filters_trigger}"
+                )
+                st.session_state.thesis_to_book_filter = selected_thesis_to_book
+
+        # Show active filters summary
         applied_filters = []
         if st.session_state.publisher_filter:
-            applied_filters.append(f"Publisher={st.session_state.publisher_filter}")
-        if st.session_state.month_filter:
-            applied_filters.append(f"Month={month_names.get(st.session_state.month_filter)}")
+            applied_filters.append(f"Publisher: {st.session_state.publisher_filter}")
         if st.session_state.year_filter:
-            applied_filters.append(f"Year={st.session_state.year_filter}")
+            applied_filters.append(f"Year: {st.session_state.year_filter}")
+        if st.session_state.month_filter:
+            month_names = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+                         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+            applied_filters.append(f"Month: {month_names.get(st.session_state.month_filter)}")
         if st.session_state.start_date_filter:
-            applied_filters.append(f"Start Date={st.session_state.start_date_filter}")
+            applied_filters.append(f"From: {st.session_state.start_date_filter}")
         if st.session_state.end_date_filter:
-            applied_filters.append(f"End Date={st.session_state.end_date_filter}")
+            applied_filters.append(f"To: {st.session_state.end_date_filter}")
         if st.session_state.status_filter:
-            applied_filters.append(f"Status={st.session_state.status_filter}")
+            applied_filters.append(f"Status: {st.session_state.status_filter}")
         if st.session_state.isbn_filter:
-            applied_filters.append(f"ISBN={st.session_state.isbn_filter}")
+            applied_filters.append(f"ISBN: {st.session_state.isbn_filter}")
         if st.session_state.author_type_filter:
-            applied_filters.append(f"Author Type={st.session_state.author_type_filter}")
+            applied_filters.append(f"Author: {st.session_state.author_type_filter}")
         if st.session_state.multiple_open_positions_filter:
-            applied_filters.append(f"Author Status={st.session_state.multiple_open_positions_filter}")
+            applied_filters.append("Multiple: Open Positions")
         if st.session_state.publish_only_filter:
-            applied_filters.append(f"Publish Type={st.session_state.publish_only_filter}")
+            applied_filters.append("Publish Only")
         if st.session_state.thesis_to_book_filter:
-            applied_filters.append(f"Thesis Type={st.session_state.thesis_to_book_filter}")
-        if st.session_state.tags_filter:
-            applied_filters.append(f"Tags={', '.join(st.session_state.tags_filter)}")
+            applied_filters.append("Thesis to Book")
         if st.session_state.subject_filter:
-            applied_filters.append(f"Subject={st.session_state.subject_filter}")
+            applied_filters.append(f"Subject: {st.session_state.subject_filter}")
+        if st.session_state.consultant_filter:
+            applied_filters.append(f"Consultant: {st.session_state.consultant_filter}")
+        if st.session_state.tags_filter:
+            tag_display = ', '.join(st.session_state.tags_filter[:2])
+            if len(st.session_state.tags_filter) > 2:
+                tag_display += f" +{len(st.session_state.tags_filter) - 2}"
+            applied_filters.append(f"Tags: {tag_display}")
 
-        # Apply filters only if there are any
         if applied_filters:
-            # Apply publisher filter
+            st.success(f"**✓ Active ({len(applied_filters)}):** {' • '.join(applied_filters)}")
+
+            # Apply all filters (same logic as before)
             if st.session_state.publisher_filter:
                 filtered_books = filtered_books[filtered_books['publisher'] == st.session_state.publisher_filter]
 
-            # Apply publish only filter
             if st.session_state.publish_only_filter:
                 filtered_books = filtered_books[filtered_books['is_publish_only'] == 1]
 
-            # Apply thesis to book filter
             if st.session_state.thesis_to_book_filter:
                 filtered_books = filtered_books[filtered_books['is_thesis_to_book'] == 1]
 
-            # Apply date filters
             filtered_books = filter_books_by_date(
-                filtered_books,
-                None,
-                st.session_state.month_filter,
-                st.session_state.year_filter,
-                st.session_state.start_date_filter,
+                filtered_books, None, st.session_state.month_filter,
+                st.session_state.year_filter, st.session_state.start_date_filter,
                 st.session_state.end_date_filter
             )
 
-            # Apply ISBN filter
             if st.session_state.isbn_filter:
                 if st.session_state.isbn_filter == "Not Applied":
                     filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 0)]
                 elif st.session_state.isbn_filter == "Not Received":
                     filtered_books = filtered_books[filtered_books['isbn'].isna() & (filtered_books['apply_isbn'] == 1)]
 
-            # Apply status filter
             if st.session_state.status_filter:
                 if st.session_state.status_filter == "Pending Payment":
                     pending_payment_query = """
-                        SELECT DISTINCT book_id
-                        FROM book_authors
-                        WHERE total_amount > 0 
-                        AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
+                        SELECT DISTINCT book_id FROM book_authors
+                        WHERE total_amount > 0 AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
                     """
                     pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
-                    matching_book_ids = pending_book_ids['book_id'].tolist()
-                    filtered_books = filtered_books[filtered_books['book_id'].isin(matching_book_ids)]
+                    filtered_books = filtered_books[filtered_books['book_id'].isin(pending_book_ids['book_id'].tolist())]
                 else:
                     status_mapping = {"Delivered": 1, "On Going": 0}
-                    selected_status_value = status_mapping[st.session_state.status_filter]
-                    filtered_books = filtered_books[filtered_books['deliver'] == selected_status_value]
+                    filtered_books = filtered_books[filtered_books['deliver'] == status_mapping[st.session_state.status_filter]]
 
-            # Apply author type filter
             if st.session_state.author_type_filter:
                 filtered_books = filtered_books[filtered_books['author_type'] == st.session_state.author_type_filter]
 
-            # Apply multiple with open positions filter
             if st.session_state.multiple_open_positions_filter:
                 filtered_books = filtered_books[
                     (filtered_books['author_type'] == 'Multiple') &
                     (filtered_books['book_id'].map(author_count_dict) < 4)
                 ]
 
-            # Apply tags filter
             if st.session_state.tags_filter:
                 filtered_books = filtered_books[
                     filtered_books['tags'].apply(
@@ -7732,11 +7696,13 @@ with srcol3:
                     )
                 ]
 
-            # Apply subject filter
             if st.session_state.subject_filter:
                 filtered_books = filtered_books[filtered_books['subject'] == st.session_state.subject_filter]
 
-            st.success(f"Applied Filters: {', '.join(applied_filters)}")
+            if st.session_state.consultant_filter:
+                consultant_query = "SELECT DISTINCT book_id FROM book_authors WHERE publishing_consultant = :consultant"
+                consultant_book_ids = conn.query(consultant_query, params={"consultant": st.session_state.consultant_filter}, show_spinner=False)
+                filtered_books = filtered_books[filtered_books['book_id'].isin(consultant_book_ids['book_id'].tolist())]
 
 
 with srcol4:
