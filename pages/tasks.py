@@ -1170,9 +1170,9 @@ def manage_work_entry(conn, work_entry_row, start_date, end_date):
 
         col1, col2 = st.columns([1.5, 1])
         with col1:
-            submit_button = st.form_submit_button("💾 Update Entry", type="primary", use_container_width=True)
+            submit_button = st.form_submit_button("💾 Update Entry", type="primary", width='stretch')
         with col2:
-            delete_button = st.form_submit_button("🗑️ Delete Entry", type="secondary", use_container_width=True)
+            delete_button = st.form_submit_button("🗑️ Delete Entry", type="secondary", width='stretch')
 
         if submit_button:
             # Update the previous entry type tracker
@@ -1387,10 +1387,10 @@ def confirm_submission_dialog(conn, timesheet_id, current_status):
         st.info("You are resubmitting a previously rejected timesheet.")
     st.warning(f"Submit this timesheet to **{manager_name}** for approval? This action cannot be undone.")
     c1, c2 = st.columns(2)
-    if c1.button("Yes, Submit", use_container_width=True, type="primary"):
+    if c1.button("Yes, Submit", width='stretch', type="primary"):
         submit_timesheet_for_approval(conn, timesheet_id, current_status)
         st.rerun()
-    if c2.button("Cancel", use_container_width=True):
+    if c2.button("Cancel", width='stretch'):
         st.rerun()
 
 
@@ -1482,7 +1482,7 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
             action_col1, action_col2 = st.columns(2)
             
             with action_col1:
-                if st.form_submit_button("Approve", use_container_width=True, type="primary"):
+                if st.form_submit_button("Approve", width='stretch', type="primary"):
                     try:
                         with conn.session as s:
                             # Update with IST timestamp
@@ -1516,13 +1516,13 @@ def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=Fals
                         st.error(f"Error approving timesheet: {e}")
 
             with action_col2:
-                with st.popover("Request Revision", use_container_width=True):
+                with st.popover("Request Revision", width='stretch'):
                     notes = st.text_area(
                         "Reason for Revision", 
                         placeholder="e.g., Please provide more detail for Wednesday's System Failure entry.",
                         key=f"revision_notes_{timesheet_id}"
                     )
-                    if st.form_submit_button("Request Revision", use_container_width=True, type="secondary"):
+                    if st.form_submit_button("Request Revision", width='stretch', type="secondary"):
                         if not notes.strip():
                             st.warning("A reason for revision is required.")
                         else:
@@ -1629,7 +1629,7 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
                         if duration > 0:
                             popover_label += f" `{duration:.1f} hrs`"
 
-                        with st.popover(popover_label, use_container_width=True):
+                        with st.popover(popover_label, width='stretch'):
                             # (Popover content for other entries remains the same)
                             st.markdown(f"{icon} **{entry_row['work_name']}** on **{day_date.strftime('%a, %b %d')}**")
                             with st.container(border=True):
@@ -1734,7 +1734,7 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
 
 #                     if entry_type == 'work':
 #                         total_hours = day_entries['work_duration'].sum()
-#                         with st.popover(f"`{total_hours:.1f} hrs`", use_container_width=True):
+#                         with st.popover(f"`{total_hours:.1f} hrs`", width='stretch'):
 #                             st.markdown(f"**{entry_name}** on **{day_date.strftime('%a, %b %d')}**")
 #                             for _, entry_row in day_entries.iterrows():
 #                                 with st.container(border=True):
@@ -1752,7 +1752,7 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
 #                         if duration > 0:
 #                             popover_label += f" `{duration:.1f} hrs`"
 
-#                         with st.popover(popover_label, use_container_width=True):
+#                         with st.popover(popover_label, width='stretch'):
 #                             st.markdown(f"{icon} **{entry_row['work_name']}** on **{day_date.strftime('%a, %b %d')}**")
 #                             with st.container(border=True):
 #                                 c1, c2 = st.columns([0.8, 0.2])
@@ -1938,7 +1938,7 @@ def render_work_entry(conn, work_row, is_editable, week_bounds):
                     key=f"manage_{work_row['id']}",
                     on_click=manage_work_entry,
                     args=(conn, work_row, week_bounds['start'], week_bounds['end']),
-                    use_container_width=True,
+                    width='stretch',
                     help="Manage this entry (Edit or Delete)",
                     type="tertiary"
                 )
@@ -1997,11 +1997,11 @@ def my_timesheet_page(conn):
         st.markdown(f"<h5>Week {fiscal_week} <small>({date_range})</small> {status_map.get(status, '⚪️')} {status.upper()}</h5>", unsafe_allow_html=True)
     
     is_editable = status in ['draft', 'rejected']
-    if c2.button("➕ Add Entry", use_container_width=True, disabled=not is_editable, help="Add a new work, holiday, or leave entry."):
+    if c2.button("➕ Add Entry", width='stretch', disabled=not is_editable, help="Add a new work, holiday, or leave entry."):
         add_work_dialog(conn, timesheet_id, start_of_week, end_of_week)
 
     submit_button_text = "✔️ Resubmit" if status == 'rejected' else "✔️ Submit"
-    if c3.button(submit_button_text, type="primary", use_container_width=True, disabled=not is_editable):
+    if c3.button(submit_button_text, type="primary", width='stretch', disabled=not is_editable):
         work_df_check = get_weekly_work(conn, timesheet_id)
         if work_df_check.empty:
             st.warning("Cannot submit an empty timesheet.")
@@ -2132,11 +2132,11 @@ def timesheet_history_page(conn):
                 
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
-                    st.button(button_text, key=f"week_btn_hist_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                    st.button(button_text, key=f"week_btn_hist_{week_start_date}_disabled", width='stretch', disabled=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
-                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_hist_{week_start_date}", use_container_width=True):
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_hist_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
 
@@ -2287,11 +2287,11 @@ def manager_dashboard(conn):
                 
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
-                    st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                    st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", width='stretch', disabled=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
-                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", use_container_width=True):
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
 
@@ -2427,11 +2427,11 @@ def admin_dashboard(conn):
                 
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
-                    st.button(button_text, key=f"week_btn_{week_start_date}_disabled", use_container_width=True, disabled=True)
+                    st.button(button_text, key=f"week_btn_{week_start_date}_disabled", width='stretch', disabled=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
-                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", use_container_width=True):
+                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
 
@@ -2507,7 +2507,7 @@ def main():
             "session_id": st.session_state.session_id
         }
         message_url = get_page_url('/', token) + f"&{urlencode(query_params, quote_via=quote)}"
-        st.link_button("💬 Message", message_url, use_container_width=True, help= "Connect with Team")
+        st.link_button("💬 Message", message_url, width='stretch', help= "Connect with Team")
 
     page_map = {
         "My Timesheet": my_timesheet_page,

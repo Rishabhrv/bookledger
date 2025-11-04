@@ -71,7 +71,7 @@ section_labels = {
     "Proofreading Section": "proofreader",
     "Formatting Section": "formatter",
     "Cover Design Section": "cover_designer",
-    "Histroy": "book_timeline"
+    "History": "book_timeline"
 }
 
 
@@ -1244,10 +1244,10 @@ def correction_dialog(book_id, conn, section):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if is_on_hold:
-                st.button("▶️ Start Correction Now", type="primary", disabled=True, use_container_width=True)
+                st.button("▶️ Start Correction Now", type="primary", disabled=True, width='stretch')
                 st.caption("Resume the section first.")
             elif worker:
-                if st.button("▶️ Start Correction Now", type="primary", use_container_width=True):
+                if st.button("▶️ Start Correction Now", type="primary", width='stretch'):
                     with st.spinner(f"Starting {display_name} correction..."):
                         sleep(1)
                         now = datetime.now(IST)
@@ -1290,7 +1290,7 @@ def correction_dialog(book_id, conn, section):
                         sleep(1)
                         st.rerun()
             else:
-                st.button("▶️ Start Correction Now", type="primary", disabled=True, use_container_width=True)
+                st.button("▶️ Start Correction Now", type="primary", disabled=True, width='stretch')
 
     else:
         # Ongoing correction
@@ -1317,7 +1317,7 @@ def correction_dialog(book_id, conn, section):
 
         col_end, col_cancel = st.columns(2)
         with col_end:
-            if st.button(f"⏹️ End {display_name} Correction Now", type="primary", use_container_width=True):
+            if st.button(f"⏹️ End {display_name} Correction Now", type="primary", width='stretch'):
                 with st.spinner(f"Ending {display_name} correction..."):
                     sleep(1)
                     now = datetime.now(IST)
@@ -1356,7 +1356,7 @@ def correction_dialog(book_id, conn, section):
                     sleep(1)
                     st.rerun()
         with col_cancel:
-            if st.button("Cancel", type="secondary", use_container_width=True):
+            if st.button("Cancel", type="secondary", width='stretch'):
                 st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
                 st.rerun()
 
@@ -1518,10 +1518,10 @@ def edit_section_dialog(book_id, conn, section):
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if is_on_hold:
-                st.button(f"▶️ Start {display_name} Now", type="primary", disabled=True, use_container_width=True)
+                st.button(f"▶️ Start {display_name} Now", type="primary", disabled=True, width='stretch')
                 st.caption("Resume the book first.")
             elif worker:
-                if st.button(f"▶️ Start {display_name} Now", type="primary", use_container_width=True):
+                if st.button(f"▶️ Start {display_name} Now", type="primary", width='stretch'):
                     with st.spinner(f"Starting {display_name}..."):
                         sleep(1)
                         try:
@@ -1558,7 +1558,7 @@ def edit_section_dialog(book_id, conn, section):
                             st.error(f"❌ Failed to start {display_name}: {str(e)}")
                             st.toast(f"Error starting {display_name} for Book ID {book_id}", icon="🚫", duration='long')
             else:
-                st.button(f"▶️ Start {display_name} Now", type="primary", disabled=True, use_container_width=True)
+                st.button(f"▶️ Start {display_name} Now", type="primary", disabled=True, width='stretch')
 
     elif running:
         # On hold running layout
@@ -1574,7 +1574,7 @@ def edit_section_dialog(book_id, conn, section):
             # Centered Resume button
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
-                if st.button("▶️ Resume Book", type="primary", use_container_width=True):
+                if st.button("▶️ Resume Book", type="primary", width='stretch'):
                     with st.spinner("Resuming book..."):
                         sleep(1)
                         try:
@@ -1647,7 +1647,7 @@ def edit_section_dialog(book_id, conn, section):
             # End and Hold buttons side by side
             col_end, col_hold = st.columns(2)
             with col_end:
-                if st.button(f"⏹️ End {display_name} Now", type="primary", use_container_width=True):
+                if st.button(f"⏹️ End {display_name} Now", type="primary", width='stretch'):
                     if needs_pages and book_pages < 10:
                         st.error("❌ Enter Book Pages before ending.")
                     else:
@@ -1690,7 +1690,7 @@ def edit_section_dialog(book_id, conn, section):
                                 st.toast(f"Error ending {display_name} for Book ID {book_id}", icon="🚫", duration='long')
 
             with col_hold:
-                if st.button("⏸️ Hold Book", type="secondary", use_container_width=True):
+                if st.button("⏸️ Hold Book", type="secondary", width='stretch'):
                     st.session_state[f"show_hold_form_{book_id}_{section}"] = True
             
             # Render hold reason form full-width below buttons
@@ -1705,7 +1705,7 @@ def edit_section_dialog(book_id, conn, section):
                         key=f"hold_reason_input_{book_id}_{section}",
                         label_visibility="collapsed"
                     )
-                    submit_hold = st.form_submit_button("Confirm Hold", type="primary", use_container_width=True)
+                    submit_hold = st.form_submit_button("Confirm Hold", type="primary", width='stretch')
                     if submit_hold:
                         if hold_reason.strip():
                             with st.spinner("Holding book..."):
@@ -2637,7 +2637,7 @@ st.markdown("""
 if role_user == "user" and user_app == "operations":
     st.empty()
 else:
-    if selected == "Histroy":
+    if selected == "History":
 
         # Fetch all books for selection
         with conn.session as s:

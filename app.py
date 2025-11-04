@@ -1257,7 +1257,7 @@ def manage_users(conn):
                 st.write("---")
                 col_btn1, col_btn2 = st.columns([3, 1])
                 with col_btn1:
-                    if st.button("💾 Save Changes", key=f"save_edit_{selected_user.id}", type="primary", use_container_width=True):
+                    if st.button("💾 Save Changes", key=f"save_edit_{selected_user.id}", type="primary", width='stretch'):
                         if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
                             st.error("❌ Invalid email format.")
                         else:
@@ -1473,7 +1473,7 @@ def manage_users(conn):
                     new_start_date = None
 
                 # Add Button
-                if st.button("➕ Add User", key="add_user_btn", type="primary", use_container_width=True):
+                if st.button("➕ Add User", key="add_user_btn", type="primary", width='stretch'):
                     if not new_username or not new_password:
                         st.error("❌ Username and password are required.")
                     elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
@@ -5637,7 +5637,7 @@ def edit_operation_dialog(book_id, conn):
 
             # Book Syllabus Section
             st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-            with st.popover("Book Syllabus", use_container_width=True):
+            with st.popover("Book Syllabus", width='stretch'):
                 st.markdown('<div class="info-box">', unsafe_allow_html=True)
                 # Syllabus uploader
                 syllabus_file = None
