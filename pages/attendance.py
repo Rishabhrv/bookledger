@@ -26,10 +26,10 @@ st.markdown("""
     
     .stat-card {
         background: white;
-        padding: 1.5rem;
+        padding: 0.5rem;
         border-radius: 12px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border-left: 4px solid #667eea;
+        border-left: 3px solid #667eea;
         margin: 0.5rem 0;
     }
     
@@ -54,16 +54,6 @@ st.markdown("""
         margin: 1rem 0;
     }
     
-    .calendar-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem;
-        border-radius: 10px;
-        margin-bottom: 1.5rem;
-        text-align: center;
-        font-weight: bold;
-        font-size: 1.2rem;
-    }
     
     .calendar-table {
         width: 100%;
@@ -127,13 +117,8 @@ st.markdown("""
     }
 
     .status-overtime {
-        background: linear-gradient(135deg, #e8f4fe 0%, #d1e9ff 100%);
-        border: 1px solid #4d94e6 !important;
-    }
-
-    .status-absent {
-        background: linear-gradient(135deg, #fde8e8 0%, #f9d6d6 100%);
-        border: 1px solid #e05c5c !important;
+        background: linear-gradient(135deg, #f0f8ff 0%, #e0f0ff 100%);
+        border: 1px solid #4a86e8 !important;
     }
 
     .status-half-day {
@@ -142,8 +127,8 @@ st.markdown("""
     }
 
     .status-leave {
-        background: linear-gradient(135deg, #e8f6fa 0%, #d6f0f7 100%);
-        border: 1px solid #4db8d1 !important;
+        background: linear-gradient(135deg, #fde8e8 0%, #f9d6d6 100%);
+        border: 1px solid #e05c5c !important;
     }
 
     .status-holiday {
@@ -280,7 +265,7 @@ def init_database(conn):
                     attendance_date DATE NOT NULL,
                     check_in_time TIME,
                     check_out_time TIME,
-                    status ENUM('Present', 'Absent', 'Half Day', 'Leave', 'Holiday') DEFAULT 'Absent',
+                    status ENUM('Present', 'Half Day', 'Leave', 'Holiday') DEFAULT 'Present',
                     notes TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -326,6 +311,23 @@ def get_employee_full_year_attendance(conn, employee_id, year):
     except Exception as e:
         st.error(f"Error fetching year attendance: {e}")
         return []
+    
+# Function to fetch available months and years from attendance table
+def get_available_months_years(conn):
+    try:
+        with conn.session as s:
+            result = s.execute(text("""
+                SELECT DISTINCT YEAR(attendance_date) as year, MONTH(attendance_date) as month
+                FROM attendance
+                ORDER BY year DESC, month DESC
+            """)).fetchall()
+            
+            years = sorted(set(row[0] for row in result), reverse=True)
+            months = sorted(set(row[1] for row in result))
+            return years, months
+    except Exception as e:
+        st.error(f"Error fetching months and years: {e}")
+        return [], []
 
 def mark_attendance(conn, employee_id, attendance_date, check_in, check_out, status, notes):
     """Mark or update attendance for an employee"""
@@ -378,7 +380,6 @@ def get_employee_yearly_attendance(conn, employee_id, year):
                 SELECT 
                     COUNT(*) as total_days,
                     SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present_days,
-                    SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) as absent_days,
                     SUM(CASE WHEN status = 'Half Day' THEN 1 ELSE 0 END) as half_days,
                     SUM(CASE WHEN status = 'Leave' THEN 1 ELSE 0 END) as leave_days,
                     SUM(CASE WHEN status = 'Holiday' THEN 1 ELSE 0 END) as holidays
@@ -454,7 +455,7 @@ def determine_day_status(status, check_in_time, check_out_time):
     if status == 'Holiday':
         return 'status-holiday', '🏖️ Holiday'
     elif status == 'Leave':
-        return 'status-leave', '🏝️ Leave'
+        return 'status-leave', '❌ Leave'
     elif status == 'Half Day':
         return 'status-half-day', '🕐 Half Day'
     elif status == 'Absent':
@@ -493,7 +494,7 @@ def determine_day_status(status, check_in_time, check_out_time):
         elif is_late_checkout:
             return 'status-overtime', '🌙 Overtime'
         else:
-            return 'status-present', '✅ Present'
+            return 'status-present', '✅ On Time'
     
     return '', ''
 
@@ -639,7 +640,7 @@ def create_modern_calendar(year, month, attendance_data):
     # Display month header
     st.markdown(f"""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    color: white; padding: 1rem; border-radius: 10px; margin-bottom: 1rem; 
+                    color: white; padding: 0.5rem; border-radius: 10px; margin-bottom: 0.8rem; 
                     text-align: center; font-weight: bold; font-size: 1.3rem;">
             {calendar.month_name[month]} {year}
         </div>
@@ -650,32 +651,32 @@ def create_modern_calendar(year, month, attendance_data):
         <div style="display: flex; flex-wrap: wrap; gap: 15px; margin: 1rem 0; padding: 1rem; 
                     background: #f8f9fa; border-radius: 10px; justify-content: center;">
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #D4EDDA; border: 2px solid #28a745;"></div>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #D4EDDA; border: 1px solid #28a745;"></div>
                 <span>Present</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFE5D0; border: 2px solid #fd7e14;"></div>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFE5D0; border: 1px solid #fd7e14;"></div>
                 <span>Late</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8E6FF; border: 2px solid #e83e8c;"></div>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8E6FF; border: 1px solid #e83e8c;"></div>
                 <span>Early Out</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFF3CD; border: 2px solid #ffc107;"></div>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFF3CD; border: 1px solid #ffc107;"></div>
                 <span>Half Day</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #D1ECF1; border: 2px solid #17a2b8;"></div>
-                <span>Leave</span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #E2D9F3; border: 2px solid #6f42c1;"></div>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #E2D9F3; border: 1px solid #6f42c1;"></div>
                 <span>Holiday</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8D7DA; border: 2px solid #dc3545;"></div>
-                <span>Absent</span>
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8D7DA; border: 1px solid #dc3545;"></div>
+                <span>Leave</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
+                <div style="width: 20px; height: 20px; border-radius: 4px; background: #e0f0ff; border: 1px solid #4a86e8;"></div>
+                <span>Overtime</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -750,7 +751,6 @@ def create_mini_month_calendar(year, month, attendance_dict):
 
 # Initialize database
 conn = connect_db()
-init_database(conn)
 
 
 # Header
@@ -764,75 +764,591 @@ st.markdown("""
 # Create tabs
 tab1, tab2, tab3, tab4 = st.tabs(["📝 Mark Attendance", "👤 Individual View", "📊 Daily Report", "➕ Add Employee"])
 
-# TAB 1: Mark Attendance
+
+# TAB 1: Mark Employee Attendance
 with tab1:
     st.subheader("Mark Employee Attendance")
     
-    col1, col2 = st.columns([2, 1])
+    # Date selector
+    selected_date = st.date_input("Attendance Date", value=date.today(), key="mark_attendance_date")
     
-    with col1:
-        employees = get_all_employees(conn)
-        if employees:
-            employee_options = {f"{emp[1]} ({emp[2]})": emp[0] for emp in employees}
-            selected_employee = st.selectbox("Select Employee", list(employee_options.keys()))
-            selected_employee_id = employee_options[selected_employee]
-        else:
-            st.warning("No employees found. Please add employees first.")
-            selected_employee_id = None
+    # Fetch employees
+    employees = get_all_employees(conn)
+    if not employees:
+        st.warning("No employees found. Please add employees first.")
+        st.stop()
     
-    with col2:
-        attendance_date = st.date_input("Attendance Date", value=date.today())
+    # Fetch existing attendance for the selected date
+    try:
+        with conn.session as s:
+            result = s.execute(text("""
+                SELECT 
+                    employee_id,
+                    check_in_time,
+                    check_out_time,
+                    status,
+                    COALESCE(notes, '') AS notes
+                FROM attendance 
+                WHERE attendance_date = :att_date
+            """), {"att_date": selected_date})
+            existing_attendance = {row[0]: row[1:] for row in result.fetchall()}
+    except Exception as e:
+        st.error(f"Error fetching attendance: {e}")
+        existing_attendance = {}
     
-    if selected_employee_id:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            check_in_time = st.time_input("Check-In Time", value=datetime.strptime("09:00", "%H:%M").time())
-        
-        with col2:
-            check_out_time = st.time_input("Check-Out Time", value=datetime.strptime("18:00", "%H:%M").time())
-        
-        with col3:
-            status = st.selectbox("Status", ["Present", "Absent", "Half Day", "Leave", "Holiday"])
-        
-        notes = st.text_area("Notes (Optional)", placeholder="Add any additional notes...")
-        
-        if st.button("💾 Save Attendance", use_container_width=True):
-            if mark_attendance(conn, selected_employee_id, attendance_date, 
-                             check_in_time, check_out_time, status, notes):
-                st.success(f"✅ Attendance marked successfully for {attendance_date}")
-                st.rerun()
+    # Form for marking holiday for all employees
+    with st.form(key="holiday_form", border=False):
 
-# TAB 2: Individual Employee View
+        with st.popover("🎉 Mark Holiday for All Employees", width=500):
+            holiday_name = st.text_input("Holiday Name", placeholder="e.g., Christmas Day")
+            holiday_submitted = st.form_submit_button("🎉 Mark Holiday Today", use_container_width=True, type="primary")
+            
+            if holiday_submitted:
+                if not holiday_name.strip():
+                    st.error("Holiday name is required.")
+                    st.toast("Error: Holiday name required", icon="🚨")
+                else:
+                    success_count = 0
+                    for emp in employees:
+                        emp_id, emp_name, dept = emp
+                        # Skip if already marked as Holiday with the same name
+                        if emp_id in existing_attendance and existing_attendance[emp_id][2] == "Holiday" and existing_attendance[emp_id][3] == holiday_name:
+                            continue
+                        if mark_attendance(
+                            conn,
+                            emp_id,
+                            selected_date,
+                            None,  # No check-in
+                            None,  # No check-out
+                            "Holiday",
+                            holiday_name
+                        ):
+                            success_count += 1
+                    if success_count > 0:
+                        st.success(f"✅ Holiday '{holiday_name}' marked for {success_count} employee(s) on {selected_date}")
+                        st.toast(f"Holiday marked for {success_count} employee(s)", icon="🎉")
+                    else:
+                        st.info("No changes to save. Holiday already marked for all employees.")
+
+    # Form for all employees
+    with st.form(key="bulk_attendance_form"):
+        # Dictionary to store form data
+        attendance_data = {}
+        
+        # Custom CSS for compact layout, headers, and highlighted employee names in errors
+        st.markdown("""
+            <style>
+            .employee-row {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                margin-bottom: 8px;
+                padding: 8px;
+                border-bottom: 1px solid #eee;
+            }
+            .employee-name {
+                width: 150px;
+                font-weight: bold;
+            }
+            .status-select {
+                width: 100px;
+            }
+            .time-input {
+                width: 80px;
+            }
+            .notes-input {
+                width: 150px;
+            }
+            .header-row {
+                display: flex;
+                gap: 8px;
+                padding: 8px;
+                font-weight: bold;
+                border-bottom: 2px solid #ccc;
+                margin-bottom: 8px;
+            }
+            .header {
+                text-align: left;
+            }
+            .highlight-name {
+                font-weight: bold;
+                color: #ff4b4b;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        # Determine layout: 1 or 2 columns based on employee count
+        num_employees = len(employees)
+        if num_employees > 10:
+            col_left, col_right = st.columns(2)
+            mid_point = (num_employees + 1) // 2
+            left_employees = employees[:mid_point]
+            right_employees = employees[mid_point:]
+            employee_groups = [(col_left, left_employees), (col_right, right_employees)]
+        else:
+            employee_groups = [(st.container(), employees)]
+        
+        # Headers for each column
+        for col, emp_list in employee_groups:
+            with col:
+                c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+                with c1:
+                    st.write("###### Employee Status")
+                with c2:
+                    st.write("###### Check-In")
+                with c3:
+                    st.write("###### Check-Out")
+                with c4:
+                    st.write("###### Notes")
+        
+        # Create rows for each employee
+        for col, emp_list in employee_groups:
+            with col:
+                for emp in emp_list:
+                    emp_id, emp_name, dept = emp
+                    emp_display = f"{emp_name}"
+                    
+                    # Load existing or default values
+                    existing = existing_attendance.get(emp_id, (None, None, None, ""))
+                    
+                    # Convert check-in/check-out times to string format (e.g., "9:30 AM")
+                    check_in = existing[0]
+                    check_out = existing[1]
+                    if check_in and isinstance(check_in, timedelta):
+                        total_sec = int(check_in.total_seconds())
+                        hours = total_sec // 3600
+                        minutes = (total_sec % 3600) // 60
+                        check_in = datetime.strftime(datetime(1, 1, 1, hours, minutes), "%I:%M %p").lstrip("0")
+                    else:
+                        check_in = ""
+                    
+                    if check_out and isinstance(check_out, timedelta):
+                        total_sec = int(check_out.total_seconds())
+                        hours = total_sec // 3600
+                        minutes = (total_sec % 3600) // 60
+                        check_out = datetime.strftime(datetime(1, 1, 1, hours, minutes), "%I:%M %p").lstrip("0")
+                    else:
+                        check_out = ""
+                    
+                    default_status = existing[2] if existing[2] in ["Present", "Half Day", "Leave", "Holiday"] else "Present"
+                    default_notes = existing[3]
+                    
+                    # Employee row
+                    with st.container():
+                        st.markdown(f'<div class="employee-row">', unsafe_allow_html=True)
+                        
+                        # Employee name (non-editable)
+                        st.markdown(f'<div class="employee-name">{emp_display}</div>', unsafe_allow_html=True)
+                        st.space(1)
+                        
+                        # Input fields
+                        col1, col2, col3, col4 = st.columns([1, 1, 1, 1.2])
+                        with col1:
+                            status = st.selectbox(
+                                "Status",
+                                ["Present", "Half Day", "Leave", "Holiday"],
+                                index=["Present", "Half Day", "Leave", "Holiday"].index(default_status),
+                                key=f"status_{emp_id}_{selected_date}",
+                                label_visibility="collapsed"
+                            )
+                        
+                        with col2:
+                            check_in_input = st.text_input(
+                                "Check-In",
+                                value=check_in,
+                                disabled=status in ["Leave", "Holiday"],
+                                key=f"check_in_{emp_id}_{selected_date}",
+                                placeholder="e.g. 9:30 AM",
+                                label_visibility="collapsed"
+                            )
+                        
+                        with col3:
+                            check_out_input = st.text_input(
+                                "Check-Out",
+                                value=check_out,
+                                disabled=status in ["Leave", "Holiday"],
+                                key=f"check_out_{emp_id}_{selected_date}",
+                                placeholder="e.g. 6:00 PM",
+                                label_visibility="collapsed"
+                            )
+                        
+                        with col4:
+                            notes = st.text_input(
+                                "Notes",
+                                value=default_notes,
+                                key=f"notes_{emp_id}_{selected_date}",
+                                placeholder="Optional notes",
+                                label_visibility="collapsed"
+                            )
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Validate and convert AM/PM time to 24-hour format for saving
+                        check_in_time = None
+                        check_out_time = None
+                        if status not in ["Leave", "Holiday"]:
+                            try:
+                                if check_in_input.strip():
+                                    # Validate time format (e.g., "9:30 AM", "12:00 PM")
+                                    check_in_time = datetime.strptime(check_in_input.strip(), "%I:%M %p").strftime("%H:%M:%S")
+                            except ValueError:
+                                check_in_time = None
+                                if check_in_input.strip():
+                                    st.warning(f"Invalid Check-In time format for {emp_name}. Use format like '9:30 AM'.")
+                            
+                            try:
+                                if check_out_input.strip():
+                                    check_out_time = datetime.strptime(check_out_input.strip(), "%I:%M %p").strftime("%H:%M:%S")
+                            except ValueError:
+                                check_out_time = None
+                                if check_out_input.strip():
+                                    st.warning(f"Invalid Check-Out time format for {emp_name}. Use format like '6:00 PM'.")
+                        
+                        # Store data for submission
+                        attendance_data[emp_id] = {
+                            "check_in": check_in_time,
+                            "check_out": check_out_time,
+                            "status": status,
+                            "notes": notes,
+                            "emp_name": emp_name  # Store name for error reporting
+                        }
+        
+        # Single Save button for all employees, inside the form
+        submitted = st.form_submit_button("💾 Save All Attendance", use_container_width=True, type="primary")
+        if submitted:
+            success_count = 0
+            invalid_employees = []
+            for emp_id, data in attendance_data.items():
+                # Validate Check-In and Check-Out for Present or Half Day
+                if data["status"] in ["Present", "Half Day"]:
+                    if not data["check_in"] or not data["check_out"]:
+                        invalid_employees.append(f'<span class="highlight-name">{data["emp_name"]}</span>')
+                        continue
+                
+                # Save if status is Present/Half Day or has notes, or is Leave/Holiday
+                if data["status"] in ["Present", "Half Day"] or data["notes"].strip() or data["status"] in ["Leave", "Holiday"]:
+                    if mark_attendance(
+                        conn,
+                        emp_id,
+                        selected_date,
+                        data["check_in"],
+                        data["check_out"],
+                        data["status"],
+                        data["notes"]
+                    ):
+                        success_count += 1
+            
+            if invalid_employees:
+                st.markdown(
+                    f"""
+                    <div style="background-color: #ffebee; color: #c62828; padding: 10px; border-radius: 5px; border-left: 4px solid #f44336;">
+                        <strong>Error:</strong> Check-In and Check-Out times are required for {', '.join(invalid_employees)} with status 'Present' or 'Half Day'.
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                st.toast("Error: Check-In and Check-Out times required", icon="🚨")
+            if success_count > 0:
+                st.space(1)
+                st.success(f"✅ {success_count} attendance record(s) saved for {selected_date}")
+            elif not invalid_employees:
+                st.info("No changes to save.")
+
+
+# --- HELPER FUNCTION TO RENDER YEARLY VIEW ---
+def display_yearly_calendars(year, attendance_data):
+    """
+    Renders 12 monthly calendars in a 2x6 grid for the yearly view.
+    Includes indicators for late arrival, early exit, and overtime.
+    """
+    
+    # CSS for the calendar
+    calendar_css = """
+    <style>
+    .year-view-container {
+        padding: 10px;
+    }
+    .calendar-month {
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        padding: 15px;
+        margin-bottom: 20px;
+        border: 1px solid #e0e0e0;
+    }
+    .calendar-month h5 {
+        text-align: center;
+        color: #010e1a;
+        font-weight: 600;
+        margin-bottom: 15px;
+    }
+    .calendar-grid {
+        display: grid;
+        grid-template-columns: repeat(7, 1fr);
+        gap: 5px;
+    }
+    
+    /* --- IMPROVED: Subtle Colored Header UI --- */
+    .calendar-header {
+        text-align: center;
+        font-weight: 600;
+        font-size: 0.8em;
+        color: #f9fafb;
+        padding: 8px 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+        border-radius: 6px;
+        margin-bottom: 8px;
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+
+    
+    .calendar-day {
+        text-align: center;
+        font-size: 0.9em;
+        height: 50px;
+        padding: 4px 2px;
+        border-radius: 4px;
+        position: relative;
+        background-color: #f4f4f4;
+        color: #aaa;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    
+    .day-number {
+        font-weight: 600;
+        font-size: 1em;
+        line-height: 1;
+    }
+    .calendar-day.valid-day {
+        background-color: #e9ecef;
+        color: #333;
+        cursor: help;
+    }
+    .calendar-day.Present {
+        background-color: #d4edda;
+        color: #155724;
+        font-weight: bold;
+    }
+    .calendar-day.Leave {
+        background-color: #f8d7da;
+        color: #721c24;
+    }
+    .calendar-day.Half {
+        background: linear-gradient(135deg, #d4edda 50%, #fff3cd 50%);
+        color: #333;
+        font-weight: bold;
+    }
+    .calendar-day.Holiday {
+        background-color: #d1ecf1;
+        color: #0c5460;
+    }
+    
+    /* --- IMPROVED: Text-based Exception Indicators --- */
+    .exception-indicators {
+        display: flex;
+        gap: 2px;
+        font-size: 0.65em;
+        font-weight: 600;
+        margin-top: 2px;
+        line-height: 1;
+    }
+    
+    .exception-tag {
+        padding: 1px 3px;
+        border-radius: 2px;
+        color: white;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+    }
+    
+    .tag-late {
+        background-color: #ed5721;
+    }
+    
+    .tag-early {
+        background-color: #5bc0de;
+    }
+    
+    .tag-overtime {
+        background-color: #28a745;
+    }
+
+    /* Tooltip styling */
+    .calendar-day[title]:hover::after {
+        content: attr(title);
+        position: absolute;
+        bottom: 100%;
+        left: 50%;
+        transform: translateX(-50%);
+        white-space: pre-wrap;
+        background-color: #333;
+        color: white;
+        padding: 8px;
+        border-radius: 5px;
+        z-index: 100;
+        font-size: 0.85em;
+        line-height: 1.4;
+        min-width: 180px;
+        text-align: left;
+    }
+    </style>
+    """
+    st.markdown(calendar_css, unsafe_allow_html=True)
+    
+    # Get day abbreviations
+    week_headers = [day for day in calendar.day_abbr]
+
+    # Create a 2-column layout (2x6 grid)
+    col1, col2 = st.columns(2)
+    
+    for month_num in range(1, 13):
+        month_name = calendar.month_name[month_num]
+        month_calendar = calendar.monthcalendar(year, month_num)
+        
+        # Start HTML for the month
+        html = f'<div class="calendar-month"><h5>{month_name} {year}</h5>'
+        html += '<div class="calendar-grid">'
+        
+        # Add week headers
+        for header in week_headers:
+            html += f'<div class="calendar-header">{header}</div>'
+            
+        # Add days
+        for week in month_calendar:
+            for day in week:
+                if day == 0:
+                    html += '<div class="calendar-day"></div>' # Empty cell
+                else:
+                    date_key = f"{year}-{month_num:02d}-{day:02d}"
+                    day_data = attendance_data.get(date_key)
+                    
+                    status_class = "valid-day" # Default for days with no record
+                    tooltip = f"{date_key}\nStatus: N/A" # Default tooltip
+                    indicators_html = ""
+                    
+                    if day_data:
+                        status = day_data['status']
+                        if status == "Half Day":
+                            status_class = "Half"
+                        else:
+                            status_class = status # "Present", "Leave", "Holiday"
+                        
+                        # --- IMPROVED: Build text-based indicators ---
+                        indicators = []
+                        if day_data.get('is_late', False):
+                            indicators.append('<span class="exception-tag tag-late">Late</span>')
+                        if day_data.get('is_early', False):
+                            indicators.append('<span class="exception-tag tag-early">Eearly Exit</span>')
+                        if day_data.get('is_overtime', False):
+                            indicators.append('<span class="exception-tag tag-overtime">Overtime</span>')
+                        
+                        if indicators:
+                            indicators_html = f'<div class="exception-indicators">{"".join(indicators)}</div>'
+                        
+                        # Build tooltip with exceptions
+                        tooltip = f"Date: {date_key}\nStatus: {status}"
+                        if status in ["Present", "Half Day"]:
+                            check_in = day_data['check_in'].strftime('%I:%M %p') if day_data['check_in'] else "N/A"
+                            check_out = day_data['check_out'].strftime('%I:%M %p') if day_data['check_out'] else "N/A"
+                            tooltip += f"\nCheck-In: {check_in}\nCheck-Out: {check_out}"
+                            
+                            # Add exception notes to tooltip
+                            if day_data.get('is_late', False):
+                                tooltip += "\n🔴 Late Arrival"
+                            if day_data.get('is_early', False):
+                                tooltip += "\n🔵 Early Exit"
+                            if day_data.get('is_overtime', False):
+                                tooltip += "\n🟢 Overtime"
+                                
+                        if day_data['notes']:
+                            tooltip += f"\nNotes: {day_data['notes']}"
+                            
+                    html += f'<div class="calendar-day {status_class}" title="{tooltip}"><span class="day-number">{day}</span>{indicators_html}</div>'
+                    
+        html += '</div></div>' # Close grid and month
+        
+        # Add to the correct column
+        if month_num <= 6:
+            with col1:
+                st.markdown(html, unsafe_allow_html=True)
+        else:
+            with col2:
+                st.markdown(html, unsafe_allow_html=True)
+
+
+# --- TAB 2: Individual Employee View ---
 with tab2:
     st.subheader("Individual Employee Attendance")
+
+    available_years, available_months = get_available_months_years(conn) 
+
+    view_type = st.radio("View Type", ["Monthly", "Yearly"], horizontal=True, label_visibility="collapsed")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns([1,1,1])
     
     with col1:
         employees = get_all_employees(conn)
         if employees:
             employee_options = {f"{emp[1]} ({emp[2]})": emp[0] for emp in employees}
-            selected_emp = st.selectbox("Select Employee ", list(employee_options.keys()), key="ind_emp")
+            selected_emp = st.selectbox("Select Employee", list(employee_options.keys()), key="ind_emp")
             selected_emp_id = employee_options[selected_emp]
         else:
             st.warning("No employees found.")
             selected_emp_id = None
+            st.stop() # Stop if no employees
     
     with col2:
-        view_type = st.radio("View Type", ["Monthly", "Yearly"], horizontal=True)
-    
-    with col3:
-        current_year = datetime.now().year
-        selected_year = st.selectbox("Year", range(current_year, current_year - 5, -1))
-    
-    if selected_emp_id:
         if view_type == "Monthly":
-            selected_month = st.selectbox("Month", range(1, 13), 
-                                        format_func=lambda x: calendar.month_name[x],
-                                        index=datetime.now().month - 1)
-            
-            # Get monthly attendance
+            if available_years:
+                selected_year = st.selectbox(
+                    "Year",
+                    available_years,
+                    index=0
+                )
+            else:
+                st.warning("No attendance records available.")
+                selected_month, selected_year = None, None
+        else: # Yearly
+            selected_year = st.selectbox(
+                "Year",
+                available_years if available_years else [datetime.now().year],
+                index=0
+            )
+            selected_month = None # Not used in yearly view
+
+    with col3:
+        if view_type == "Monthly":
+            if selected_year and available_months:
+                selected_month = st.selectbox(
+                    "Month",
+                    available_months,
+                    format_func=lambda x: calendar.month_name[x],
+                    index=0
+                )
+            else:
+                selected_month = None
+        else: # Yearly
+            # Disable month selector in yearly view
+            st.selectbox(
+                "Month",
+                [calendar.month_name[i] for i in range(1, 13)],
+                index=0,
+                disabled=True
+            )
+
+    st.markdown("---")
+
+    if selected_emp_id:
+        if view_type == "Monthly" and selected_month and selected_year:
+            # --- MONTHLY VIEW ---
             attendance_data = get_employee_monthly_attendance(conn, selected_emp_id, selected_year, selected_month)
             
             if attendance_data:
@@ -844,8 +1360,8 @@ with tab2:
                 col1, col2, col3, col4 = st.columns(4)
                 
                 present_days = len([row for row in attendance_data if row[3] == 'Present'])
-                absent_days = len([row for row in attendance_data if row[3] == 'Absent'])
                 half_days = len([row for row in attendance_data if row[3] == 'Half Day'])
+                leave_days = len([row for row in attendance_data if row[3] == 'Leave'])
                 total_days = len(attendance_data)
                 
                 with col1:
@@ -859,8 +1375,8 @@ with tab2:
                 with col2:
                     st.markdown(f"""
                     <div class="stat-card">
-                        <div class="stat-value" style="color: #dc3545;">{absent_days}</div>
-                        <div class="stat-label">Absent Days</div>
+                        <div class="stat-value" style="color: #dc3545;">{leave_days}</div>
+                        <div class="stat-label">Leave Days</div>
                     </div>
                     """, unsafe_allow_html=True)
                 
@@ -883,122 +1399,40 @@ with tab2:
                 
                 st.markdown("---")
                 
-                # Modern Calendar view
-                st.markdown("### 📅 Calendar View")
                 create_modern_calendar(selected_year, selected_month, attendance_data)
                 
                 st.markdown("---")
                 
-                # Display table
-                st.markdown("### 📋 Detailed Records")
-                st.dataframe(df, use_container_width=True, hide_index=True)
-                
             else:
                 st.info(f"No attendance records found for {calendar.month_name[selected_month]} {selected_year}")
         
-        else:  # Yearly view
-            yearly_stats = get_employee_yearly_attendance(conn, selected_emp_id, selected_year)
+        elif view_type == "Yearly" and selected_year:
             
-            if yearly_stats and yearly_stats[0] > 0:
-                total, present, absent, half, leave, holiday = yearly_stats
-                
-                # Display statistics
-                col1, col2, col3, col4, col5, col6 = st.columns(6)
-                
-                with col1:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{total}</div>
-                        <div class="stat-label">Total Days</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col2:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value">{present}</div>
-                        <div class="stat-label">Present</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col3:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value" style="color: #dc3545;">{absent}</div>
-                        <div class="stat-label">Absent</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col4:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value" style="color: #ffc107;">{half}</div>
-                        <div class="stat-label">Half Days</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col5:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value" style="color: #17a2b8;">{leave}</div>
-                        <div class="stat-label">Leaves</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with col6:
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value" style="color: #6f42c1;">{holiday}</div>
-                        <div class="stat-label">Holidays</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                st.markdown("---")
-                
-                # Pie chart
-                col_chart, col_space = st.columns([2, 1])
-                with col_chart:
-                    fig = go.Figure(data=[go.Pie(
-                        labels=['Present', 'Absent', 'Half Day', 'Leave', 'Holiday'],
-                        values=[present, absent, half, leave, holiday],
-                        hole=.4,
-                        marker_colors=['#28a745', '#dc3545', '#ffc107', '#17a2b8', '#6f42c1']
-                    )])
-                    fig.update_layout(
-                        title=f"Attendance Distribution - {selected_year}",
-                        height=400
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown("---")
-                
-                # Get full year data
-                st.markdown("### 📅 Year at a Glance")
-                year_data = get_employee_full_year_attendance(conn, selected_emp_id, selected_year)
-                
-                # Create attendance dictionary for all months
-                attendance_dict = {}
+            # --- YEARLY VIEW LOGIC ---
+            
+            # 1. Define Standard Times
+            SCHEDULED_IN = dt_time(9, 30)
+            SCHEDULED_OUT = dt_time(18, 0)
+
+            # 2. Fetch full year data ONCE
+            year_data = get_employee_full_year_attendance(conn, selected_emp_id, selected_year)
+            
+            # 3. Initialize counters and attendance dictionary
+            total = 0
+            present = 0
+            half = 0
+            leave = 0
+            holiday = 0
+            late_arrivals = 0
+            early_exits = 0
+            overtime_days = 0
+            attendance_dict = {}
+
+            if year_data:
+                # 4. Process all data in one loop
                 for row in year_data:
+                    total += 1
                     att_date, check_in, check_out, status, notes = row
-                    date_key = att_date.strftime("%Y-%m-%d")
-                    attendance_dict[date_key] = {
-                        'check_in': check_in,
-                        'check_out': check_out,
-                        'status': status,
-                        'notes': notes
-                    }
-                
-                # Display all 12 months in a grid
-                st.markdown("### 📅 Year at a Glance - All Months")
-                
-                # Inject CSS for mini calendars
-                inject_custom_css()
-                
-                # Create attendance dictionary for all months
-                attendance_dict = {}
-                for row in year_data:
-                    att_date, check_in, check_out, status, notes = row
-                    date_key = att_date.strftime("%Y-%m-%d")
                     
                     # Convert timedelta to time if needed
                     if check_in and isinstance(check_in, timedelta):
@@ -1013,27 +1447,124 @@ with tab2:
                         minutes = (total_seconds % 3600) // 60
                         check_out = dt_time(hours, minutes)
                     
+                    # --- Count primary stats ---
+                    if status == 'Present': present += 1
+                    elif status == 'Half Day': half += 1
+                    elif status == 'Leave': leave += 1
+                    elif status == 'Holiday': holiday += 1
+                    
+                    # --- Calculate and count exceptions ---
+                    is_late = False
+                    is_early = False
+                    is_overtime = False
+                    
+                    if status in ["Present", "Half Day"]:
+                        if check_in and check_in > SCHEDULED_IN:
+                            is_late = True
+                            late_arrivals += 1
+                        if check_out and check_out < SCHEDULED_OUT:
+                            is_early = True
+                            early_exits += 1
+                        if check_out and check_out > SCHEDULED_OUT:
+                            is_overtime = True
+                            overtime_days += 1
+
+                    # --- Build the dictionary for the calendar ---
+                    date_key = att_date.strftime("%Y-%m-%d")
                     attendance_dict[date_key] = {
                         'check_in': check_in,
                         'check_out': check_out,
                         'status': status,
-                        'notes': notes
+                        'notes': notes,
+                        'is_late': is_late,
+                        'is_early': is_early,
+                        'is_overtime': is_overtime
                     }
+
+            # 5. Render components if data exists
+            if total > 0:
+                # --- Updated 7-column stat cards ---
+                col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
                 
-                # Display months in a 3x4 grid
-                for row_idx in range(4):
-                    cols = st.columns(3)
-                    for col_idx in range(3):
-                        month_num = row_idx * 3 + col_idx + 1
-                        if month_num <= 12:
-                            with cols[col_idx]:
-                                with st.container():
-                                    st.markdown("""
-                                        <div style="background: white; border-radius: 12px; padding: 1rem; 
-                                                    box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 1rem;">
-                                    """, unsafe_allow_html=True)
-                                    create_mini_month_calendar(selected_year, month_num, attendance_dict)
-                                    st.markdown("</div>", unsafe_allow_html=True)
+                with col1:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{present}</div>
+                        <div class="stat-label">Present</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #dc3545;">{leave}</div>
+                        <div class="stat-label">Leaves</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col3:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #ffc107;">{half}</div>
+                        <div class="stat-label">Half Days</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col4:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #17a2b8;">{holiday}</div>
+                        <div class="stat-label">Holidays</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col5:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #ed5721;">{late_arrivals}</div>
+                        <div class="stat-label">Late</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col6:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #5bc0de;">{early_exits}</div>
+                        <div class="stat-label">Early Exits</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col7:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #28a745;">{overtime_days}</div>
+                        <div class="stat-label">Overtime</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("---")
+                
+                # --- IMPROVED: Pie chart with exceptions included ---
+                col_chart, col_space = st.columns([2, 1])
+                with col_chart:
+                    fig = go.Figure(data=[go.Pie(
+                        labels=['Present', 'Half Day', 'Leave', 'Holiday', 'Late Arrival', 'Early Exit', 'Overtime'],
+                        values=[present, half, leave, holiday, late_arrivals, early_exits, overtime_days],
+                        hole=.4,
+                        marker_colors=['#28a745', '#ffc107', '#dc3545', '#17a2b8', '#ed5721', '#5bc0de', '#6f42c1']
+                    )])
+                    fig.update_layout(
+                        title=f"Attendance Overview - {selected_year}",
+                        height=400
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                st.markdown("---")
+                
+                st.markdown(f"### 📅 {selected_year} at a Glance")
+                
+                # Call the calendar function with the dictionary we built
+                display_yearly_calendars(selected_year, attendance_dict)
                 
             else:
                 st.info(f"No attendance records found for {selected_year}")
@@ -1053,7 +1584,7 @@ with tab3:
         # Statistics
         total_employees = len(daily_data)
         present_count = len([row for row in daily_data if row[4] == 'Present'])
-        absent_count = len([row for row in daily_data if row[4] == 'Absent'])
+        leave_count = len([row for row in daily_data if row[4] == 'Leave'])
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -1076,8 +1607,8 @@ with tab3:
         with col3:
             st.markdown(f"""
             <div class="stat-card">
-                <div class="stat-value" style="color: #dc3545;">{absent_count}</div>
-                <div class="stat-label">Absent</div>
+                <div class="stat-value" style="color: #dc3545;">{leave_count}</div>
+                <div class="stat-label">Leave</div>
             </div>
             """, unsafe_allow_html=True)
         
@@ -1094,8 +1625,8 @@ with tab3:
         
         # Filter by status
         filter_status = st.multiselect("Filter by Status", 
-                                      ["Present", "Absent", "Half Day", "Leave", "Holiday"],
-                                      default=["Present", "Absent", "Half Day", "Leave", "Holiday"])
+                                      ["Present", "Half Day", "Leave", "Holiday"],
+                                      default=["Present", "Half Day", "Leave", "Holiday"])
         
         df_filtered = df_daily[df_daily['Status'].isin(filter_status)]
         
@@ -1103,13 +1634,12 @@ with tab3:
         st.dataframe(
             df_filtered.style.applymap(
                 lambda x: 'background-color: #d4edda' if x == 'Present' 
-                else ('background-color: #f8d7da' if x == 'Absent' 
                 else ('background-color: #fff3cd' if x == 'Half Day'
                 else ('background-color: #d1ecf1' if x == 'Leave'
-                else ('background-color: #e2d9f3' if x == 'Holiday' else '')))),
+                else ('background-color: #e2d9f3' if x == 'Holiday' else ''))),
                 subset=['Status']
             ),
-            use_container_width=True,
+            width='stretch',
             hide_index=True
         )
         
@@ -1133,7 +1663,7 @@ with tab4:
         emp_email = st.text_input("Employee Email*")
         emp_dept = st.text_input("Department")
         
-        submitted = st.form_submit_button("➕ Add Employee", use_container_width=True)
+        submitted = st.form_submit_button("➕ Add Employee", width='stretch')
         
         if submitted:
             if emp_name and emp_email:
@@ -1157,7 +1687,7 @@ with tab4:
     employees = get_all_employees(conn)
     if employees:
         df_employees = pd.DataFrame(employees, columns=['ID', 'Name', 'Department'])
-        st.dataframe(df_employees, use_container_width=True, hide_index=True)
+        st.dataframe(df_employees, width='stretch', hide_index=True)
     else:
         st.info("No employees in the system yet.")
 
