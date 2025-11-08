@@ -11,3 +11,4 @@ mysqlclient
 XlsxWriter
 reportlab
 ollama
+openpyxl
