@@ -5,6 +5,8 @@ import calendar
 from sqlalchemy import text
 import plotly.express as px
 import plotly.graph_objects as go
+from collections import defaultdict
+import re
 
 # --- Attendance Logic Constants ---
 SCHEDULED_IN = dt_time(9, 30)
@@ -16,6 +18,19 @@ OVERTIME_THRESHOLD = (datetime.combine(date.min, SCHEDULED_OUT) + timedelta(minu
 # Page Configuration
 st.set_page_config(page_title="Attendance Management", page_icon="📅", layout="wide")
 
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 10px !important;  /* Small padding for breathing room */
+        }
+            """, unsafe_allow_html=True)
+
 
 # Custom CSS for better UI
 st.markdown("""
@@ -24,27 +39,6 @@ st.markdown("""
         padding-left: 2rem;
         padding-right: 2rem;
         max-width: 100%;
-    }
-    
-    .stat-card {
-        background: white;
-        padding: 0.5rem;
-        border-radius: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border-left: 3px solid #667eea;
-        margin: 0.5rem 0;
-    }
-    
-    .stat-value {
-        font-size: 2rem;
-        font-weight: bold;
-        color: #667eea;
-    }
-    
-    .stat-label {
-        color: #666;
-        font-size: 0.9rem;
-        margin-top: 0.5rem;
     }
     
     /* Modern Calendar styling */
@@ -178,21 +172,6 @@ st.markdown("""
         border: 2px solid;
     }
     
-    /* Form styling */
-    .stButton>button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border: none;
-        padding: 0.5rem 2rem;
-        border-radius: 8px;
-        font-weight: bold;
-        transition: all 0.3s;
-    }
-    
-    .stButton>button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-    }
     
     /* Multi-month container */
     .year-calendar-grid {
@@ -257,6 +236,7 @@ def init_database(conn):
             s.execute(text("""
                 CREATE TABLE IF NOT EXISTS employees (
                     employee_id INT PRIMARY KEY AUTO_INCREMENT,
+                    employee_code VARCHAR(50) UNIQUE,
                     employee_name VARCHAR(100) NOT NULL,
                     employee_email VARCHAR(100) UNIQUE,
                     designation VARCHAR(50),
@@ -271,6 +251,12 @@ def init_database(conn):
                 s.commit()
             except Exception:
                 s.rollback()  # The column probably already exists.
+            
+            try:
+                s.execute(text("ALTER TABLE employees ADD COLUMN employee_code VARCHAR(50) UNIQUE"))
+                s.commit()
+            except Exception:
+                s.rollback() # The column probably already exists.
             
             # Create attendance table
             s.execute(text("""
@@ -316,7 +302,7 @@ def get_all_employees_with_status(conn):
     """Fetch all employees with their employment status"""
     try:
         with conn.session as s:
-            result = s.execute(text("SELECT employee_id, employee_name, designation, employment_status FROM employees ORDER BY employee_name"))
+            result = s.execute(text("SELECT employee_id, employee_code, employee_name, designation, employment_status FROM employees ORDER BY employment_status = 'Active' DESC, employee_name"))
             return result.fetchall()
     except Exception as e:
         st.error(f"Error fetching employees: {e}")
@@ -336,6 +322,30 @@ def update_employee_status(conn, employee_id, status):
     except Exception as e:
         st.error(f"Error updating employee status: {e}")
         return False
+
+def update_employee(conn, emp_id, details):
+    """Update employee details."""
+    try:
+        with conn.session as s:
+            s.execute(text("""
+                UPDATE employees 
+                SET 
+                    employee_name = :name,
+                    designation = :dept,
+                    employment_status = :status
+                WHERE employee_id = :emp_id
+            """), {
+                "name": details['employee_name'],
+                "dept": details['designation'],
+                "status": details['employment_status'],
+                "emp_id": emp_id
+            })
+            s.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error updating employee {details['employee_name']}: {e}")
+        return False
+    
     
 def get_employee_full_year_attendance(conn, employee_id, year):
     """Get full year attendance data for all months"""
@@ -445,6 +455,122 @@ def get_employee_monthly_attendance(conn, employee_id, year, month):
         st.error(f"Error fetching monthly attendance: {e}")
         return [] 
 
+
+# Add this new function to calculate working days
+def get_working_days(conn, year, month):
+    """Calculate total working days in a month excluding Sundays and holidays"""
+    try:
+        # Get first and last day of the month
+        first_day = date(year, month, 1)
+        last_day = date(year, month, calendar.monthrange(year, month)[1])
+        
+        # Get holidays from holidays table
+        with conn.session as s:
+            holidays = s.execute(text("""
+                SELECT holiday_date
+                FROM holidays
+                WHERE YEAR(holiday_date) = :year
+                AND MONTH(holiday_date) = :month
+            """), {"year": year, "month": month}).fetchall()
+        
+        holiday_dates = {h[0] for h in holidays}
+        
+        # Count working days (excluding Sundays and holidays)
+        working_days = 0
+        current_day = first_day
+        while current_day <= last_day:
+            # Check if day is not Sunday (weekday() == 6) and not a holiday
+            if current_day.weekday() != 6 and current_day not in holiday_dates:
+                working_days += 1
+            current_day += timedelta(days=1)
+        
+        return working_days
+    except Exception as e:
+        st.error(f"Error calculating working days: {e}")
+        return 0
+    
+# Existing working days functions
+def get_year_working_days(conn, year):
+    """Calculate total working days in a year excluding Sundays and holidays"""
+    try:
+        first_day = date(year, 1, 1)
+        last_day = date(year, 12, 31)
+        with conn.session as s:
+            holidays = s.execute(text("""
+                SELECT holiday_date
+                FROM holidays
+                WHERE YEAR(holiday_date) = :year
+            """), {"year": year}).fetchall()
+        holiday_dates = {h[0] for h in holidays}
+        working_days = 0
+        current_day = first_day
+        while current_day <= last_day:
+            if current_day.weekday() != 6 and current_day not in holiday_dates:
+                working_days += 1
+            current_day += timedelta(days=1)
+        return working_days
+    except Exception as e:
+        st.error(f"Error calculating working days: {e}")
+        return 0
+
+def get_month_working_days(conn, year, month):
+    """Calculate total working days in a month excluding Sundays and holidays"""
+    try:
+        first_day = date(year, month, 1)
+        last_day = date(year, month, calendar.monthrange(year, month)[1])
+        with conn.session as s:
+            holidays = s.execute(text("""
+                SELECT holiday_date
+                FROM holidays
+                WHERE YEAR(holiday_date) = :year AND MONTH(holiday_date) = :month
+            """), {"year": year, "month": month}).fetchall()
+        holiday_dates = {h[0] for h in holidays}
+        working_days = 0
+        current_day = first_day
+        while current_day <= last_day:
+            if current_day.weekday() != 6 and current_day not in holiday_dates:
+                working_days += 1
+            current_day += timedelta(days=1)
+        return working_days
+    except Exception as e:
+        st.error(f"Error calculating working days: {e}")
+        return 0
+
+# Updated function for Team Insights
+def get_all_employees_attendance(conn, year, month=None):
+    """Fetch attendance data for all active employees"""
+    try:
+        with conn.session as s:
+            if month:
+                result = s.execute(text("""
+                    SELECT e.employee_id, e.employee_name, e.designation,
+                           a.attendance_date, a.check_in_time, a.check_out_time, a.status
+                    FROM employees e
+                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
+                    WHERE e.employment_status = 'Active'
+                    AND (a.attendance_date IS NULL OR 
+                         (YEAR(a.attendance_date) = :year AND MONTH(a.attendance_date) = :month))
+                    ORDER BY e.employee_id, a.attendance_date
+                """), {"year": year, "month": month})
+            else:
+                result = s.execute(text("""
+                    SELECT e.employee_id, e.employee_name, e.designation,
+                           a.attendance_date, a.check_in_time, a.check_out_time, a.status
+                    FROM employees e
+                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
+                    WHERE e.employment_status = 'Active'
+                    AND (a.attendance_date IS NULL OR YEAR(a.attendance_date) = :year)
+                    ORDER BY e.employee_id, a.attendance_date
+                """), {"year": year})
+            rows = result.fetchall()
+            # Debug: Log the first row's structure
+            if rows:
+                st.write("Debug: First row structure:", list(rows[0]))
+            return rows
+    except Exception as e:
+        st.error(f"Error fetching team attendance: {e}")
+        return []
+
 def get_employee_yearly_attendance(conn, employee_id, year):
     """Get yearly attendance statistics"""
     try:
@@ -500,6 +626,7 @@ def get_available_years_months(conn, employee_id):
     except Exception as e:
         st.error(f"Error fetching year attendance: {e}")
         return []
+
 
 def get_daily_attendance(conn, attendance_date):
     """Get attendance for all employees on a specific date, including exception flags"""
@@ -597,141 +724,387 @@ def determine_day_status(status, check_in_time, check_out_time):
     return '', ''
 
 def inject_custom_css():
-    """Inject custom CSS for calendar styling"""
+    """Inject custom CSS for *calendar styling only*"""
     st.markdown("""
         <style>
             .day-card {
                 padding: 10px;
-                border-radius: 8px;
-                border: 1px solid #ddd;
-                height: 140px;
+                border-radius: 10px;
+                border: 2px solid #e0e0e0;
+                height: 165px;
                 display: flex;
                 flex-direction: column;
-                justify-content: space-between;
                 margin-bottom: 10px;
+                transition: all 0.3s ease;
+                background: white;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                overflow: hidden;
+            }
+            .day-card-container {
+                max-width: 95%;
+                margin: 0 auto;
             }
             .day-card:hover {
-                box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-                transform: translateY(-2px);
-                transition: all 0.3s;
+                box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+                transform: translateY(-3px);
             }
-            .day-card-present { background-color: #D4EDDA; border-color: #28a745; }
-            .day-card-late { background-color: #FFE5D0; border-color: #fd7e14; }
-            .day-card-early-out { background-color: #F8E6FF; border-color: #e83e8c; }
-            .day-card-half-day { background-color: #FFF3CD; border-color: #ffc107; }
-            .day-card-leave { background-color: #D1ECF1; border-color: #17a2b8; }
-            .day-card-holiday { background-color: #E2D9F3; border-color: #6f42c1; }
-            .day-card-absent { background-color: #F8D7DA; border-color: #dc3545; }
-            .day-card-empty { background-color: #FAFAFA; border-style: dashed; }
-            .day-number { font-weight: bold; font-size: 1.2em; text-align: left; }
-            .day-name { font-size: 0.9em; color: #666; }
-            .day-summary { font-size: 0.85em; margin-top: 5px; line-height: 1.3; overflow-y: auto; max-height: 70px; }
-            .header-card {
-                padding-bottom: 0.75rem;
+            .day-card-present { 
+                background: linear-gradient(135deg, #D4EDDA 0%, #C3E6CB 100%); 
+                border-color: #28a745; 
+            }
+            .day-card-late { 
+                background: linear-gradient(135deg, #FFE5D0 0%, #FFDCC5 100%); 
+                border-color: #fd7e14; 
+            }
+            .day-card-early-out { 
+                background: linear-gradient(135deg, #F8E6FF 0%, #F0D9FF 100%); 
+                border-color: #e83e8c; 
+            }
+            .day-card-half-day { 
+                background: linear-gradient(135deg, #FFF3CD 0%, #FFEAA7 100%); 
+                border-color: #ffc107; 
+            }
+            .day-card-leave { 
+                background: linear-gradient(135deg, #F8D7DA 0%, #F5C6CB 100%); 
+                border-color: #dc3545; 
+            }
+            .day-card-holiday { 
+                background: linear-gradient(135deg, #E2D9F3 0%, #D6C9EB 100%); 
+                border-color: #6f42c1; 
+            }
+            .day-card-absent { 
+                background: linear-gradient(135deg, #F8D7DA 0%, #F5C6CB 100%); 
+                border-color: #dc3545; 
+            }
+            .day-card-empty { 
+                background: linear-gradient(135deg, #FAFAFA 0%, #F5F5F5 100%); 
+                border-style: dashed;
+                border-color: #d0d0d0;
+            }
+
+            .day-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding-bottom: 6px;
+                margin-bottom: 8px;
+                border-bottom: 1.5px solid rgba(0,0,0,0.08);
+                flex-shrink: 0;
+            }
+            .day-number { 
+                font-weight: 700; 
+                font-size: 1.5em; 
+                line-height: 1;
+                color: #2c3e50;
+            }
+            .day-name { 
+                font-size: 0.75em; 
+                color: #7f8c8d; 
                 font-weight: 600;
-                font-size: 0.75rem;
-                text-align: center;
-                color: #313438;
-                margin-bottom: 1rem;
                 text-transform: uppercase;
-                letter-spacing: 0.05em;
-                border-bottom: 2px solid #d0d2d6;
-                background-color: transparent;
+                letter-spacing: 0.4px;
+            }
+            
+            .day-summary { 
+                font-size: 0.78em; 
+                line-height: 1.45;
+                flex-grow: 1;
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                overflow: hidden;
+            }
+            
+            .time-container {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+                margin: 5px 0;
+                padding: 6px;
+                background: rgba(255,255,255,0.5);
+                border-radius: 6px;
+            }
+            .time-block {
+                text-align: center;
+                padding: 3px;
+            }
+            .time-label {
+                font-size: 0.62em;
+                font-weight: 700;
+                color: #7f8c8d;
+                display: block;
+                text-transform: uppercase;
+                letter-spacing: 0.3px;
+                margin-bottom: 2px;
+            }
+            .time-value {
+                font-size: 1.2em;
+                font-weight: 700;
+                color: #2c3e50;
+                display: block;
+            }
+            .exception-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 4px;
+                margin-top: 4px;
+            }
+            .day-summary .exception {
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+                padding: 3px 6px;
+                border-radius: 5px;
+                font-size: 0.9em;
+                font-weight: 600;
+                color: white;
+                white-space: nowrap;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }
+            .exception-early-in-bg { 
+                background: linear-gradient(135deg, #3498db 0%, #2980b9 100%); 
+            }
+            .exception-late-in-bg { 
+                background: linear-gradient(135deg, #e67e22 0%, #d35400 100%); 
+            }
+            .exception-early-out-bg { 
+                background: linear-gradient(135deg, #c669d1 0%, #a855b8 100%); 
+            }
+            .exception-overtime-bg { 
+                background: linear-gradient(135deg, #27ae60 0%, #229954 100%); 
+            }
+
+            .header-card {
+                padding: 8px;
+                font-weight: 700;
+                font-size: 0.7rem;
+                text-align: center;
+                color: #2c3e50;
+                margin-bottom: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+                border-bottom: 3px solid #3498db;
+                background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+                border-radius: 8px 8px 0 0;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                min-height: 40px;
+                height: 38px;
             }
-
-            /* Custom Daily Report Table */
-            .daily-report-table {
-                width: 100%;
-                border-collapse: separate; /* For rounded corners on cells */
-                border-spacing: 0 8px; /* Space between rows */
-                margin-top: 1.5rem;
-            }
-
-            .daily-report-table th {
-                background-color: #f0f2f6; /* Light grey header background */
-                padding: 12px 15px;
-                text-align: left;
-                font-weight: 600;
-                color: #495057;
-                border-bottom: 2px solid #e9ecef;
-                position: sticky;
-                top: 0;
-                z-index: 1;
-            }
-
-            .daily-report-table th:first-child {
-                border-top-left-radius: 8px;
-            }
-
-            .daily-report-table th:last-child {
-                border-top-right-radius: 8px;
-            }
-
-            .daily-report-table td {
-                background-color: #ffffff; /* White cell background */
-                padding: 12px 15px;
-                border-bottom: 1px solid #e9ecef;
-                vertical-align: middle;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Subtle shadow for rows */
-            }
-
-            .daily-report-table tr:last-child td {
-                border-bottom: none;
-            }
-
-            .daily-report-table tbody tr {
-                transition: all 0.2s ease-in-out;
-            }
-
-            .daily-report-table tbody tr:hover {
-                background-color: #f8f9fa; /* Light hover effect */
-                transform: translateY(-2px);
-                box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            }
-
-            /* Status Badges - similar to calendar, but for table cells */
-            .status-badge {
-                display: inline-block;
-                padding: 5px 10px;
-                border-radius: 20px;
-                font-size: 0.85rem;
-                font-weight: 600;
-                text-align: center;
-            }
-
-            .status-Present { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-            .status-Half-Day { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-            .status-Leave { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-            .status-Holiday { background-color: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-            .status-Absent { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; } /* Assuming Absent is similar to Leave for styling */
-
-            /* Exception Indicators */
-            .exception-indicator {
-                font-weight: 600;
-                font-size: 0.85rem;
-                padding: 3px 6px;
-                border-radius: 4px;
-                margin-right: 5px;
-            }
-            .exception-late { background-color: #ffe6e6; color: #d9534f; } /* Red for late */
-            .exception-early-arrival { background-color: #e0f7ff; color: #3498db; } /* Blue for early arrival */
-            .exception-early { background-color: #fff8e6; color: #f0ad4e; } /* Orange for early exit */
-            .exception-overtime { background-color: #e6f9e6; color: #5cb85c; } /* Green for overtime */
         </style>
     """, unsafe_allow_html=True)
 
+def calculate_time_diff_for_cards(time_str, reference_time, diff_type):
+    """
+    Calculate time difference and return formatted string for cards
+    diff_type: 'late', 'early', 'overtime', or 'early_arrival'
+    """
+    if pd.isna(time_str) or time_str == '-' or time_str == '' or time_str is None:
+        return ''
+    
+    try:
+        # Parse the time string
+        if isinstance(time_str, str):
+            actual_time = pd.to_datetime(time_str).time()
+        else:
+            actual_time = time_str
+        
+        # Convert to datetime for calculation
+        ref_datetime = datetime.combine(date.today(), reference_time)
+        actual_datetime = datetime.combine(date.today(), actual_time)
+        
+        # Calculate difference in minutes
+        diff = (actual_datetime - ref_datetime).total_seconds() / 60
+        
+        if diff_type == 'late' and diff > 0:
+            hours = int(diff // 60)
+            mins = int(diff % 60)
+            if hours > 0:
+                return f"+{hours}h {mins}m"
+            else:
+                return f"+{mins}m"
+
+        elif diff_type == 'early_arrival' and diff < 0:
+            diff = abs(diff)
+            hours = int(diff // 60)
+            mins = int(diff % 60)
+            if hours > 0:
+                return f"-{hours}h {mins}m"
+            else:
+                return f"-{mins}m"
+                
+        elif diff_type == 'early' and diff < 0:
+            diff = abs(diff)
+            hours = int(diff // 60)
+            mins = int(diff % 60)
+            if hours > 0:
+                return f"-{hours}h {mins}m"
+            else:
+                return f"-{mins}m"
+                
+        elif diff_type == 'overtime' and diff > 0:
+            hours = int(diff // 60)
+            mins = int(diff % 60)
+            if hours > 0:
+                return f"+{hours}h {mins}m"
+            else:
+                return f"+{mins}m"
+        
+        return ''
+    except Exception as e:
+        return ''
+
+
 def render_daily_report_table(df_display):
-    """Renders a custom HTML table for the daily attendance report."""
+    """
+    Renders a custom, self-contained HTML table for the daily attendance report.
     
+    This redesigned version (v3) uses a "Google" design philosophy:
+    - Merges exceptions (Late, OT, etc.) *inline* with the Check In/Out times.
+    - Uses subtle, professional exception badges (light background, colored text).
+    - Ensures consistent row height and vertical alignment for a cleaner UI.
+    - Prioritizes information hierarchy (time is primary, exception is secondary).
+    """
+    
+    # --- 🎨 UPGRADED CSS STYLES ---
+    table_css = """
+    <style>
+        .daily-report-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 4px; /* Reduced from 8px to make rows closer */
+            margin-top: 1rem; /* Slightly reduced margin */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        /* --- ✨ Modern Header --- */
+        .daily-report-table th {
+            background: #f8f9fa;
+            color: #495057;
+            padding: 8px 12px; /* Reduced padding from 10px 14px */
+            text-align: left;
+            font-weight: 600;
+            border: none;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.7rem; /* Reduced from 0.75rem */
+            border-bottom: 1px solid #e9ecef; /* Thinner border */
+        }
+
+        .daily-report-table th:first-child { border-top-left-radius: 6px; } /* Smaller radius */
+        .daily-report-table th:last-child { border-top-right-radius: 6px; }
+
+        /* --- 🖌️ Modern Table Body --- */
+        .daily-report-table td {
+            background-color: #ffffff;
+            padding: 8px 10px; /* Reduced from 12px 14px */
+            border: 1px solid #e9ecef;
+            vertical-align: middle;
+            box-shadow: 0 1px 1px rgba(0,0,0,0.03); /* Lighter shadow */
+            font-size: 0.75rem; /* Reduced from 0.825rem */
+            color: #212529;
+        }
+
+        .daily-report-table tbody tr {
+            transition: all 0.15s ease-in-out;
+            border-radius: 6px; /* Smaller radius */
+        }
+
+        /* --- 💡 Subtle Hover Effect --- */
+        .daily-report-table tbody tr:hover td {
+            background-color: #f9fafb;
+        }
+        
+        .daily-report-table tbody tr:hover {
+            box-shadow: 0 2px 6px rgba(0,0,0,0.05); /* Slightly lighter shadow */
+        }
+
+        .daily-report-table tbody tr td:first-child {
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
+        }
+
+        .daily-report-table tbody tr td:last-child {
+            border-top-right-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }
+
+        /* --- 🏷️ Status Badges --- */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 6px; /* Reduced from 3px 8px */
+            border-radius: 10px; /* Slightly smaller */
+            font-size: 0.7rem; /* Reduced from 0.75rem */
+            font-weight: 600;
+            border: 1px solid transparent; /* Thinner border */
+        }
+        .status-Present { background: #d4edda; color: #155724; border-color: #c3e6cb; }
+        .status-Half-Day { background: #fff3cd; color: #856404; border-color: #ffeeba; }
+        .status-Leave { background: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+        .status-Holiday { background: #d1ecf1; color: #0c5460; border-color: #bee5eb; }
+        .status-Absent { background: #f8d7da; color: #721c24; border-color: #f5c6cb; }
+
+        /* --- 🆕 NEW: INLINE TIME EXCEPTION STYLES --- */
+        
+        /* Wrapper to keep time and badge together */
+        .time-cell-wrapper {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px; /* Reduced from 8px */
+        }
+        
+        .main-time {
+            font-weight: 500;
+            font-size: 0.8rem; /* Reduced from 0.85rem */
+            white-space: nowrap;
+        }
+
+        /* Base style for the new inline badges */
+        .time-exception-badge {
+            font-weight: 600;
+            font-size: 0.65rem; /* Reduced from 0.7rem */
+            padding: 1px 5px; /* Reduced from 2px 7px */
+            border-radius: 8px; /* Slightly smaller */
+            letter-spacing: 0.2px;
+            white-space: nowrap;
+        }
+        
+        /* Subtle "light" variants */
+        .exception-late { 
+            background: #fdf5f5;
+            color: #d9534f;
+        }
+        .exception-early-arrival { 
+            background: #f4f9fc; 
+            color: #3498db; 
+        }
+        .exception-early { 
+            background: #fefaf3; 
+            color: #f0ad4e; 
+        }
+        .exception-overtime {
+            background: #f6fbf6;
+            color: #5cb85c;
+        }
+        
+    </style>
+    """
+    
+    # Helper function to handle missing data gracefully
+    def _get_val(row, col, default_val="-"):
+        val = row.get(col)
+        return val if pd.notna(val) and val != "" else default_val
+
     # Start table HTML
-    table_html = '<table class="daily-report-table"><thead><tr>'
+    table_html = '<div style="overflow-x: auto;"><table class="daily-report-table"><thead><tr>'
     
-    # Table Headers
-    headers = ['Employee Name', 'Designation', 'Check In', 'Check Out', 'Status', 'Late', 'Early Arrival', 'Early Exit', 'Overtime', 'Notes']
+    # Table Headers (Updated)
+    headers = ['Designation','Employee Name',  'Check In', 'Check Out', 'Status', 'Notes']
     for header in headers:
         table_html += f'<th>{header}</th>'
     table_html += '</tr></thead><tbody>'
@@ -740,58 +1113,61 @@ def render_daily_report_table(df_display):
     for index, row in df_display.iterrows():
         table_html += '<tr>'
         
-        # Employee Name
-        table_html += f'<td>{row["Employee Name"]}</td>'
-        
         # Designation
-        table_html += f'<td>{row["designation"]}</td>'
+        table_html += f'<td>{_get_val(row, "designation")}</td>'
         
-        # Check In
-        table_html += f'<td>{row["Check In"]}</td>'
+        # Employee Name
+        table_html += f'<td>{_get_val(row, "Employee Name")}</td>'
         
-        # Check Out
-        table_html += f'<td>{row["Check Out"]}</td>'
+        # --- 🆕 MERGED Check In Column ---
+        check_in_time = _get_val(row, "Check In")
+        late_val = _get_val(row, "Late Arrival", "")
+        early_arrival_val = _get_val(row, "Early Arrival", "")
+        
+        table_html += '<td><div class="time-cell-wrapper">'
+        table_html += f'<span class="main-time">{check_in_time}</span>'
+        
+        # Add exception badge *inline*
+        if late_val:
+            table_html += f'<span class="time-exception-badge exception-late">Late: {late_val}</span>'
+        elif early_arrival_val:
+            table_html += f'<span class="time-exception-badge exception-early-arrival">Early: {early_arrival_val}</span>'
+            
+        table_html += '</div></td>'
+        
+        # --- 🆕 MERGED Check Out Column ---
+        check_out_time = _get_val(row, "Check Out")
+        early_val = _get_val(row, "Early Exit", "")
+        overtime_val = _get_val(row, "Overtime", "")
+
+        table_html += '<td><div class="time-cell-wrapper">'
+        table_html += f'<span class="main-time">{check_out_time}</span>'
+
+        # Add exception badge *inline*
+        if early_val:
+            table_html += f'<span class="time-exception-badge exception-early">Early: {early_val}</span>'
+        elif overtime_val:
+            table_html += f'<span class="time-exception-badge exception-overtime">Overtime: {overtime_val}</span>'
+
+        table_html += '</div></td>'
         
         # Status
-        status_class = row["Status"].replace(" ", "-") # e.g., "Half Day" -> "Half-Day"
-        table_html += f'<td><span class="status-badge status-{status_class}">{row["Status"]}</span></td>'
+        status_val = _get_val(row, "Status", "N/A")
+        if status_val != "N/A":
+            status_class = status_val.replace(" ", "-") # e.g., "Half Day" -> "Half-Day"
+            table_html += f'<td><span class="status-badge status-{status_class}">{status_val}</span></td>'
+        else:
+            table_html += '<td>-</td>'
         
-        # Late Arrival
-        late_val = row["Late Arrival"]
-        if late_val:
-            table_html += f'<td><span class="exception-indicator exception-late">{late_val}</span></td>'
-        else:
-            table_html += '<td>-</td>'
-
-        # Early Arrival
-        early_arrival_val = row["Early Arrival"]
-        if early_arrival_val:
-            table_html += f'<td><span class="exception-indicator exception-early-arrival">{early_arrival_val}</span></td>'
-        else:
-            table_html += '<td>-</td>'
-            
-        # Early Exit
-        early_val = row["Early Exit"]
-        if early_val:
-            table_html += f'<td><span class="exception-indicator exception-early">{early_val}</span></td>'
-        else:
-            table_html += '<td>-</td>'
-            
-        # Overtime
-        overtime_val = row["Overtime"]
-        if overtime_val:
-            table_html += f'<td><span class="exception-indicator exception-overtime">{overtime_val}</span></td>'
-        else:
-            table_html += '<td>-</td>'
-            
         # Notes
-        table_html += f'<td>{row["Notes"]}</td>'
+        table_html += f'<td>{_get_val(row, "Notes")}</td>'
         
         table_html += '</tr>'
         
-    table_html += '</tbody></table>'
+    table_html += '</tbody></table></div>'
     
-    st.markdown(table_html, unsafe_allow_html=True)
+    # Combine CSS and HTML and render
+    st.markdown(table_css + table_html, unsafe_allow_html=True)
 
 def render_day_card(day_date, attendance_dict, is_current_month, holidays=None):
     """Render a single day card"""
@@ -801,61 +1177,121 @@ def render_day_card(day_date, attendance_dict, is_current_month, holidays=None):
     
     day_name = calendar.day_abbr[day_date.weekday()]
     
-    # Check if it's a holiday
     is_holiday = holidays and day_date in holidays
     holiday_name = holidays.get(day_date, '') if holidays else ''
     
+    css_class = "day-card-empty"
+    summary_html = "<div class='status-badge'>📅 No Record</div>"
+
     if day_date.day in attendance_dict:
         data = attendance_dict[day_date.day]
-        status_class, status_label = determine_day_status(
-            data['status'], 
-            data['check_in'], 
-            data['check_out']
-        )
+        status = data['status']
         
-        # Build summary lines
+        if status == 'Holiday': css_class = 'day-card-holiday'
+        elif status == 'Leave': css_class = 'day-card-leave'
+        elif status == 'Half Day': css_class = 'day-card-half-day'
+        elif status == 'Absent': css_class = 'day-card-absent'
+        elif status == 'Present': css_class = 'day-card-present'
+
         summary_lines = []
         
-        # Show holiday name if it's a holiday
         if is_holiday:
-            summary_lines.append(f"<strong>🏖️ {holiday_name}</strong>")
-        else:
-            summary_lines.append(f"<strong>{status_label}</strong>")
+            summary_lines.append(f"<div class='status-badge'><strong>🏖️ {holiday_name}</strong></div>")
+        elif status == 'Leave':
+            summary_lines.append(f"<div class='status-badge'><strong>❌ Leave</strong></div>")
+        elif status == 'Half Day':
+            summary_lines.append(f"<div class='status-badge'><strong>🕐 Half Day</strong></div>")
         
-        if data['status'] not in ['Holiday', 'Leave', 'Absent']:
+        if data['status'] in ['Present', 'Half Day']:
             check_in_str = data['check_in'].strftime('%I:%M %p') if data['check_in'] else '-'
             check_out_str = data['check_out'].strftime('%I:%M %p') if data['check_out'] else '-'
-            summary_lines.append(f"🕐 In: {check_in_str}")
-            summary_lines.append(f"🕔 Out: {check_out_str}")
-        
+            
+            time_html = f"""
+            <div class="time-container">
+                <div class="time-block">
+                    <span class="time-label">Check In</span>
+                    <span class="time-value">{check_in_str}</span>
+                </div>
+                <div class="time-block">
+                    <span class="time-label">Check Out</span>
+                    <span class="time-value">{check_out_str}</span>
+                </div>
+            </div>
+            """
+            summary_lines.append(time_html)
+
+            exceptions = []
+            if data.get('is_early_arrival'):
+                diff = calculate_time_diff_for_cards(data['check_in'], SCHEDULED_IN, 'early_arrival')
+                exceptions.append(f'<span class="exception exception-early-in-bg">🌅 Early In {diff}</span>')
+            if data.get('is_late'):
+                diff = calculate_time_diff_for_cards(data['check_in'], SCHEDULED_IN, 'late')
+                exceptions.append(f'<span class="exception exception-late-in-bg">⏰ Late In {diff}</span>')
+            if data.get('is_early'):
+                diff = calculate_time_diff_for_cards(data['check_out'], SCHEDULED_OUT, 'early')
+                exceptions.append(f'<span class="exception exception-early-out-bg">🏃 Early Out {diff}</span>')
+            if data.get('is_overtime'):
+                diff = calculate_time_diff_for_cards(data['check_out'], SCHEDULED_OUT, 'overtime')
+                exceptions.append(f'<span class="exception exception-overtime-bg">🌙 Overtime +{diff}</span>')
+
+            if exceptions:
+                summary_lines.append('<div class="exception-container">' + "".join(exceptions) + '</div>')
+            elif status == 'Present':
+                 summary_lines.append("<div class='status-badge'>✅ On Time</div>")
+
         if data['notes']:
-            summary_lines.append(f"📝 {data['notes'][:25]}...")
+            summary_lines.append(f"<div style='font-size: 0.68em; color: #555; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'>📝 {data['notes'][:28]}...</div>")
         
-        summary_text = "<br>".join(summary_lines)
-        css_class = status_class
-    else:
-        # Check if it's a holiday even without attendance record
-        if is_holiday:
-            summary_text = f"<strong>🏖️ {holiday_name}</strong>"
-            css_class = "day-card-holiday"
-        else:
-            summary_text = "📅 No Record"
-            css_class = "day-card-empty"
-    
+        summary_html = "".join(summary_lines)
+    elif is_holiday:
+        summary_html = f"<div class='status-badge'><strong>🏖️ {holiday_name}</strong></div>"
+        css_class = "day-card-holiday"
+
     card_html = f"""
-    <div class="day-card {css_class}">
-        <div>
-            <div class="day-number">{day_date.day}</div>
-            <div class="day-name">{day_name}</div>
-            <div class="day-summary">{summary_text}</div>
+    <div class="day-card-container">
+        <div class="day-card {css_class}">
+            <div class="day-header">
+                <div class="day-number">{day_date.day}</div>
+                <div class="day-name">{day_name}</div>
+            </div>
+            <div class="day-summary">{summary_html}</div>
         </div>
     </div>
     """
     st.markdown(card_html, unsafe_allow_html=True)
 
-def create_modern_calendar(year, month, attendance_data):
+def get_all_employees_attendance(conn, year, month=None):
+    """Fetch attendance data for all active employees for a year or specific month"""
+    try:
+        with conn.session as s:
+            if month:
+                result = s.execute(text("""
+                    SELECT e.employee_id, e.employee_name, e.designation,
+                           a.attendance_date, a.check_in_time, a.check_out_time, a.status, a.notes
+                    FROM employees e
+                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
+                    WHERE e.employment_status = 'Active'
+                    AND YEAR(a.attendance_date) = :year
+                    AND MONTH(a.attendance_date) = :month
+                    ORDER BY e.employee_id, a.attendance_date
+                """), {"year": year, "month": month})
+            else:
+                result = s.execute(text("""
+                    SELECT e.employee_id, e.employee_name, e.designation,
+                           a.attendance_date, a.check_in_time, a.check_out_time, a.status, a.notes
+                    FROM employees e
+                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
+                    WHERE e.employment_status = 'Active'
+                    AND YEAR(a.attendance_date) = :year
+                    ORDER BY e.employee_id, a.attendance_date
+                """), {"year": year})
+            return result.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching team attendance: {e}")
+        return []
+
+def create_modern_calendar(year, month, attendance_data,selected_emp):
     """Create a modern calendar view using Streamlit columns"""
-    # Inject CSS
     inject_custom_css()
     
     # Create attendance dictionary
@@ -883,60 +1319,65 @@ def create_modern_calendar(year, month, attendance_data):
             'notes': notes,
             'is_late': bool(is_late),
             'is_early': bool(is_early),
-            'is_overtime': bool(is_overtime)
+            'is_overtime': bool(is_overtime),
+            'is_early_arrival': bool(is_early_arrival)
         }
+
+    selected_emp = re.split(r'\s*\(', selected_emp)[0].strip()
     
     # Display month header
     st.markdown(f"""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                    color: white; padding: 0.5rem; border-radius: 10px; margin-bottom: 0.8rem; 
-                    text-align: center; font-weight: bold; font-size: 1.3rem;">
-            {calendar.month_name[month]} {year}
+                    color: white; padding: 0.3rem; border-radius: 12px; margin-bottom: 1.2rem; 
+                    text-align: center; font-weight: 700; font-size: 1.5rem;
+                    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);">
+            📅 {calendar.month_name[month]} {year} ({selected_emp})
         </div>
     """, unsafe_allow_html=True)
     
     # Legend
     st.markdown("""
-        <div style="display: flex; flex-wrap: wrap; gap: 15px; margin: 1rem 0; padding: 1rem; 
-                    background: #f8f9fa; border-radius: 10px; justify-content: center;">
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #D4EDDA; border: 1px solid #28a745;"></div>
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; margin: 1.2rem 0; padding: 1.2rem; 
+                    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%); 
+                    border-radius: 12px; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #D4EDDA, #C3E6CB); border: 2px solid #28a745;"></div>
                 <span>Present</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFE5D0; border: 1px solid #fd7e14;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #FFE5D0, #FFDCC5); border: 2px solid #fd7e14;"></div>
                 <span>Late</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8E6FF; border: 1px solid #e83e8c;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #F8E6FF, #F0D9FF); border: 2px solid #e83e8c;"></div>
                 <span>Early Out</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #e0f7ff; border: 1px solid #3498db;"></div>
-                <span>Early Arrival</span>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #e0f7ff, #c7eeff); border: 2px solid #3498db;"></div>
+                <span>Early In</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #FFF3CD; border: 1px solid #ffc107;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #FFF3CD, #FFEAA7); border: 2px solid #ffc107;"></div>
                 <span>Half Day</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #E2D9F3; border: 1px solid #6f42c1;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #E2D9F3, #D6C9EB); border: 2px solid #6f42c1;"></div>
                 <span>Holiday</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #F8D7DA; border: 1px solid #dc3545;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #F8D7DA, #F5C6CB); border: 2px solid #dc3545;"></div>
                 <span>Leave</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem;">
-                <div style="width: 20px; height: 20px; border-radius: 4px; background: #e0f0ff; border: 1px solid #4a86e8;"></div>
+            <div style="display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 500;">
+                <div style="width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #d4f4dd, #b8e6c4); border: 2px solid #27ae60;"></div>
                 <span>Overtime</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
     # Day headers
-    header_cols = st.columns(7)
-    days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    header_cols = st.columns(6)
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     for i, day in enumerate(days):
         with header_cols[i]:
             st.markdown(f'<div class="header-card">{day}</div>', unsafe_allow_html=True)
@@ -944,8 +1385,8 @@ def create_modern_calendar(year, month, attendance_data):
     # Calendar grid
     cal = calendar.Calendar()
     for week in cal.monthdatescalendar(year, month):
-        cols = st.columns(7)
-        for i, day_date in enumerate(week):
+        cols = st.columns(6)
+        for i, day_date in enumerate(week[:-1]):
             with cols[i]:
                 is_current_month = (day_date.month == month)
                 render_day_card(day_date, attendance_dict, is_current_month)
@@ -987,8 +1428,8 @@ def create_mini_month_calendar(year, month, attendance_dict):
     """, unsafe_allow_html=True)
     
     # Day headers
-    header_cols = st.columns(7)
-    days = ['M', 'T', 'W', 'T', 'F', 'S', 'S']
+    header_cols = st.columns(6)
+    days = ['M', 'T', 'W', 'T', 'F', 'S']
     for i, day in enumerate(days):
         with header_cols[i]:
             st.markdown(f'<div style="text-align: center; font-size: 0.7rem; font-weight: 600; color: #666; margin-bottom: 4px;">{day}</div>', unsafe_allow_html=True)
@@ -996,18 +1437,91 @@ def create_mini_month_calendar(year, month, attendance_dict):
     # Calendar grid
     cal = calendar.Calendar()
     for week in cal.monthdatescalendar(year, month):
-        cols = st.columns(7)
-        for i, day_date in enumerate(week):
+        cols = st.columns(6)
+        for i, day_date in enumerate(week[:-1]):
             with cols[i]:
                 is_current_month = (day_date.month == month)
                 render_mini_day_card(day_date, attendance_dict, is_current_month)
+
+# --- Analytics Functions ---
+@st.cache_data(ttl=600)
+def get_holidays(_conn, year):
+    """Fetch all holidays for a given year."""
+    try:
+        with _conn.session as s:
+            result = s.execute(text("""
+                SELECT holiday_date FROM holidays WHERE YEAR(holiday_date) = :year
+            """), {"year": year})
+            return {row[0] for row in result.fetchall()}
+    except Exception as e:
+        st.error(f"Error fetching holidays: {e}")
+        return set()
+
+@st.cache_data(ttl=600)
+def get_analytics_data(_conn, year, month=None):
+    """Fetch all attendance data for analytics, for active employees."""
+    try:
+        with _conn.session as s:
+            query = """
+                SELECT 
+                    e.employee_id,
+                    e.employee_name,
+                    e.designation,
+                    a.attendance_date,
+                    a.check_in_time,
+                    a.check_out_time,
+                    a.status
+                FROM employees e
+                JOIN attendance a ON e.employee_id = a.employee_id
+                WHERE e.employment_status = 'Active' AND YEAR(a.attendance_date) = :year
+            """
+            params = {"year": year}
+            if month and month != "All":
+                query += " AND MONTH(a.attendance_date) = :month"
+                params["month"] = month
+            
+            query += " ORDER BY e.employee_id, a.attendance_date"
+            
+            # Use st.connection's connection for pandas
+            df = pd.read_sql(text(query), s.connection(), params=params)
+            return df
+    except Exception as e:
+        st.error(f"Error fetching analytics data: {e}")
+        return pd.DataFrame()
+
+def time_to_total_minutes(t):
+    """Convert time object to total minutes from midnight."""
+    if t is None or pd.isna(t):
+        return None
+    return t.hour * 60 + t.minute
+
+def calculate_longest_streak(present_dates, all_work_days):
+    """Calculate the longest streak of consecutive work days an employee was present."""
+    if not present_dates or not all_work_days:
+        return 0
+    
+    present_set = set(present_dates)
+    sorted_work_days = sorted(list(all_work_days))
+    
+    max_streak = 0
+    current_streak = 0
+    
+    for day in sorted_work_days:
+        if day.date() in present_set:
+            current_streak += 1
+        else:
+            max_streak = max(max_streak, current_streak)
+            current_streak = 0
+            
+    max_streak = max(max_streak, current_streak)
+    return max_streak
 
 # Initialize database
 conn = connect_db()
 
 
 # Create tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📝 Mark Attendance", "👤 Individual View", "📊 Daily Report", "➕ Add Employee"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Mark Attendance", "👤 Individual View", "📊 Daily Report", "➕ Add Employee", "📊 Analytics"])
 
 
 # TAB 1: Mark Employee Attendance
@@ -1331,7 +1845,7 @@ def display_yearly_calendars(year, attendance_data):
     }
     .calendar-grid {
         display: grid;
-        grid-template-columns: repeat(7, 1fr);
+        grid-template-columns: repeat(6, 1fr);
         gap: 5px;
     }
     
@@ -1455,10 +1969,11 @@ def display_yearly_calendars(year, attendance_data):
     st.markdown(calendar_css, unsafe_allow_html=True)
     
     # Get day abbreviations
-    week_headers = [day for day in calendar.day_abbr]
+    week_headers = [day for day in calendar.day_abbr][:-1]
 
-    # Create a 2-column layout (2x6 grid)
-    col1, col2 = st.columns(2)
+    # Create a 2x6 grid for the months
+    month_cols_row1 = st.columns(6)
+    month_cols_row2 = st.columns(6)
     
     for month_num in range(1, 13):
         month_name = calendar.month_name[month_num]
@@ -1474,7 +1989,7 @@ def display_yearly_calendars(year, attendance_data):
             
         # Add days
         for week in month_calendar:
-            for day in week:
+            for day in week[:-1]:
                 if day == 0:
                     html += '<div class="calendar-day"></div>' # Empty cell
                 else:
@@ -1532,10 +2047,10 @@ def display_yearly_calendars(year, attendance_data):
         
         # Add to the correct column
         if month_num <= 6:
-            with col1:
+            with month_cols_row1[month_num - 1]:
                 st.markdown(html, unsafe_allow_html=True)
         else:
-            with col2:
+            with month_cols_row2[month_num - 7]:
                 st.markdown(html, unsafe_allow_html=True)
 
 
@@ -1544,12 +2059,16 @@ with tab2:
     st.subheader("Individual Employee Attendance")
 
     available_years, available_months = get_available_months_years(conn) 
+    
+    col1, col2, col3, col4 = st.columns([0.5,1,1,1])
 
-    view_type = st.radio("View Type", ["Monthly", "Yearly"], horizontal=True, label_visibility="collapsed")
-    
-    col1, col2, col3 = st.columns([1,1,1])
-    
     with col1:
+        view_type = st.segmented_control("View Type", ["Monthly", "Yearly"], 
+                                         label_visibility="visible", 
+                                         width="stretch",
+                                         default="Monthly")
+
+    with col2:
         employees = get_all_employees(conn)
         if employees:
             employee_options = {f"{emp[1]} ({emp[2]})": emp[0] for emp in employees}
@@ -1560,7 +2079,7 @@ with tab2:
             selected_emp_id = None
             st.stop() # Stop if no employees
     
-    with col2:
+    with col3:
         if view_type == "Monthly":
             if available_years:
                 selected_year = st.selectbox(
@@ -1579,7 +2098,7 @@ with tab2:
             )
             selected_month = None # Not used in yearly view
 
-    with col3:
+    with col4:
         if view_type == "Monthly":
             if selected_year and available_months:
                 selected_month = st.selectbox(
@@ -1608,8 +2127,8 @@ with tab2:
             
             if attendance_data:
                 # Create DataFrame
-                df = pd.DataFrame(attendance_data, 
-                                columns=['Date', 'Check In', 'Check Out', 'Status', 'Notes', 
+                df = pd.DataFrame(attendance_data,
+                                columns=['Date', 'Check In', 'Check Out', 'Status', 'Notes',
                                          'Is Late', 'Is Early', 'Is Overtime', 'Is Early Arrival'])
                 
                 # Calculate statistics
@@ -1621,9 +2140,64 @@ with tab2:
                 overtime_days = sum(row[7] for row in attendance_data if row[7] == 1)
                 early_arrivals = sum(row[8] for row in attendance_data if row[8] == 1)
                 total_days = len(attendance_data)
+                punctuality_score = min(max(100 + (5 * early_arrivals) + (3 * overtime_days) - (10 * late_arrivals) - (5 * early_exits), 0), 100)
+                # New: Calculate working days
+                working_days = get_working_days(conn, selected_year, selected_month)
                 
-                # Display statistics in 8 columns
-                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+                # Calculate average check-in and check-out times
+                check_in_times = [row[1] for row in attendance_data if row[1] is not None]
+                check_out_times = [row[2] for row in attendance_data if row[2] is not None]
+
+                avg_check_in = None
+                if check_in_times:
+                    try:
+                        # Convert timedelta to seconds
+                        seconds = []
+                        for t in check_in_times:
+                            if isinstance(t, timedelta):
+                                total_seconds = t.total_seconds()
+                                seconds.append(total_seconds)
+                            elif isinstance(t, dt_time):
+                                seconds.append(t.hour * 3600 + t.minute * 60 + t.second)
+                        if seconds:
+                            avg_seconds = sum(seconds) / len(seconds)
+                            avg_check_in = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
+                        else:
+                            avg_check_in = 'N/A'
+                    except Exception as e:
+                        st.error(f"Error calculating average check-in time: {e}")
+                        avg_check_in = 'N/A'
+
+                avg_check_out = None
+                if check_out_times:
+                    try:
+                        # Convert timedelta to seconds
+                        seconds = []
+                        for t in check_out_times:
+                            if isinstance(t, timedelta):
+                                total_seconds = t.total_seconds()
+                                seconds.append(total_seconds)
+                            elif isinstance(t, dt_time):
+                                seconds.append(t.hour * 3600 + t.minute * 60 + t.second)
+                        if seconds:
+                            avg_seconds = sum(seconds) / len(seconds)
+                            avg_check_out = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
+                        else:
+                            avg_check_out = 'N/A'
+                    except Exception as e:
+                        st.error(f"Error calculating average check-out time: {e}")
+                        avg_check_out = 'N/A'
+                
+                col1, col2, col3, col4, col5, col6 = st.columns(6)
+                
+                with col1:
+                    attendance_rate = (present_days / total_days * 100) if total_days > 0 else 0
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #28a745;">{attendance_rate:.1f}%</div>
+                        <div class="stat-label">Attendance Rate</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
                 with col2:
                     st.markdown(f"""
@@ -1649,15 +2223,6 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                with col1:
-                    attendance_rate = (present_days / total_days * 100) if total_days > 0 else 0
-                    st.markdown(f"""
-                    <div class="stat-card">
-                        <div class="stat-value" style="color: #28a745;">{attendance_rate:.1f}%</div>
-                        <div class="stat-label">Attendance Rate</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                
                 with col5:
                     st.markdown(f"""
                     <div class="stat-card">
@@ -1673,6 +2238,8 @@ with tab2:
                         <div class="stat-label">Early Arrivals</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                col7, col8, col9, col10, col11, col12 = st.columns(6)
                 
                 with col7:
                     st.markdown(f"""
@@ -1690,10 +2257,131 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                st.markdown("---")
-
+                with col9:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{working_days}</div>
+                        <div class="stat-label">Working Days</div>
+                    </div>
+                    """, unsafe_allow_html=True)
                 
-                create_modern_calendar(selected_year, selected_month, attendance_data)
+                with col10:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_check_in or 'N/A'}</div>
+                        <div class="stat-label">Avg Check-In</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col11:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_check_out or 'N/A'}</div>
+                        <div class="stat-label">Avg Check-Out</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col12: 
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #6f42c1;">{punctuality_score:.1f}</div>
+                        <div class="stat-label">Punctuality Score</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+
+                with st.expander("View Analytics"):
+
+                    col1,col2 = st.columns([0.4,1])
+
+
+                    with col2:
+                
+                        # New: Trend Graphs for Check-In and Check-Out Times
+                        if check_in_times or check_out_times:
+                            # Prepare data for plotting
+                            trend_data = {
+                                'Date': [row[0] for row in attendance_data],
+                                'Check-In': [
+                                    (f"{int(row[1].total_seconds() // 3600):02d}:{int((row[1].total_seconds() % 3600) // 60):02d}"
+                                    if isinstance(row[1], timedelta)
+                                    else row[1].strftime('%H:%M') if isinstance(row[1], dt_time)
+                                    else None)
+                                    for row in attendance_data
+                                ],
+                                'Check-Out': [
+                                    (f"{int(row[2].total_seconds() // 3600):02d}:{int((row[2].total_seconds() % 3600) // 60):02d}"
+                                    if isinstance(row[2], timedelta)
+                                    else row[2].strftime('%H:%M') if isinstance(row[2], dt_time)
+                                    else None)
+                                    for row in attendance_data
+                                ]
+                            }
+                            trend_df = pd.DataFrame(trend_data)
+                            
+                            # Convert times to numeric values for plotting
+                            def time_to_float(t):
+                                if pd.isna(t) or t is None:
+                                    return None
+                                try:
+                                    # Parse HH:MM string to hours
+                                    hours, minutes = map(int, t.split(':'))
+                                    return hours + minutes / 60.0
+                                except:
+                                    return None
+                            
+                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float)
+                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float)
+
+                            
+                            # Create line chart
+                            fig = px.line(
+                                trend_df,
+                                x='Date',
+                                y=['Check-In Numeric', 'Check-Out Numeric'],
+                                labels={'value': 'Time', 'variable': 'Type'},
+                                title='Check-In and Check-Out Time Trends'
+                            )
+                            
+                            # Update legend names
+                            fig.for_each_trace(lambda t: t.update(
+                                name='Check-In' if t.name == 'Check-In Numeric' else 'Check-Out'
+                            ))
+                            
+                            # Customize y-axis to show time format
+                            fig.update_yaxes(
+                                tickvals=[6, 8, 10, 12, 14, 16, 18, 20, 22],
+                                ticktext=['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00']
+                            )
+                        
+                            
+                            # Assign customdata and hovertemplate to each trace individually
+                            for trace in fig.data:
+                                if trace.name == 'Check-In':
+                                    trace.customdata = trend_df['Check-In']
+                                    trace.hovertemplate = 'Date: %{x}<br>Time: %{customdata}<extra></extra>'
+                                elif trace.name == 'Check-Out':
+                                    trace.customdata = trend_df['Check-Out']
+                                    trace.hovertemplate = 'Date: %{x}<br>Time: %{customdata}<extra></extra>'
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with col1:
+                        # Pie Chart for Attendance Overview
+                        fig = go.Figure(data=[go.Pie(
+                            labels=['Present', 'Half Day', 'Leave','Late Arrival', 'Early Arrival', 'Early Exit', 'Overtime'],
+                            values=[present_days, half_days, leave_days, late_arrivals, early_arrivals, early_exits, overtime_days],
+                            hole=.4,
+                            marker_colors=['#28a745', '#ffc107', '#dc3545', '#ed5721', '#3498db', '#5bc0de', '#6f42c1']
+                        )])
+                        fig.update_layout(
+                            title=f"Attendance Overview - {selected_year}",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    
+                    
+                create_modern_calendar(selected_year, selected_month, attendance_data, selected_emp)
                 
                 st.markdown("---")
                 
@@ -1703,15 +2391,11 @@ with tab2:
         elif view_type == "Yearly" and selected_year:
             
             # --- YEARLY VIEW LOGIC ---
-            
-            # 1. Define Standard Times
-            SCHEDULED_IN = dt_time(9, 30)
-            SCHEDULED_OUT = dt_time(18, 0)
 
-            # 2. Fetch full year data ONCE
+            # Fetch full year data ONCE
             year_data = get_employee_full_year_attendance(conn, selected_emp_id, selected_year)
             
-            # 3. Initialize counters and attendance dictionary
+            # Initialize counters and attendance dictionary
             total = 0
             present = 0
             half = 0
@@ -1722,14 +2406,22 @@ with tab2:
             overtime_days = 0
             early_arrivals = 0
             attendance_dict = {}
-
+            check_in_times = []
+            check_out_times = []
+            
             if year_data:
-                # 4. Process all data in one loop
+                # Process all data in one loop
                 for row in year_data:
                     total += 1
                     att_date, check_in, check_out, status, notes = row
                     
-                    # Convert timedelta to time if needed
+                    # Handle timedelta (no conversion to dt_time needed for averages and graph)
+                    if check_in and isinstance(check_in, timedelta):
+                        check_in_times.append(check_in)
+                    if check_out and isinstance(check_out, timedelta):
+                        check_out_times.append(check_out)
+                    
+                    # Convert timedelta to dt_time for existing exception logic
                     if check_in and isinstance(check_in, timedelta):
                         total_seconds = int(check_in.total_seconds())
                         hours = total_seconds // 3600
@@ -1742,13 +2434,13 @@ with tab2:
                         minutes = (total_seconds % 3600) // 60
                         check_out = dt_time(hours, minutes)
                     
-                    # --- Count primary stats ---
+                    # Count primary stats
                     if status == 'Present': present += 1
                     elif status == 'Half Day': half += 1
                     elif status == 'Leave': leave += 1
                     elif status == 'Holiday': holiday += 1
                     
-                    # --- Calculate and count exceptions ---
+                    # Calculate and count exceptions
                     is_late = False
                     is_early = False
                     is_overtime = False
@@ -1767,8 +2459,8 @@ with tab2:
                         if check_out and check_out > OVERTIME_THRESHOLD:
                             is_overtime = True
                             overtime_days += 1
-
-                    # --- Build the dictionary for the calendar ---
+                    
+                    # Build the dictionary for the calendar
                     date_key = att_date.strftime("%Y-%m-%d")
                     attendance_dict[date_key] = {
                         'check_in': check_in,
@@ -1780,13 +2472,55 @@ with tab2:
                         'is_overtime': is_overtime,
                         'is_early_arrival': is_early_arrival
                     }
-
-            # 5. Render components if data exists
+            
+            # Calculate new metrics
+            # Total Working Days
+            working_days = get_year_working_days(conn, selected_year)
+            punctuality_score = min(max(100 + (5 * early_arrivals) + (3 * overtime_days) - (10 * late_arrivals) - (5 * early_exits), 0), 100)
+            
+            # Average Check-In and Check-Out Times
+            avg_check_in = None
+            if check_in_times:
+                try:
+                    seconds = [t.total_seconds() for t in check_in_times if isinstance(t, timedelta)]
+                    if seconds:
+                        avg_seconds = sum(seconds) / len(seconds)
+                        avg_check_in = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
+                    else:
+                        avg_check_in = 'N/A'
+                except Exception as e:
+                    st.error(f"Error calculating average check-in time: {e}")
+                    avg_check_in = 'N/A'
+            
+            avg_check_out = None
+            if check_out_times:
+                try:
+                    seconds = [t.total_seconds() for t in check_out_times if isinstance(t, timedelta)]
+                    if seconds:
+                        avg_seconds = sum(seconds) / len(seconds)
+                        avg_check_out = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
+                    else:
+                        avg_check_out = 'N/A'
+                except Exception as e:
+                    st.error(f"Error calculating average check-out time: {e}")
+                    avg_check_out = 'N/A'
+            
+            
+            # Render components if data exists
             if total > 0:
-                # --- Updated 8-column stat cards ---
-                col1, col2, col3, col4, col5, col6, col7, col8 = st.columns(8)
+                # Updated 12-column stat cards to include new metrics
+                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13 = st.columns(13)
                 
                 with col1:
+                    attendance_rate = (present / total * 100) if total > 0 else 0
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #28a745;">{attendance_rate:.1f}%</div>
+                        <div class="stat-label">Attendance Rate</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col2:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value">{present}</div>
@@ -1794,15 +2528,15 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                with col2:
+                with col3:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #dc3545;">{leave}</div>
                         <div class="stat-label">Leaves</div>
                     </div>
                     """, unsafe_allow_html=True)
-
-                with col3:
+                
+                with col4:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #ffc107;">{half}</div>
@@ -1810,7 +2544,7 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                with col4:
+                with col5:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #17a2b8;">{holiday}</div>
@@ -1818,7 +2552,7 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                with col5:
+                with col6:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #ed5721;">{late_arrivals}</div>
@@ -1826,54 +2560,155 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                with col6:
+                with col7:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #3498db;">{early_arrivals}</div>
                         <div class="stat-label">Early Arrivals</div>
                     </div>
                     """, unsafe_allow_html=True)
-
-                with col7:
+                
+                with col8:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #5bc0de;">{early_exits}</div>
                         <div class="stat-label">Early Exits</div>
                     </div>
                     """, unsafe_allow_html=True)
-
-                with col8:
+                
+                with col9:
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value" style="color: #28a745;">{overtime_days}</div>
                         <div class="stat-label">Overtime</div>
                     </div>
                     """, unsafe_allow_html=True)
+                
+                with col10:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{working_days}</div>
+                        <div class="stat-label">Working Days</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col11:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_check_in or 'N/A'}</div>
+                        <div class="stat-label">Avg Check-In</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col12:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_check_out or 'N/A'}</div>
+                        <div class="stat-label">Avg Check-Out</div>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-                st.markdown("---")
+                with col13:
+                    st.markdown(f"""
+                    <div class="stat-card">
+                        <div class="stat-value" style="color: #6f42c1;">{punctuality_score:.1f}</div>
+                        <div class="stat-label">Punctuality Score</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with st.expander("View Analytics"):
+
+                    col1,col2 = st.columns([0.4,1])
+
+
+                    with col2:
                 
-                # --- IMPROVED: Pie chart with exceptions included ---
-                col_chart, col_space = st.columns([2, 1])
-                with col_chart:
-                    fig = go.Figure(data=[go.Pie(
-                        labels=['Present', 'Half Day', 'Leave', 'Holiday', 'Late Arrival', 'Early Arrival', 'Early Exit', 'Overtime'],
-                        values=[present, half, leave, holiday, late_arrivals, early_arrivals, early_exits, overtime_days],
-                        hole=.4,
-                        marker_colors=['#28a745', '#ffc107', '#dc3545', '#17a2b8', '#ed5721', '#3498db', '#5bc0de', '#6f42c1']
-                    )])
-                    fig.update_layout(
-                        title=f"Attendance Overview - {selected_year}",
-                        height=400
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                
-                st.markdown("---")
+                        # Trend Graphs for Check-In and Check-Out Times
+                        if check_in_times or check_out_times:
+                            trend_data = {
+                                'Date': [row[0] for row in year_data],
+                                'Check-In': [
+                                    (f"{int(row[1].total_seconds() // 3600):02d}:{int((row[1].total_seconds() % 3600) // 60):02d}"
+                                    if isinstance(row[1], timedelta)
+                                    else row[1].strftime('%H:%M') if isinstance(row[1], dt_time)
+                                    else None)
+                                    for row in year_data
+                                ],
+                                'Check-Out': [
+                                    (f"{int(row[2].total_seconds() // 3600):02d}:{int((row[2].total_seconds() % 3600) // 60):02d}"
+                                    if isinstance(row[2], timedelta)
+                                    else row[2].strftime('%H:%M') if isinstance(row[2], dt_time)
+                                    else None)
+                                    for row in year_data
+                                ]
+                            }
+                            trend_df = pd.DataFrame(trend_data)
+
+                            
+                            # Convert times to numeric values for plotting
+                            def time_to_float(t):
+                                if pd.isna(t) or t is None:
+                                    return None
+                                try:
+                                    hours, minutes = map(int, t.split(':'))
+                                    return hours + minutes / 60.0
+                                except:
+                                    return None
+                            
+                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float)
+                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float)
+                            
+                            # Create line chart
+                            fig = px.line(
+                                trend_df,
+                                x='Date',
+                                y=['Check-In Numeric', 'Check-Out Numeric'],
+                                labels={'value': 'Time', 'variable': 'Type'},
+                                title=f'Check-In and Check-Out Time Trends - {selected_year}'
+                            )
+                            
+                            # Update legend names
+                            fig.for_each_trace(lambda t: t.update(
+                                name='Check-In' if t.name == 'Check-In Numeric' else 'Check-Out'
+                            ))
+                            
+                            # Customize y-axis to show time format
+                            fig.update_yaxes(
+                                tickvals=[6, 8, 10, 12, 14, 16, 18, 20, 22],
+                                ticktext=['06:00', '08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00']
+                            )
+                            
+                            # Assign customdata and hovertemplate to each trace
+                            for trace in fig.data:
+                                if trace.name == 'Check-In':
+                                    trace.customdata = trend_df['Check-In']
+                                    trace.hovertemplate = 'Date: %{x}<br>Time: %{customdata}<extra></extra>'
+                                elif trace.name == 'Check-Out':
+                                    trace.customdata = trend_df['Check-Out']
+                                    trace.hovertemplate = 'Date: %{x}<br>Time: %{customdata}<extra></extra>'
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+
+                    with col1:
+                        # Pie Chart for Attendance Overview
+                        fig = go.Figure(data=[go.Pie(
+                            labels=['Present', 'Half Day', 'Leave', 'Holiday', 'Late Arrival', 'Early Arrival', 'Early Exit', 'Overtime'],
+                            values=[present, half, leave, holiday, late_arrivals, early_arrivals, early_exits, overtime_days],
+                            hole=.4,
+                            marker_colors=['#28a745', '#ffc107', '#dc3545', '#17a2b8', '#ed5721', '#3498db', '#5bc0de', '#6f42c1']
+                        )])
+                        fig.update_layout(
+                            title=f"Attendance Overview - {selected_year}",
+                            height=400
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown(f"### 📅 {selected_year} at a Glance")
                 
                 # Call the calendar function with the dictionary we built
                 display_yearly_calendars(selected_year, attendance_dict)
-                
+            
             else:
                 st.info(f"No attendance records found for {selected_year}")
 
@@ -2086,67 +2921,504 @@ with tab3:
         st.info("No attendance records found for this date.")
 
 # TAB 4: Manage Employees
+
 with tab4:
-    st.subheader("Add New Employee")
-    
-    with st.form("add_employee_form"):
-        emp_name = st.text_input("Employee Name*")
-        emp_email = st.text_input("Employee Email*")
-        emp_dept = st.text_input("Designation")
-        
-        submitted = st.form_submit_button("➕ Add Employee")
-        
-        if submitted:
-            if emp_name and emp_email:
-                try:
-                    with conn.session as s:
-                        s.execute(text("""
-                            INSERT INTO employees (employee_name, employee_email, designation)
-                            VALUES (:name, :email, :dept)
-                        """), {"name": emp_name, "email": emp_email, "dept": emp_dept})
-                        s.commit()
-                    st.success(f"✅ Employee '{emp_name}' added successfully!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error adding employee: {e}")
-            else:
-                st.warning("Please fill in all required fields (Name and Email)")
-    
-    st.markdown("---")
-    st.subheader("Manage Employees")
-    
-    all_employees = get_all_employees_with_status(conn)
-    if all_employees:
-        # Header
-        col1, col2, col3, col4, col5 = st.columns([1, 4, 3, 2, 3])
-        col1.write("**ID**")
-        col2.write("**Name**")
-        col3.write("**Designation**")
-        col4.write("**Status**")
-        col5.write("**Action**")
+    st.subheader("Employee Management")
 
-        for emp in all_employees:
-            emp_id, emp_name, emp_des, emp_status = emp
-            col1, col2, col3, col4, col5 = st.columns([1, 4, 3, 2, 3])
-            
-            with col1:
-                st.write(emp_id)
-            with col2:
-                st.write(emp_name)
-            with col3:
-                st.write(emp_des)
-            with col4:
-                if emp_status == 'Active':
-                    st.markdown(f'<span style="color:green">{emp_status}</span>', unsafe_allow_html=True)
-                else:
-                    st.markdown(f'<span style="color:red">{emp_status}</span>', unsafe_allow_html=True)
-            with col5:
-                new_status = 'Inactive' if emp_status == 'Active' else 'Active'
-                button_label = f"Set to {new_status}"
-                if st.button(button_label, key=f"status_{emp_id}"):
-                    if update_employee_status(conn, emp_id, new_status):
-                        st.success(f"Employee {emp_name}'s status updated to {new_status}.")
+    col1, col2 = st.columns([2, 1])
+
+    with col2:
+        st.markdown("##### Add New Employee")
+        with st.form("add_employee_form", border=True):
+            emp_code = st.text_input("Employee Code*")
+            emp_name = st.text_input("Employee Name*")
+            emp_email = st.text_input("Employee Email*")
+            emp_dept = st.text_input("Designation")
+            submitted = st.form_submit_button("➕ Add Employee", use_container_width=True, type="primary")
+
+            if submitted:
+                if emp_name and emp_email and emp_code:
+                    try:
+                        with conn.session as s:
+                            s.execute(text("""
+                                INSERT INTO employees (employee_code, employee_name, employee_email, designation)
+                                VALUES (:code, :name, :email, :dept)
+                            """), {"code": emp_code, "name": emp_name, "email": emp_email, "dept": emp_dept})
+                            s.commit()
+                        st.success(f"✅ Employee '{emp_name}' added successfully!")
                         st.rerun()
-    else:
-        st.info("No employees in the system yet.")
+                    except Exception as e:
+                        st.error(f"Error adding employee: {e}")
+                else:
+                    st.warning("Please fill in all required fields (Code, Name, and Email)")
 
+    with col1:
+        all_employees = get_all_employees_with_status(conn)
+        if all_employees:
+            df = pd.DataFrame(all_employees, columns=['employee_id', 'employee_code', 'employee_name', 'designation', 'employment_status'])
+            edit_mode = st.checkbox("Edit Employees")
+            if edit_mode:
+                st.info("You are in edit mode. Modify the table below and click 'Save Changes'.")
+                edited_df = st.data_editor(
+                    df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "employee_id": None, # Hide employee_id
+                        "employee_code": st.column_config.TextColumn("Employee Code", disabled=True),
+                        "employee_name": "Name",
+                        "designation": "Designation",
+                        "employment_status": st.column_config.SelectboxColumn(
+                            "Status",
+                            options=["Active", "Inactive"],
+                            required=True,
+                        )
+                    },
+                    key="employee_editor",
+                    height=1000
+                )
+                if st.button("Save Changes", type="primary"):
+                    # Compare original df with edited df to find changes
+                    original_df = df.set_index('employee_id')
+                    edited_df_indexed = edited_df.set_index('employee_id')
+                    # Find rows where any column has changed
+                    changed_rows_mask = (original_df != edited_df_indexed).any(axis=1)
+                    if not changed_rows_mask.any():
+                        st.info("No changes to save.")
+                    else:
+                        update_count = 0
+                        for emp_id in original_df[changed_rows_mask].index:
+                            details = edited_df_indexed.loc[emp_id].to_dict()
+                            if update_employee(conn, emp_id, details):
+                                update_count += 1
+                        if update_count > 0:
+                            st.success(f"Successfully updated {update_count} employee(s).")
+                            st.rerun()
+            else:
+                def style_status(row):
+                    if row.employment_status == 'Active':
+                        return ['background-color: #d4edda; color: #155724;'] * len(row)
+                    elif row.employment_status == 'Inactive':
+                        return ['background-color: #f8d7da; color: #721c24;'] * len(row)
+                    return [''] * len(row)
+
+                df_display = df[['employee_code', 'employee_name', 'designation', 'employment_status']]
+                st.dataframe(
+                    df_display.style.apply(style_status, axis=1),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "employee_code": "Employee Code",
+                        "employee_name": "Name",
+                        "designation": "Designation",
+                        "employment_status": "Status"
+                    },
+                    height=1000
+                )
+        else:
+            st.info("No employees in the system yet.")
+
+with tab5:
+    st.markdown("""
+        <style>
+    
+        
+        /* Summary Stats - Horizontal */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.8rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 1.25rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-left: 4px solid;
+            transition: all 0.2s ease;
+        }
+    
+        
+        .stat-card.employees { border-left-color: #667eea; }
+        .stat-card.attendance { border-left-color: #51cf66; }
+        .stat-card.ontime { border-left-color: #4dabf7; }
+        .stat-card.late { border-left-color: #ff6b6b; }
+        
+        .stat-label {
+            color: #868e96;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: #212529;
+            line-height: 1;
+        }
+        
+        /* Section Headers */
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 2rem 0 1rem 0;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        .section-icon {
+            font-size: 1.5rem;
+        }
+        
+        .section-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: #212529;
+            margin: 0;
+        }
+        
+        .section-subtitle {
+            color: #868e96;
+            font-size: 0.85rem;
+            margin-left: auto;
+        }
+        
+        /* Card Headers */
+        .card-header-box {
+            padding: 1rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            border-radius: 12px 12px 0 0;
+            margin-bottom: 0.5rem;
+        }
+        
+        .card-header-box.late { background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); }
+        .card-header-box.ontime { background: linear-gradient(135deg, #f4fcf7 0%, #d3f9e3 100%); }
+        .card-header-box.score { background: linear-gradient(135deg, #f0f9ff 0%, #d0ebff 100%); }
+        .card-header-box.leave { background: linear-gradient(135deg, #fff9db 0%, #ffec99 100%); }
+        .card-header-box.work { background: linear-gradient(135deg, #f3f0ff 0%, #e5dbff 100%); }
+        .card-header-box.early { background: linear-gradient(135deg, #e6fcf5 0%, #c3fae8 100%); }
+        .card-header-box.overtime { background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); }
+        .card-header-box.consistent { background: linear-gradient(135deg, #e7f5ff 0%, #d0ebff 100%); }
+        
+        .card-icon {
+            font-size: 1.5rem;
+            line-height: 1;
+        }
+        
+        .card-title-text {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #212529;
+            margin: 0;
+            flex: 1;
+        }
+        
+        .card-count {
+            font-size: 0.8rem;
+            color: #868e96;
+            font-weight: 600;
+        }
+        
+        /* Streamlit DataFrame Styling */
+        .stDataFrame {
+            border: 1px solid #e9ecef;
+            border-radius: 0 0 12px 12px;
+            overflow: hidden;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-container {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .hero-title { font-size: 1.5rem; }
+        }
+        
+        /* Smooth Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    available_years, available_months = get_available_months_years(conn) 
+    
+    # Filters
+    col1, col2, col3, col4, col5 = st.columns([0.5, 1, 1,1,1], gap="small")
+    with col1:
+        view_type = st.segmented_control("View Type", ["Yearly", "Monthly"], key="team_view_type", default="Monthly")
+    with col2:
+        current_year = datetime.now().year
+        year = st.selectbox("Year", available_years, index=0, key="team_year")
+    with col3:
+        month = None
+        if view_type == "Monthly":
+            month = st.selectbox("Month", available_months, index=0,
+                                 format_func=lambda x: calendar.month_name[x], key="team_month")
+                                 
+    
+    # Fetch data
+    from collections import defaultdict
+    team_data = get_all_employees_attendance(conn, year, month)
+    
+    if team_data:
+        # Process metrics (same logic)
+        employee_metrics = defaultdict(lambda: {
+            'name': '', 'designation': '', 'late_arrivals': 0, 'on_time_arrivals': 0,
+            'present_days': 0, 'leave_days': 0, 'half_days': 0, 'work_days': 0,
+            'early_check_ins': 0, 'overtime_days': 0, 'early_exits': 0, 'max_consecutive_present': 0
+        })
+        
+        current_employee = None
+        current_streak = 0
+        last_date = None
+        
+        for row in team_data:
+            if len(row) < 7:
+                continue
+            emp_id, emp_name, designation, att_date, check_in, check_out, status = row[0], row[1], row[2], row[3], row[4], row[5], row[6]
+            
+            if not att_date:
+                employee_metrics[emp_id]['name'] = emp_name
+                employee_metrics[emp_id]['designation'] = designation
+                continue
+            
+            metrics = employee_metrics[emp_id]
+            metrics['name'] = emp_name
+            metrics['designation'] = designation
+            
+            if status == 'Present':
+                metrics['present_days'] += 1
+                metrics['work_days'] += 1
+            elif status == 'Half Day':
+                metrics['half_days'] += 1
+                metrics['work_days'] += 1
+            elif status == 'Leave':
+                metrics['leave_days'] += 1
+            
+            check_in_dt = None
+            if check_in and isinstance(check_in, timedelta):
+                total_seconds = int(check_in.total_seconds())
+                hours, minutes = total_seconds // 3600, (total_seconds % 3600) // 60
+                try:
+                    check_in_dt = dt_time(hours, minutes)
+                except ValueError:
+                    continue
+            
+            check_out_dt = None
+            if check_out and isinstance(check_out, timedelta):
+                total_seconds = int(check_out.total_seconds())
+                hours, minutes = total_seconds // 3600, (total_seconds % 3600) // 60
+                try:
+                    check_out_dt = dt_time(hours, minutes)
+                except ValueError:
+                    continue
+            
+            if status in ['Present', 'Half Day']:
+                if check_in_dt:
+                    if check_in_dt > LATE_THRESHOLD:
+                        metrics['late_arrivals'] += 1
+                    if check_in_dt <= SCHEDULED_IN:
+                        metrics['on_time_arrivals'] += 1
+                    if check_in_dt < EARLY_ARRIVAL_THRESHOLD:
+                        metrics['early_check_ins'] += 1
+                if check_out_dt:
+                    if check_out_dt < SCHEDULED_OUT:
+                        metrics['early_exits'] += 1
+                    if check_out_dt > OVERTIME_THRESHOLD:
+                        metrics['overtime_days'] += 1
+            
+            if emp_id != current_employee or not last_date or att_date != last_date + timedelta(days=1):
+                current_streak = 0
+            if status == 'Present':
+                current_streak += 1
+                metrics['max_consecutive_present'] = max(metrics['max_consecutive_present'], current_streak)
+            else:
+                current_streak = 0
+            current_employee = emp_id
+            last_date = att_date
+        
+        working_days = get_month_working_days(conn, year, month) if month else get_year_working_days(conn, year)
+        leaderboard_data = []
+        
+        for emp_id, metrics in employee_metrics.items():
+            total_work_days = metrics['work_days']
+            attendance_score = (metrics['present_days'] / working_days * 100) if working_days > 0 else 0
+            early_on_time_rate = (metrics['on_time_arrivals'] / total_work_days * 100) if total_work_days > 0 else 0
+            
+            leaderboard_data.append({
+                'Employee ID': emp_id, 'Name': metrics['name'], 'Designation': metrics['designation'],
+                'Late Arrivals': metrics['late_arrivals'], 'On-Time Arrivals': metrics['on_time_arrivals'],
+                'Attendance Score (%)': attendance_score, 'Leave Days': metrics['leave_days'],
+                'Work Days (No Leaves)': metrics['work_days'], 'Early Check-Ins': metrics['early_check_ins'],
+                'Overtime Days': metrics['overtime_days'], 'Early/On-Time Rate (%)': early_on_time_rate,
+                'Total Working Days': working_days
+            })
+        
+        df = pd.DataFrame(leaderboard_data)
+        if df.empty:
+            st.info("No attendance data for the selected period.")
+            st.stop()
+        
+        # Summary Stats - Horizontal Grid
+        total_employees = len(df)
+        avg_attendance = df['Attendance Score (%)'].mean()
+        total_ontime = int(df['On-Time Arrivals'].sum())
+        total_late = int(df['Late Arrivals'].sum())
+        
+        st.markdown(f"""
+            <div class="stats-container">
+                <div class="stat-card employees">
+                    <div class="stat-label">Total Employees</div>
+                    <div class="stat-value">{total_employees}</div>
+                </div>
+                <div class="stat-card attendance">
+                    <div class="stat-label">Avg Attendance</div>
+                    <div class="stat-value">{avg_attendance:.1f}%</div>
+                </div>
+                <div class="stat-card ontime">
+                    <div class="stat-label">Total On-Time</div>
+                    <div class="stat-value">{total_ontime}</div>
+                </div>
+                <div class="stat-card late">
+                    <div class="stat-label">Total Late</div>
+                    <div class="stat-value">{total_late}</div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Helper function to display leaderboard with Streamlit dataframe
+        def display_leaderboard(title, icon, header_class, data_df, columns_to_show, limit=10):
+            st.markdown(f"""
+                <div class="card-header-box {header_class}">
+                    <span class="card-icon">{icon}</span>
+                    <span class="card-title-text">{title}</span>
+                    <span class="card-count">Top {limit}</span>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Prepare display dataframe
+            display_df = data_df.head(limit)[columns_to_show].copy()
+            display_df.insert(0, 'Rank', range(1, len(display_df) + 1))
+            
+            # Format percentage columns
+            for col in display_df.columns:
+                if '(%)' in col:
+                    display_df[col] = display_df[col].apply(lambda x: f"{x:.1f}%")
+            
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                height=400
+            )
+        
+        # Punctuality Section
+        st.markdown("""
+            <div class="section-header">
+                <span class="section-icon">⏰</span>
+                <h2 class="section-title">Punctuality Metrics</h2>
+                <span class="section-subtitle">Check-in performance analysis</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            display_leaderboard(
+                "Most On-Time Arrivals", "🟢", "ontime",
+                df.nlargest(10, 'On-Time Arrivals'),
+                ['Name', 'Designation', 'On-Time Arrivals', 'Total Working Days']
+            )
+        with col2:
+            display_leaderboard(
+                "Most Late Arrivals", "🔴", "late",
+                df.nlargest(10, 'Late Arrivals'),
+                ['Name', 'Designation', 'Late Arrivals', 'Total Working Days']
+            )
+        
+        # Performance Section
+        st.markdown("""
+            <div class="section-header">
+                <span class="section-icon">📊</span>
+                <h2 class="section-title">Performance & Attendance</h2>
+                <span class="section-subtitle">Overall attendance quality</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            display_leaderboard(
+                "Best Attendance Score", "📈", "score",
+                df.nlargest(10, 'Attendance Score (%)'),
+                ['Name', 'Designation', 'Attendance Score (%)', 'Total Working Days']
+            )
+        with col2:
+            display_leaderboard(
+                "Most Consistent Early/On-Time", "⭐", "consistent",
+                df.nlargest(10, 'Early/On-Time Rate (%)'),
+                ['Name', 'Designation', 'Early/On-Time Rate (%)', 'Total Working Days']
+            )
+        
+        # Dedication Section
+        st.markdown("""
+            <div class="section-header">
+                <span class="section-icon">💼</span>
+                <h2 class="section-title">Work Dedication</h2>
+                <span class="section-subtitle">Extra effort and commitment</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            display_leaderboard(
+                "Most Work Days", "💪", "work",
+                df.nlargest(10, 'Work Days (No Leaves)'),
+                ['Name', 'Designation', 'Work Days (No Leaves)', 'Total Working Days']
+            )
+        with col2:
+            display_leaderboard(
+                "Most Early Check-Ins", "🌅", "early",
+                df.nlargest(10, 'Early Check-Ins'),
+                ['Name', 'Designation', 'Early Check-Ins', 'Total Working Days']
+            )
+        
+        # Additional Metrics
+        st.markdown("""
+            <div class="section-header">
+                <span class="section-icon">📋</span>
+                <h2 class="section-title">Additional Insights</h2>
+                <span class="section-subtitle">Leave and overtime patterns</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            display_leaderboard(
+                "Most Leave Days", "🏖️", "leave",
+                df.nlargest(10, 'Leave Days'),
+                ['Name', 'Designation', 'Leave Days', 'Total Working Days']
+            )
+        with col2:
+            display_leaderboard(
+                "Most Overtime Days", "🌙", "overtime",
+                df.nlargest(10, 'Overtime Days'),
+                ['Name', 'Designation', 'Overtime Days', 'Total Working Days']
+            )
+        
+    else:
+        st.info("No attendance records found for the selected period.")
