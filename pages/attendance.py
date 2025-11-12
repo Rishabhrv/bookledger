@@ -1971,9 +1971,8 @@ def display_yearly_calendars(year, attendance_data):
     # Get day abbreviations
     week_headers = [day for day in calendar.day_abbr][:-1]
 
-    # Create a 2x6 grid for the months
-    month_cols_row1 = st.columns(6)
-    month_cols_row2 = st.columns(6)
+    # Create a 2-column layout (2x6 grid)
+    col1, col2 = st.columns(2)
     
     for month_num in range(1, 13):
         month_name = calendar.month_name[month_num]
@@ -2047,10 +2046,10 @@ def display_yearly_calendars(year, attendance_data):
         
         # Add to the correct column
         if month_num <= 6:
-            with month_cols_row1[month_num - 1]:
+            with col1:
                 st.markdown(html, unsafe_allow_html=True)
         else:
-            with month_cols_row2[month_num - 7]:
+            with col2:
                 st.markdown(html, unsafe_allow_html=True)
 
 
@@ -2200,6 +2199,7 @@ with tab2:
                     """, unsafe_allow_html=True)
                 
                 with col2:
+                    
                     st.markdown(f"""
                     <div class="stat-card">
                         <div class="stat-value">{present_days}</div>
@@ -2264,7 +2264,7 @@ with tab2:
                         <div class="stat-label">Working Days</div>
                     </div>
                     """, unsafe_allow_html=True)
-                
+
                 with col10:
                     st.markdown(f"""
                     <div class="stat-card">
@@ -2288,7 +2288,7 @@ with tab2:
                         <div class="stat-label">Punctuality Score</div>
                     </div>
                     """, unsafe_allow_html=True)
-
+                
 
                 with st.expander("View Analytics"):
 
@@ -2509,7 +2509,7 @@ with tab2:
             # Render components if data exists
             if total > 0:
                 # Updated 12-column stat cards to include new metrics
-                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10, col11, col12, col13 = st.columns(13)
+                col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
                 
                 with col1:
                     attendance_rate = (present / total * 100) if total > 0 else 0
@@ -2567,6 +2567,8 @@ with tab2:
                         <div class="stat-label">Early Arrivals</div>
                     </div>
                     """, unsafe_allow_html=True)
+
+                col8, col9, col10, col11, col12, col13 = st.columns(6)
                 
                 with col8:
                     st.markdown(f"""
@@ -3036,8 +3038,9 @@ with tab5:
             padding: 1.25rem;
             border-radius: 12px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border-left: 4px solid;
+            border-left: 3px solid;
             transition: all 0.2s ease;
+            margin-bottom: 1rem;
         }
     
         
@@ -3133,14 +3136,7 @@ with tab5:
             border-radius: 0 0 12px 12px;
             overflow: hidden;
         }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .stats-container {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .hero-title { font-size: 1.5rem; }
-        }
+
         
         /* Smooth Animations */
         @keyframes fadeInUp {
@@ -3170,7 +3166,8 @@ with tab5:
         if view_type == "Monthly":
             month = st.selectbox("Month", available_months, index=0,
                                  format_func=lambda x: calendar.month_name[x], key="team_month")
-                                 
+            
+    st.markdown("")
     
     # Fetch data
     from collections import defaultdict
@@ -3333,7 +3330,6 @@ with tab5:
             <div class="section-header">
                 <span class="section-icon">⏰</span>
                 <h2 class="section-title">Punctuality Metrics</h2>
-                <span class="section-subtitle">Check-in performance analysis</span>
             </div>
         """, unsafe_allow_html=True)
         
