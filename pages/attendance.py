@@ -1653,7 +1653,6 @@ with tab1:
                         
                         # Employee name (non-editable)
                         st.markdown(f'<div class="employee-name">{emp_display}</div>', unsafe_allow_html=True)
-                        st.space(1)
                         
                         # Input fields
                         col1, col2, col3, col4 = st.columns(column_size)
@@ -1763,7 +1762,6 @@ with tab1:
                 )
                 st.toast("Error: Check-In and Check-Out times required", icon="🚨")
             if success_count > 0:
-                st.space(1)
                 st.success(f"✅ {success_count} attendance record(s) saved for {selected_date}")
             elif not invalid_employees:
                 st.info("No changes to save.")
