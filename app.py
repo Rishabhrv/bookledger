@@ -194,6 +194,13 @@ BUTTON_CONFIG = {
         "permission": "tasks",
         "type": "new_tab",
     },
+    "attendance": {
+        "label": "Attendance Log",
+        "icon": "🔔",
+        "page_path": "attendance",
+        "permission": "attendance",
+        "type": "new_tab",
+    },
     "dashboard": {
         "label": "Dashboard",
         "icon": "📊",

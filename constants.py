@@ -23,6 +23,7 @@ ACCESS_TO_BUTTON = {
     "Tasks": "tasks",
     "Details": "details",
     "Message": "messages",
+    "Attendance": "attendance",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"
@@ -39,6 +40,11 @@ VALID_SUBJECTS = [
     "Education", "General Science", "Management", "Marketing", "Medical", "Self Help", 
     "Physical Education", "Commerce", "Law", "Social Science"
 ]
+
+@st.dialog("Authentication Failed", dismissible=False)
+def error_dialog(error_message):
+    st.error(error_message)
+    st.stop()
 
 
 def connect_db():
@@ -130,16 +136,14 @@ def initialize_click_and_session_id():
     if "session_id" not in st.session_state:
         session_id = st.query_params.get("session_id", [None])[0]
         if not session_id:
-            st.error("Session not initialized.")
-            st.stop()
+            error_dialog("⚠️ Access Denied: You don't have permission to access this page.")
         if session_id:
             st.session_state.session_id = session_id
         
     if "click_id" not in st.session_state:
         click_id = st.query_params.get("click_id", [None])[0]
         if not click_id:
-            st.error("Click ID not found in URL.")
-            st.stop()
+            error_dialog("⚠️ Access Denied: You don't have permission to access this page.")
         if click_id:
             st.session_state.click_id = click_id
     

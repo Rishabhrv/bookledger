@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-from datetime import datetime
-import io
 
 def connect_db():
     """Connect to MySQL database"""
@@ -16,68 +14,21 @@ def connect_db():
         st.error(f"Error connecting to MySQL: {e}")
         st.stop()
 
-def init_database(conn):
-    """Initialize attendance tables if they don't exist"""
-    try:
-        with conn.session as s:
-            # Create employees table
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS employees (
-                    employee_id INT PRIMARY KEY AUTO_INCREMENT,
-                    employee_code VARCHAR(50) UNIQUE NOT NULL,
-                    employee_name VARCHAR(100) NOT NULL,
-                    employee_email VARCHAR(100) UNIQUE,
-                    designation VARCHAR(50),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            
-            # Create attendance table
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS attendance (
-                    attendance_id INT PRIMARY KEY AUTO_INCREMENT,
-                    employee_id INT NOT NULL,
-                    attendance_date DATE NOT NULL,
-                    check_in_time TIME,
-                    check_out_time TIME,
-                    status ENUM('Present', 'Half Day', 'Leave', 'Holiday') DEFAULT 'Present',
-                    notes TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                    FOREIGN KEY (employee_id) REFERENCES employees(employee_id),
-                    UNIQUE KEY unique_employee_date (employee_id, attendance_date)
-                )
-            """))
-            
-            # Create holidays table
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS holidays (
-                    holiday_id INT PRIMARY KEY AUTO_INCREMENT,
-                    holiday_date DATE NOT NULL UNIQUE,
-                    holiday_name VARCHAR(100) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            s.commit()
-    except Exception as e:
-        st.error(f"Error initializing database: {e}")
+
+import pandas as pd
 
 def parse_datetime(dt_str):
     """Parse datetime string from CSV"""
     if pd.isna(dt_str) or str(dt_str).strip() == '':
         return None
+    
     try:
-        # Handle format: 11/5/2025 9:36
         dt_str = str(dt_str).strip()
-        dt = pd.to_datetime(dt_str, format='%m/%d/%Y %H:%M')
+        dt = pd.to_datetime(dt_str, dayfirst=True)
         return dt
-    except:
-        try:
-            # Try alternative formats
-            dt = pd.to_datetime(dt_str)
-            return dt
-        except:
-            return None
+    except Exception as e:
+        print(f"Error parsing date: '{dt_str}'. Error: {e}")
+        return None
 
 def get_or_create_employee(conn, emp_code, emp_name, designation):
     """Get employee_id or create new employee"""
@@ -301,42 +252,6 @@ def main():
     
     # Initialize database connection
     conn = connect_db()
-    init_database(conn)
-    
-    # Sidebar with instructions
-    with st.sidebar:
-        st.header("📋 CSV Format Guide")
-        st.markdown("""
-        **Required Columns:**
-        - Employee Code
-        - Employee Name
-        - Designation
-        - Status
-        - In DateTime
-        - Out DateTime
-        
-        **Status Types:**
-        - `Present`: Regular working day (imported)
-        - `Absent`: Imported as 'Leave' status
-        - `Holiday`: Skipped (not imported)
-        - `WeeklyOff`: Skipped (not imported)
-        
-        **Auto Half Day Rules:**
-        - Check-in after 11:00 AM → Half Day
-        - Check-out before 3:00 PM → Half Day
-        
-        **DateTime Format:**
-        - `M/D/YYYY H:MM`
-        - Example: `11/5/2025 9:36`
-        
-        **Notes:**
-        - Present and Absent status are imported
-        - Absent is saved as 'Leave' in database
-        - Half Day is auto-detected by time rules
-        - WeeklyOff and Holiday are skipped
-        - Duplicate entries are updated
-        - New employees are created automatically
-        """)
     
     # File uploader
     uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])

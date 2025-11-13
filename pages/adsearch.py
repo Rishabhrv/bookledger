@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from auth import validate_token
-from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
+from constants import log_activity, initialize_click_and_session_id, connect_db
 
 logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
