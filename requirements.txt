@@ -6,7 +6,7 @@ PyJWT==2.10.1
 Requests==2.32.3
 seaborn==0.13.2
 SQLAlchemy==2.0.38
-streamlit==1.49.0
+streamlit==1.51.0
 mysqlclient
 XlsxWriter
 reportlab
