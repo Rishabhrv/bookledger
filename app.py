@@ -8124,3 +8124,4 @@ with st.container(border=False):
 total_time = time.time() - start_time
 st.caption(f"**Total Page Load Time:** {total_time:.2f} seconds")
 st.caption(f"**Table Rendering Time:** {render_time:.2f} seconds")
+

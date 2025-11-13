@@ -12,3 +12,4 @@ XlsxWriter
 reportlab
 ollama
 openpyxl
+
