@@ -47,163 +47,132 @@ st.markdown("""
 
 st.markdown("""
 <style>
+    /* Clean, minimal design with subtle accents */
     .tree-item {
-        padding: 6px;
+        padding: 10px 14px;
         font-size: 14px;
         border-left: 2px solid #1f77b4;
         margin-left: 20px;
-        margin-bottom: 6px;
-    }
-    .user-node {
-        font-size: 16px;
-        font-weight: bold;
-        color: #333;
         margin-bottom: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
     }
+    
+    .tree-item:hover {
+        background-color: #f8f9fa;
+    }
+    
     .session-node {
-        font-size: 15px;
-        font-weight: bold;
-        color: #555;
+        font-size: 14px;
+        font-weight: 600;
+        color: #495057;
         margin-left: 15px;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
+        margin-top: 6px;
+        padding: 6px 0;
         display: flex;
         align-items: center;
+        gap: 8px;
     }
+    
     .session-duration {
         font-size: 12px;
         color: #6c757d;
-        margin-left: 10px;
+        font-weight: 400;
         font-style: italic;
     }
+    
     .timestamp {
         color: #6c757d;
         font-size: 12px;
-        min-width: 80px;
-        margin-right: 8px;
-        display: inline-block;
+        font-weight: 500;
+        white-space: nowrap;
     }
+    
     .action {
-        font-weight: bold;
+        font-weight: 600;
         color: #1f77b4;
-        margin-right: 8px;
-        min-width: 140px;
-        display: inline-block;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        gap: 5px;
     }
-    .checklist-action {
-        font-weight: bold;
-        color: #1f77b4;
-        margin-right: 8px;
-        min-width: 60px;
-        display: inline-block;
-    }
+    
     .details {
         color: #333;
         font-size: 13px;
         word-break: break-word;
-        background-color: #f1f3f5;
-        padding: 4px 8px;
+        background-color: #f8f9fa;
+        padding: 5px 10px;
         border-radius: 4px;
-        display: inline-block;
-        line-height: 1.4;
-        flex-grow: 1;
+        flex: 1;
+        min-width: 200px;
+        line-height: 1.5;
     }
+    
     .details_checklist {
         color: #333;
         font-size: 13px;
         word-break: break-word;
-        padding: 4px 8px;
-        border-radius: 4px;
+        padding: 4px 0;
         display: flex;
         flex-direction: column;
-        line-height: 1.4;
-        flex-grow: 1;
+        gap: 6px;
+        line-height: 1.5;
+        flex: 1;
     }
+    
     .column-border {
         border-right: 1px solid #e0e0e0;
         padding-right: 20px;
     }
-    .checklist-card {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 16px;
-        margin-bottom: 16px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .checklist-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-    }
-    .checklist-title {
-        font-size: 16px;
-        font-weight: bold;
-        color: #333;
-    }
-    .checklist-timestamp {
-        font-size: 12px;
-        color: #6c757d;
-    }
-    .checklist-info {
+    
+    .checklist-item {
+        padding: 8px 12px;
         font-size: 14px;
-        color: #555;
-        margin-bottom: 12px;
-    }
-    .checklist-status {
+        border-left: 2px solid #27ae60;
+        margin-left: 12px;
+        margin-bottom: 8px;
         display: flex;
         flex-wrap: wrap;
-        gap: 8px;
+        align-items: center;
+        gap: 10px;
     }
-    .status-item {
+    
+    .checklist-item:hover {
+        background-color: #f8f9fa;
+    }
+    
+    .highlight-author {
+        font-weight: 600;
         font-size: 13px;
-        padding: 4px 8px;
+        color: #333;
+    }
+    
+    .highlight-update {
+        background-color: #27ae60;
+        color: #ffffff;
+        padding: 3px 10px;
         border-radius: 12px;
+        font-size: 12px;
+        font-weight: 600;
         display: inline-flex;
         align-items: center;
         gap: 4px;
+        white-space: nowrap;
+        max-width: fit-content;
     }
-    .status-completed {
-        background-color: #d4edda;
-        color: #155724;
+    
+    /* Subtle arrow styling */
+    .action-arrow {
+        color: #adb5bd;
+        font-weight: 400;
+        margin: 0 2px;
     }
-    .status-pending {
-        background-color: #fff3cd;
-        color: #856404;
-    }
-    .checklist-item {
-        padding: 6px;
-        font-size: 14px;
-        border-left: 2px solid #1f77b4;
-        margin-left: 20px;
-        margin-bottom: 6px;
-        display: flex;
-        align-items: center;
-    }
-    .highlight-author {
-        font-weight: 501;
-        font-size: 14px;
-        color: #292929;
-    }
-    .highlight-update {
-        background-color: #47a65b;
-        color: #ffffff;
-        padding: 2px 8px;
-        border-radius: 16px;
-        font-size: 12px;
-        font-weight: 501;
-        display: inline-block; /* Changed to inline-block to fit text */
-        align-items: center;
-        justify-content: center;
-        margin-top: 3px;
-        gap: 4px;
-        line-height: 1.2;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-        white-space: nowrap; /* Prevents text wrapping */
-        max-width: fit-content; /* Ensures badge size fits content */
-    }
-        </style>
-    """, unsafe_allow_html=True)
+</style>
+""", unsafe_allow_html=True)
 
 st.cache_data.clear()
 
@@ -297,28 +266,35 @@ def calculate_session_duration(session_group):
     total_seconds = int(duration.total_seconds())
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    
+    # Format duration more readably
+    if hours > 0:
+        return f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0:
+        return f"{minutes}m {seconds}s"
+    else:
+        return f"{seconds}s"
 
 
 # Assign emojis based on action type
 def get_action_emoji(action):
     action_emojis = {
         'logged in': '🔐',
-        'navigated to page': '➡️',
+        'navigated to page': '🧭',
         'changed author type': '✍️',
         'updated writing details': '📝',
-        'updated author': '📲',
-        'updated proofreading details' : '🔦',
-        'updated formatting details': '📑',
-        'updated formatting correction': '📑',
+        'updated author': '👤',
+        'updated proofreading details': '🔍',
+        'updated formatting details': '📐',
+        'updated formatting correction': '📐',
         'updated writing correction': '✏️',
-        'updated proofreading correction': '🕵',
-        'added formatting correction': '📄',
-        'added proofreading correction': '🕵',
+        'updated proofreading correction': '🔎',
+        'added formatting correction': '➕',
+        'added proofreading correction': '➕',
         'updated writing correction details': '✏️',
-        'added writing correction': '✏️',
+        'added writing correction': '➕',
         'updated cover details': '🎨',
-        'edited print edition' : '🖨️',
+        'edited print edition': '🖨️',
         'updated book': '📚',
         'toggled checkbox': '☑️',
         'updated writing corrections': '✏️',
@@ -333,48 +309,54 @@ def get_action_emoji(action):
     }
     return action_emojis.get(action.lower(), '⚙️')
 
+# Header with improved layout
 col1, col2 = st.columns([12, 1], vertical_alignment="bottom")
 
 with col1:
-    st.write("## 📝 Activity Log")
+    st.markdown("## 📝 Activity Log")
 with col2:
-    if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
+    if st.button("🔄 Refresh", key="refresh", type="tertiary", use_container_width=True):
         st.cache_data.clear()
 
 # Fetch distinct users and actions for pills
 conn = connect_db()
 with conn.session as s:
-    result = s.execute(text("SELECT DISTINCT username FROM activity_log"))
+    result = s.execute(text("SELECT DISTINCT username FROM activity_log ORDER BY username"))
     users_df = pd.DataFrame(result.fetchall(), columns=["username"])
-    result = s.execute(text("SELECT DISTINCT action FROM activity_log"))
+    result = s.execute(text("SELECT DISTINCT action FROM activity_log ORDER BY action"))
     actions_df = pd.DataFrame(result.fetchall(), columns=["action"])
     s.commit()
 
 user_options = ['All'] + sorted(users_df['username'].tolist())
 action_options = sorted(actions_df['action'].tolist())
 
-# Filters and search bar
+# Improved filters layout
 col1, col2, col3 = st.columns([1, 6, 2], gap="small")
 
+with col1:
+    default_date = date.today()
+    selected_date = st.date_input("📅 Date", value=default_date, 
+                                  label_visibility="collapsed", key="date_input")
+
 with col2:
-    search_term = st.text_input("Search by Book ID, Author ID, or Details", "", 
-                                placeholder="Enter Book ID, Author ID, or any term...", key="search_bar",
+    search_term = st.text_input("🔍 Search", "", 
+                                placeholder="Search by Book ID, Author ID, or Details...", 
+                                key="search_bar",
                                 label_visibility="collapsed")
 
 with col3:
-    selected_action = st.selectbox("Filter by Action", options=action_options, 
-                                    index=None, label_visibility="collapsed", placeholder="Filter by Action")
-    
-with col1:
-    default_date = date.today()
-    selected_date = st.date_input("Select Date", value=default_date, 
-                                        label_visibility="collapsed", key="date_input")
+    selected_action = st.selectbox("🎯 Action", options=action_options, 
+                                   index=None, label_visibility="collapsed", 
+                                   placeholder="Filter by Action")
 
-selected_user = st.segmented_control("Filter by User", options=user_options, 
-                                            default=user_options[0], label_visibility="collapsed")
+selected_user = st.segmented_control("👥 Filter by User", options=user_options, 
+                                     default=user_options[0], 
+                                     label_visibility="collapsed")
+
+st.divider()
 
 # Create two columns for main activity log and checklist updates
-col_main, col_checklist = st.columns([1.5, 1])
+col_main, col_checklist = st.columns([1.5, 1], gap="medium")
 
 # Main Activity Log
 with col_main:
@@ -391,18 +373,27 @@ with col_main:
 
     # Display activities in tree view
     if not df.empty:
+        # Show activity count
+        st.caption(f"📊 {len(df)} activities found")
+        
         grouped = df.groupby(['user_id', 'username'])
         
         for (user_id, username), user_group in grouped:
-            with st.expander(f"👤 {username} (ID: {user_id})", expanded=True):
+            with st.expander(f"👤 **{username}** • ID: {user_id}", expanded=True):
                 # Sort sessions by most recent activity
                 session_groups = user_group.groupby('session_id').agg({'timestamp': 'max'}).reset_index()
                 session_groups = session_groups.sort_values('timestamp', ascending=False)
                 
-                for session_id in session_groups['session_id']:
+                for idx, session_id in enumerate(session_groups['session_id'], 1):
                     session_group = user_group[user_group['session_id'] == session_id].sort_values('timestamp', ascending=False)
                     duration = calculate_session_duration(session_group)
-                    st.markdown(f'<div class="session-node">📂 Session <span class="session-duration">(Duration: {duration})</span></div>', unsafe_allow_html=True)
+                    activity_count = len(session_group)
+                    st.markdown(
+                        f'<div class="session-node">📂 Session {idx} • '
+                        f'{activity_count} {"activity" if activity_count == 1 else "activities"} • '
+                        f'<span class="session-duration">⏱️ {duration}</span></div>', 
+                        unsafe_allow_html=True
+                    )
                     
                     # Display activities as tree leaves
                     for _, row in session_group.iterrows():
@@ -411,54 +402,63 @@ with col_main:
                         st.markdown(
                             f"""
                             <div class="tree-item">
-                                <div class="timestamp">{formatted_time}</div>
-                                <div class="action">{emoji} {row['action']} → </div>
-                                <div class="details">{row['details']}</div>
+                                <span class="timestamp">🕐 {formatted_time}</span>
+                                <span class="action">{emoji} {row['action']}</span>
+                                <span class="action-arrow">→</span>
+                                <span class="details">{row['details']}</span>
                             </div>
                             """,
                             unsafe_allow_html=True
                         )
-                st.markdown('</div>', unsafe_allow_html=True)
     else:
-        user_filter = f" for {selected_user}" if selected_user and selected_user != 'All' else ''
-        action_filter = f" and action {selected_action}" if selected_action else ''
-        search_filter = f" with search term {search_term}" if search_term else ''
-        st.info(f"No activities found for {selected_date.strftime('%B %d, %Y')}{user_filter}{action_filter}{search_filter}.")
+        user_filter = f" for **{selected_user}**" if selected_user and selected_user != 'All' else ''
+        action_filter = f" with action **{selected_action}**" if selected_action else ''
+        search_filter = f" matching **'{search_term}'**" if search_term else ''
+        st.info(f"📭 No activities found for **{selected_date.strftime('%B %d, %Y')}**{user_filter}{action_filter}{search_filter}.")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
 # Checklist Updates
 with col_checklist:
-    st.write("#### ✅ Author Updates")
+    st.markdown("#### ✅ Author Checklist Updates")
     
     # Fetch checklist updates with book and author details
     checklist_df = get_checklist_updates(selected_date.strftime('%Y-%m-%d'))
     
     if not checklist_df.empty:
+        # Show update count
+        st.caption(f"📊 {len(checklist_df)} checklist updates")
+        
         # Group by book_id and title for a tree-like structure
         grouped = checklist_df.groupby(['book_id', 'title'])
         
         for (book_id, title), book_group in grouped:
-            with st.expander(f"📖 {title} (ID: {book_id})", expanded=True):
+            update_count = len(book_group)
+            with st.expander(f"📖 **{title}** • {update_count} {"update" if update_count == 1 else "updates"}", expanded=True):
                 # Sort updates by timestamp, most recent first
                 book_group = book_group.sort_values('timestamp', ascending=False)
                 
                 for _, row in book_group.iterrows():
                     formatted_time = format_timestamp(row['timestamp'])
                     # Extract changed field and value from details
-                    changed_field = row['details'].split(', ')[-1].split(' changed to ')[0]
-                    changed_value = row['details'].split(' changed to ')[-1].strip("'")
+                    try:
+                        changed_field = row['details'].split(', ')[-1].split(' changed to ')[0]
+                        changed_value = row['details'].split(' changed to ')[-1].strip("'")
+                    except:
+                        changed_field = "Update"
+                        changed_value = row['details']
+                    
                     st.markdown(
                         f"""
                         <div class="checklist-item">
-                            <div class="timestamp">{formatted_time}</div>
+                            <span class="timestamp">🕐 {formatted_time}</span>
                             <div class="details_checklist">
-                                <span class="highlight-author">{row['name']} : ID {row['author_id']}</span>
-                                <span class="highlight-update">{changed_field} → {changed_value}</span>
+                                <span class="highlight-author">👤 {row['name']} • ID: {row['author_id']}</span>
+                                <span class="highlight-update">✨ {changed_field} → {changed_value}</span>
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
     else:
-        st.info(f"No author checklist updates found for {selected_date.strftime('%B %d, %Y')}.")
+        st.info(f"📭 No author checklist updates for **{selected_date.strftime('%B %d, %Y')}**.")

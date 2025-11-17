@@ -1398,9 +1398,11 @@ def confirm_submission_dialog(conn, timesheet_id, current_status):
 def show_weekly_dialog(conn, user_id, username, week_start_date, is_manager=False, is_admin = False):
     """Dialog for viewing weekly timesheet details with a dynamic horizontal layout, including System Failure."""
     week_end_date = week_start_date + timedelta(days=6)
+    # Calculate week number
+    week_number = week_start_date.isocalendar().week
     col1, col2 = st.columns([2,7], vertical_alignment="bottom")
     with col1:
-        st.subheader(f"Week Summary for {username}", anchor=False)
+        st.subheader(f"Week #{week_number} Summary for {username}", anchor=False)
     with col2:
         st.caption(f"{week_start_date.strftime('%b %d')} - {week_end_date.strftime('%b %d, %Y')}")
 
@@ -2129,16 +2131,21 @@ def timesheet_history_page(conn):
                 is_future_week = week_start_date > now_date
                 has_timesheet = bool(week_days and timesheet_status)
                 disabled = is_future_week or not has_timesheet
+                # Calculate week number
+                week_number = week_start_date.isocalendar().week
+                
                 
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
                     st.button(button_text, key=f"week_btn_hist_{week_start_date}_disabled", width='stretch', disabled=True)
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
                     if st.button(f"{status_emoji} {status_label}", key=f"week_btn_hist_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
 
     if "show_week_details_for" not in st.session_state:
         st.session_state.show_week_details_for = None
@@ -2285,15 +2292,20 @@ def manager_dashboard(conn):
                 has_timesheet = bool(week_days and timesheet_status)
                 disabled = is_future_week or not has_timesheet
                 
+                # Calculate week number
+                week_number = week_start_date.isocalendar().week
+                
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
                     st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", width='stretch', disabled=True)
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
                     if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
 
     if "show_week_details_for" not in st.session_state:
         st.session_state.show_week_details_for = None
@@ -2424,16 +2436,20 @@ def admin_dashboard(conn):
                 is_future_week = week_start_date > now_date
                 has_timesheet = bool(week_days and timesheet_status)
                 disabled = is_future_week or not has_timesheet
+                # Calculate week number
+                week_number = week_start_date.isocalendar().week
                 
                 if disabled:
                     button_text = "No Data" if not has_timesheet else "Future"
                     st.button(button_text, key=f"week_btn_{week_start_date}_disabled", width='stretch', disabled=True)
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
                 else:
                     status_emoji = status_map.get(timesheet_status, '⚪️')
                     status_label = status_display.get(timesheet_status, "Unknown")
                     if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", width='stretch'):
                         st.session_state.show_week_details_for = week_start_date
                         st.rerun()
+                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
 
     if "show_week_details_for" not in st.session_state:
         st.session_state.show_week_details_for = None

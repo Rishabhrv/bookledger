@@ -314,7 +314,7 @@ if "cleanup_done" not in st.session_state:
 
 # Run log cleanup on app startup (once per session)
 if not st.session_state.cleanup_done:
-    clean_old_logs(conn, days_to_keep=30)
+    clean_old_logs(conn)
     st.session_state.cleanup_done = True
 
 ########################################################################################################################

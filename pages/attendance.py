@@ -3,11 +3,13 @@ import pandas as pd
 from datetime import datetime, timedelta, date, time as dt_time
 import calendar
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 import plotly.express as px
 import plotly.graph_objects as go
 from collections import defaultdict
 import re
 from auth import validate_token
+from pages.tasks import get_ist_time
 from constants import log_activity, initialize_click_and_session_id, connect_db
 
 
@@ -1470,7 +1472,7 @@ def calculate_longest_streak(present_dates, all_work_days):
 
 
 # Create tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Mark Attendance", "👤 Individual View", "📊 Daily Report", "📊 Analytics", "➕ Add Employee"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📝 Mark Attendance", "👤 Employees View", "📊 Daily Report", "📊 Analytics", "➕ Manage Employees"])
 
 
 ###################################################################################################################################
@@ -1508,9 +1510,8 @@ with tab1:
         st.error(f"Error fetching attendance: {e}")
         existing_attendance = {}
     
-    # Form for marking holiday for all employees
+    # Form for marking holiday for all employees (unchanged)
     with st.form(key="holiday_form", border=False):
-
         with st.popover("🎉 Mark Holiday for All Employees", width=500):
             holiday_name = st.text_input("Holiday Name", placeholder="e.g., Christmas Day")
             holiday_submitted = st.form_submit_button("🎉 Mark Holiday Today", width='stretch', type="primary")
@@ -1521,6 +1522,7 @@ with tab1:
                     st.toast("Error: Holiday name required", icon="🚨")
                 else:
                     success_count = 0
+                    ist_time = get_ist_time()
                     for emp in employees:
                         emp_id, emp_name, dept = emp
                         # Skip if already marked as Holiday with the same name
@@ -1539,6 +1541,15 @@ with tab1:
                     if success_count > 0:
                         st.success(f"✅ Holiday '{holiday_name}' marked for {success_count} employee(s) on {selected_date}")
                         st.toast(f"Holiday marked for {success_count} employee(s)", icon="🎉")
+                        # Log holiday marking activity
+                        log_activity(
+                            conn_log,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "MARK_HOLIDAY",
+                            f"Marked holiday '{holiday_name}' for {success_count} employee(s) on {selected_date}"
+                        )
                     else:
                         st.info("No changes to save. Holiday already marked for all employees.")
 
@@ -1731,36 +1742,78 @@ with tab1:
         if submitted:
             success_count = 0
             invalid_employees = []
+            ist_time = get_ist_time()
             for emp_id, data in attendance_data.items():
-                # Validate Check-In and Check-Out for Present or Half Day
+                # Validate Check-In for Present or Half Day
                 if data["status"] in ["Present", "Half Day"]:
-                    if not data["check_in"] or not data["check_out"]:
+                    if not data["check_in"]:
                         invalid_employees.append(f'<span class="highlight-name">{data["emp_name"]}</span>')
                         continue
                 
-                # Save if status is Present/Half Day or has notes, or is Leave/Holiday
-                if data["status"] in ["Present", "Half Day"] or data["notes"].strip() or data["status"] in ["Leave", "Holiday"]:
-                    if mark_attendance(
+                # Check if attendance record has changed or is new
+                existing = existing_attendance.get(emp_id, (None, None, None, ""))
+                existing_check_in = existing[0]
+                existing_check_out = existing[1]
+                existing_status = existing[2]
+                existing_notes = existing[3]
+
+                # Convert existing times to string for comparison
+                if existing_check_in and isinstance(existing_check_in, timedelta):
+                    total_sec = int(existing_check_in.total_seconds())
+                    hours = total_sec // 3600
+                    minutes = (total_sec % 3600) // 60
+                    existing_check_in = datetime.strftime(datetime(1, 1, 1, hours, minutes), "%H:%M:%S")
+                else:
+                    existing_check_in = None
+                
+                if existing_check_out and isinstance(existing_check_out, timedelta):
+                    total_sec = int(existing_check_out.total_seconds())
+                    hours = total_sec // 3600
+                    minutes = (total_sec % 3600) // 60
+                    existing_check_out = datetime.strftime(datetime(1, 1, 1, hours, minutes), "%H:%M:%S")
+                else:
+                    existing_check_out = None
+                
+                # Determine if the record is new or changed
+                is_new_or_changed = (
+                    data["check_in"] != existing_check_in or
+                    data["check_out"] != existing_check_out or
+                    data["status"] != existing_status or
+                    data["notes"].strip() != existing_notes.strip()
+                )
+
+                # Save if status is Present/Half Day with check-in, or has notes, or is Leave/Holiday, and it's new/changed
+                if (data["status"] in ["Present", "Half Day"] and data["check_in"]) or data["notes"].strip() or data["status"] in ["Leave", "Holiday"]:
+                    if is_new_or_changed and mark_attendance(
                         conn,
                         emp_id,
                         selected_date,
                         data["check_in"],
-                        data["check_out"],
+                        data["check_out"],  # Can be None if not provided
                         data["status"],
                         data["notes"]
                     ):
                         success_count += 1
+                        # Log individual attendance marking
+                        log_activity(
+                            conn_log,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "MARK_ATTENDANCE",
+                            f"Marked attendance for {data['emp_name']} on {selected_date} with status {data['status']}"
+                        )
             
             if invalid_employees:
                 st.markdown(
                     f"""
                     <div style="background-color: #ffebee; color: #c62828; padding: 10px; border-radius: 5px; border-left: 4px solid #f44336;">
-                        <strong>Error:</strong> Check-In and Check-Out times are required for {', '.join(invalid_employees)} with status 'Present' or 'Half Day'.
+                        <strong>Error:</strong> Check-In time is required for {', '.join(invalid_employees)} with status 'Present' or 'Half Day'.
                     </div>
                     """,
                     unsafe_allow_html=True
                 )
-                st.toast("Error: Check-In and Check-Out times required", icon="🚨")
+                st.toast("Error: Check-In time required", icon="🚨")
             if success_count > 0:
                 st.success(f"✅ {success_count} attendance record(s) saved for {selected_date}")
             elif not invalid_employees:
@@ -3217,12 +3270,8 @@ with tab4:
         
         total_present_days = sum(m['present_days'] for m in employee_metrics.values())
         total_half_days = sum(m['half_days'] for m in employee_metrics.values())
-        total_leave_days = sum(m['leave_days'] for m in employee_metrics.values())
         total_late_arrivals = sum(m['late_arrivals'] for m in employee_metrics.values())
         total_early_exits = sum(m['early_exits'] for m in employee_metrics.values())
-        total_overtime_days = sum(m['overtime_days'] for m in employee_metrics.values())
-        total_early_arrivals = sum(m['early_check_ins'] for m in employee_metrics.values())
-        total_holidays = sum(m.get('holidays', 0) for m in employee_metrics.values())
 
         # --- Corrected Team Punctuality Score (Percentage-Based) ---
         # Numerator: Total days attended by anyone MINUS total infractions
@@ -3260,205 +3309,85 @@ with tab4:
             avg_check_out_str = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
 
         if view_type == "Monthly":
-            col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+            col1, col2, col3, col4, col5 = st.columns(5)
+
             with col1:
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #6f42c1;">{len(employee_metrics)}</div>
+                    <div class="stat-label">Employees</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with col2:
                 st.markdown(f"""
                 <div class="stat-card">
                     <div class="stat-value" style="color: #28a745;">{team_attendance_rate:.1f}%</div>
                     <div class="stat-label">Attendance Rate</div>
                 </div>
                 """, unsafe_allow_html=True)
-            with col2:
+            with col3:
                 st.markdown(f"""
                 <div class="stat-card">
                     <div class="stat-value" style="color: #6f42c1;">{team_punctuality_score:.1f}%</div>
                     <div class="stat-label">Punctuality Rate</div>
                 </div>
                 """, unsafe_allow_html=True)
-            with col3:
+            with col4:
                 st.markdown(f"""
                 <div class="stat-card">
                     <div class="stat-value" style="color: #ffc107;">{working_days}</div>
                     <div class="stat-label">Working Days</div>
                 </div>
                 """, unsafe_allow_html=True)
-            with col4:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{total_present_days}</div>
-                    <div class="stat-label">Present</div>
-                </div>
-                """, unsafe_allow_html=True)
             with col5:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #dc3545;">{total_leave_days}</div>
-                    <div class="stat-label">Leaves</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col6:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ffc107;">{total_half_days}</div>
-                    <div class="stat-label">Half Days</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col7:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ed5721;">{total_late_arrivals}</div>
-                    <div class="stat-label">Late</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            col8, col9, col10, col11, col12, col13 = st.columns(6)
-            with col8:
                 st.markdown(f"""
                 <div class="stat-card">
                     <div class="stat-value" style="color: #3498db;">{avg_check_in_str}</div>
                     <div class="stat-label">Avg Check-In</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col9:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{avg_check_out_str}</div>
-                    <div class="stat-label">Avg Check-Out</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col10:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{len(employee_metrics)}</div>
-                    <div class="stat-label">Holidays</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col11:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{total_overtime_days}</div>
-                    <div class="stat-label">Overtime</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col12:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{total_early_arrivals}</div>
-                    <div class="stat-label">Early Arrivals</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col13:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #5bc0de;">{total_early_exits}</div>
-                    <div class="stat-label">Early Exits</div>
                 </div>
                 """, unsafe_allow_html=True)
 
         elif view_type == "Yearly":
-            col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-            with col1:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{team_attendance_rate:.1f}%</div>
-                    <div class="stat-label">Attendance Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{team_punctuality_score:.1f}</div>
-                    <div class="stat-label">Punctuality Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ffc107;">{working_days}</div>
-                    <div class="stat-label">Working Days</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col4:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{total_present_days}</div>
-                    <div class="stat-label">Present</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col5:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #dc3545;">{total_leave_days}</div>
-                    <div class="stat-label">Leaves</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col6:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ffc107;">{total_half_days}</div>
-                    <div class="stat-label">Half Days</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col7:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ed5721;">{total_late_arrivals}</div>
-                    <div class="stat-label">Late</div>
-                </div>
-                """, unsafe_allow_html=True)
+            col1, col2, col3, col4, col5 = st.columns(5)
 
-            col8, col9, col10, col11, col12, col13, col14 = st.columns(7)
-            with col8:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{avg_check_in_str}</div>
-                    <div class="stat-label">Avg Check-In</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col9:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{avg_check_out_str}</div>
-                    <div class="stat-label">Avg Check-Out</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col10:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #17a2b8;">{total_holidays}</div>
-                    <div class="stat-label">Holidays</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col11:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{total_overtime_days}</div>
-                    <div class="stat-label">Overtime</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col12:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{total_early_arrivals}</div>
-                    <div class="stat-label">Early Arrivals</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col13:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #5bc0de;">{total_early_exits}</div>
-                    <div class="stat-label">Early Exits</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col14:
+            with col1:
                 st.markdown(f"""
                 <div class="stat-card">
                     <div class="stat-value" style="color: #6f42c1;">{len(employee_metrics)}</div>
                     <div class="stat-label">Total Employees</div>
                 </div>
                 """, unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
+
+            with col2:
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #28a745;">{team_attendance_rate:.1f}%</div>
+                    <div class="stat-label">Attendance Rate</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col3:
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #6f42c1;">{team_punctuality_score:.1f}</div>
+                    <div class="stat-label">Punctuality Rate</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col4:
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #ffc107;">{working_days}</div>
+                    <div class="stat-label">Working Days</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col5:
+                st.markdown(f"""
+                <div class="stat-card">
+                    <div class="stat-value" style="color: #3498db;">{avg_check_in_str}</div>
+                    <div class="stat-label">Avg Check-In</div>
+                </div>
+                """, unsafe_allow_html=True)
+
         
         # Helper function to display leaderboard with Streamlit dataframe
         def display_leaderboard(title, icon, header_class, data_df, columns_to_show, limit=10):
@@ -3603,20 +3532,58 @@ with tab5:
             submitted = st.form_submit_button("➕ Add Employee", width='stretch', type="primary")
 
             if submitted:
-                if emp_name and emp_email and emp_code:
+                # Initialize error flag
+                has_error = False
+                
+                # Required fields check
+                if not all([emp_code, emp_name, emp_email]):
+                    st.warning("Please fill in all required fields (Code, Name, and Email)")
+                    has_error = True
+
+                if not has_error:
                     try:
                         with conn.session as s:
-                            s.execute(text("""
-                                INSERT INTO employees (employee_code, employee_name, employee_email, designation)
-                                VALUES (:code, :name, :email, :dept)
-                            """), {"code": emp_code, "name": emp_name, "email": emp_email, "dept": emp_dept})
-                            s.commit()
-                        st.success(f"✅ Employee '{emp_name}' added successfully!")
-                        st.rerun()
+                            # Check if employee code or email already exists
+                            existing = s.execute(text("""
+                                SELECT employee_code, employee_email 
+                                FROM employees 
+                                WHERE employee_code = :code OR employee_email = :email
+                            """), {"code": emp_code, "email": emp_email}).fetchone()
+                            
+                            if existing:
+                                if existing.employee_code == emp_code:
+                                    st.warning("⚠️ This employee code is already in use")
+                                if existing.employee_email == emp_email:
+                                    st.warning("⚠️ This email is already registered")
+                                has_error = True
+                            
+                            if not has_error:
+                                s.execute(text("""
+                                    INSERT INTO employees (employee_code, employee_name, employee_email, designation)
+                                    VALUES (:code, :name, :email, :dept)
+                                """), {
+                                    "code": emp_code.strip(),
+                                    "name": emp_name.strip(),
+                                    "email": emp_email.strip(),
+                                    "dept": emp_dept.strip() if emp_dept else None
+                                })
+                                s.commit()
+                                ist_time = get_ist_time()
+                                st.success(f"✅ Employee '{emp_name}' added successfully!")
+                                # Log the add employee activity
+                                log_activity(
+                                    conn_log,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "ADD_EMPLOYEE",
+                                    f"Added employee '{emp_name}' (Code: {emp_code}, Email: {emp_email}, Designation: {emp_dept or 'None'})"
+                                )
+                                st.rerun()
+                    except IntegrityError as e:
+                        st.error("Database error: This employee code or email is already in use")
                     except Exception as e:
                         st.error(f"Error adding employee: {e}")
-                else:
-                    st.warning("Please fill in all required fields (Code, Name, and Email)")
 
     with col1:
         all_employees = get_all_employees_with_status(conn)
@@ -3643,7 +3610,7 @@ with tab5:
                     width='stretch',
                     hide_index=True,
                     column_config={
-                        "employee_id": None, # Hide employee_id
+                        "employee_id": None,  # Hide employee_id
                         "employee_code": st.column_config.TextColumn("Employee Code", disabled=True),
                         "employee_name": "Name",
                         "designation": "Designation",
@@ -3666,10 +3633,26 @@ with tab5:
                         st.info("No changes to save.")
                     else:
                         update_count = 0
+                        ist_time = get_ist_time()
                         for emp_id in original_df[changed_rows_mask].index:
                             details = edited_df_indexed.loc[emp_id].to_dict()
+                            original_details = original_df.loc[emp_id].to_dict()
                             if update_employee(conn, emp_id, details):
                                 update_count += 1
+                                # Identify changed fields
+                                changed_fields = []
+                                for field in ['employee_name', 'designation', 'employment_status']:
+                                    if details[field] != original_details[field]:
+                                        changed_fields.append(f"{field}: {original_details[field]} -> {details[field]}")
+                                # Log the update activity
+                                log_activity(
+                                    conn_log,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "UPDATE_EMPLOYEE",
+                                    f"Updated employee {details['employee_name']} (ID: {emp_id}) - {', '.join(changed_fields)}"
+                                )
                         if update_count > 0:
                             st.success(f"Successfully updated {update_count} employee(s).")
                             st.rerun()
@@ -3696,4 +3679,3 @@ with tab5:
                 )
         else:
             st.info("No employees in the system yet.")
-

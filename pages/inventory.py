@@ -4,7 +4,8 @@ import plotly.express as px
 import time
 from auth import validate_token
 from sqlalchemy import text
-from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
+import plotly.graph_objects as go
+from constants import log_activity, initialize_click_and_session_id, connect_db
 
 
 
@@ -245,6 +246,315 @@ if "reset_trigger" not in st.session_state:
 
 # Fetch data
 df = fetch_data()
+
+data_for_chart = fetch_data()
+
+
+@st.dialog("Inventory Visualizations", width="large")
+def show_charts(data_for_chart):
+    st.markdown("""
+        <style>
+        .metric-card {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .metric-label {
+            font-size: 1em;
+            opacity: 0.9;
+        }
+        .section-header {
+            color: #2c3e50;
+            font-size: 1.5em;
+            font-weight: 600;
+            margin: 30px 0 20px 0;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #3498db;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    df = data_for_chart
+    
+    # Calculate key metrics
+    total_books = len(df)
+    total_printed = df['total_printed_books'].sum()
+    total_sales = df['website_sales'].sum() + df['amazon_sales'].sum() + df['flipkart_sales'].sum() + df['direct_sales'].sum()
+    books_to_authors = df['books_sent_to_authors'].sum()
+    total_in_stock = total_printed - total_sales - books_to_authors
+    
+    # Top metrics row - First row
+    st.markdown('<div class="section-header">📊 Key Metrics Overview</div>', unsafe_allow_html=True)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    with col1:
+        st.metric(label="📚 Total Titles", value=f"{total_books:,}")
+    with col2:
+        st.metric(label="🖨️ Total Printed", value=f"{int(total_printed):,}")
+    with col3:
+        st.metric(label="💰 Total Sales", value=f"{int(total_sales):,}")
+    with col4:
+        stock_percentage = (total_in_stock / total_printed * 100) if total_printed > 0 else 0
+        st.metric(label="📦 In Stock", value=f"{int(total_in_stock):,}", 
+                 delta=f"{stock_percentage:.1f}%")
+    with col5:
+        st.metric(label="✍️ To Authors", value=f"{int(books_to_authors):,}")
+    
+    with col6:
+        out_of_stock = len(df[df['total_printed_books'] - df['website_sales'] - 
+                              df['amazon_sales'] - df['flipkart_sales'] - 
+                              df['direct_sales'] - df['books_sent_to_authors'] <= 0])
+        st.metric(label="⚠️ Out of Stock", value=f"{out_of_stock:,}")
+
+
+    st.markdown("---")
+
+
+    # Sales Breakdown Section
+    st.markdown('<div class="section-header">💰 Sales Channel Performance</div>', unsafe_allow_html=True)
+    
+    sales_col1, sales_col2 = st.columns([2, 1])
+    
+    with sales_col1:
+        sales_data = pd.DataFrame({
+            'Channel': ['AGPH Store', 'Amazon', 'Flipkart', 'Direct'],
+            'Sales': [
+                df['website_sales'].sum(),
+                df['amazon_sales'].sum(),
+                df['flipkart_sales'].sum(),
+                df['direct_sales'].sum()
+            ]
+        })
+        
+        if sales_data['Sales'].sum() > 0:
+            colors_sales = ['#3498db', '#2ecc71', '#e74c3c', '#95a5a6']
+            
+            fig_sales = go.Figure()
+            fig_sales.add_trace(go.Pie(
+                labels=sales_data['Channel'],
+                values=sales_data['Sales'],
+                hole=0.4,
+                marker=dict(colors=colors_sales),
+                textinfo='label+percent',
+                textfont=dict(size=14),
+                hovertemplate='<b>%{label}</b><br>Sales: %{value:,}<br>Percentage: %{percent}<extra></extra>'
+            ))
+            
+            fig_sales.update_layout(
+                title={
+                    'text': '📊 Sales Distribution by Channel',
+                    'x': 0.5,
+                    'xanchor': 'center',
+                    'font': {'size': 18, 'color': '#2c3e50'}
+                },
+                height=400,
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=-0.2,
+                    xanchor="center",
+                    x=0.5
+                ),
+                annotations=[dict(
+                    text=f'Total<br>{int(sales_data["Sales"].sum()):,}',
+                    x=0.5, y=0.5,
+                    font_size=16,
+                    showarrow=False
+                )]
+            )
+            
+            st.plotly_chart(fig_sales, use_container_width=True)
+        else:
+            st.info("ℹ️ No sales data available to display.")
+    
+    with sales_col2:
+        st.markdown("### 🏆 Top Performer")
+        if sales_data['Sales'].sum() > 0:
+            top_channel = sales_data.loc[sales_data['Sales'].idxmax()]
+            top_percentage = (top_channel['Sales'] / sales_data['Sales'].sum() * 100)
+            
+            st.markdown(f"**{top_channel['Channel']}**")
+            st.metric("Sales", f"{int(top_channel['Sales']):,}", 
+                     delta=f"{top_percentage:.1f}% of total")
+            
+            st.markdown("---")
+            st.markdown("### 📊 All Channels")
+            for _, row in sales_data.iterrows():
+                if row['Sales'] > 0:
+                    pct = row['Sales'] / sales_data['Sales'].sum() * 100
+                    st.markdown(f"**{row['Channel']}:** {int(row['Sales']):,} ({pct:.1f}%)")
+    
+    st.markdown("---")
+    
+    # Cell Occupancy Section
+    st.markdown('<div class="section-header">🗄️ Storage Cell Visual Map</div>', unsafe_allow_html=True)
+    
+    # Clean and prepare cell data with correct logic
+    # For each cell: count unique books, and sum their in-stock quantities
+    cell_data = []
+    for cell_no in df['rack_number'].dropna().unique():
+        if str(cell_no) == 'nan' or cell_no == 'Unassigned':
+            continue
+            
+        # Get all books in this cell
+        books_in_cell = df[df['rack_number'] == cell_no].copy()
+        
+        # Count unique books (titles)
+        unique_books = len(books_in_cell)
+        
+        # Calculate in-stock for each book and sum them
+        books_in_cell['In Stock'] = (
+            books_in_cell['total_printed_books'] - 
+            books_in_cell['website_sales'] - 
+            books_in_cell['amazon_sales'] - 
+            books_in_cell['flipkart_sales'] - 
+            books_in_cell['direct_sales'] - 
+            books_in_cell['books_sent_to_authors']
+        )
+        
+        # Sum of all in-stock books in this cell
+        total_books_in_stock = books_in_cell['In Stock'].sum()
+        
+        cell_data.append({
+            'Cell No.': str(cell_no),
+            'Unique Titles': unique_books,
+            'Total In-Stock Books': int(max(0, total_books_in_stock))  # Ensure non-negative
+        })
+    
+    cell_df = pd.DataFrame(cell_data)
+    
+    # Sort cells numerically
+    if not cell_df.empty:
+        try:
+            cell_df['Cell No. Numeric'] = pd.to_numeric(cell_df['Cell No.'], errors='coerce')
+            cell_df = cell_df.sort_values('Cell No. Numeric').drop('Cell No. Numeric', axis=1)
+        except:
+            cell_df = cell_df.sort_values('Cell No.')
+    
+    if not cell_df.empty:
+        # Display cells in columns - 10 per row
+        cells_per_row = 10
+        num_rows = (len(cell_df) + cells_per_row - 1) // cells_per_row
+        
+        for row_idx in range(num_rows):
+            cols = st.columns(cells_per_row)
+            start_idx = row_idx * cells_per_row
+            end_idx = min(start_idx + cells_per_row, len(cell_df))
+            
+            for col_idx, (_, cell_row) in enumerate(cell_df.iloc[start_idx:end_idx].iterrows()):
+                with cols[col_idx]:
+                    st.markdown(f"""
+                        <div style="
+                            background: #f8f9fa;
+                            border: 2px solid #3498db;
+                            border-radius: 6px;
+                            padding: 8px 5px;
+                            text-align: center;
+                            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+                            margin-bottom: 8px;
+                        ">
+                            <div style="font-size: 11px; font-weight: 600; color: #2c3e50; margin-bottom: 4px;">C{cell_row['Cell No.']}</div>
+                            <div style="font-size: 20px; font-weight: bold; color: #3498db; margin: 4px 0;">{int(cell_row['Unique Titles'])}</div>
+                            <div style="font-size: 9px; color: #7f8c8d;">titles</div>
+                            <div style="font-size: 10px; color: #34495e; margin-top: 2px;">{int(cell_row['Total In-Stock Books'])} in stock</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Quick stats below
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📦 Active Cells", len(cell_df))
+        with col2:
+            st.metric("📚 Avg Titles/Cell", f"{cell_df['Unique Titles'].mean():.1f}")
+        with col3:
+            st.metric("📖 Total In-Stock", f"{int(cell_df['Total In-Stock Books'].sum()):,}")
+        with col4:
+            busiest = cell_df.loc[cell_df['Unique Titles'].idxmax()]
+            st.metric("🏆 Busiest Cell", f"Cell {busiest['Cell No.']}")
+    else:
+        st.info("ℹ️ No cell data available to display.")
+    
+    st.markdown("---")
+    
+    # Stock Distribution Section
+    st.markdown('<div class="section-header">📊 Inventory Stock Levels</div>', unsafe_allow_html=True)
+    
+    stock_col1, stock_col2 = st.columns([2, 1])
+    
+    with stock_col1:
+        # Calculate in-stock for each book
+        chart_df = df.copy()
+        chart_df['In Stock'] = (chart_df['total_printed_books'] - 
+                                chart_df['website_sales'] - 
+                                chart_df['amazon_sales'] - 
+                                chart_df['flipkart_sales'] - 
+                                chart_df['direct_sales'] - 
+                                chart_df['books_sent_to_authors'])
+        
+        bins = [float('-inf'), 0, 1, 3, 6, 10, float('inf')]
+        labels = ['Out of Stock', '1-2', '3-5', '6-10', '11-20', '20+']
+        chart_df['Stock Range'] = pd.cut(chart_df['In Stock'], bins=bins, labels=labels, include_lowest=True)
+        stock_counts = chart_df.groupby('Stock Range', observed=True).size().reset_index(name='Count')
+        
+        if not stock_counts.empty and stock_counts['Count'].sum() > 0:
+            # Create gradient color scale - subtle blues and grays
+            colors_gradient = ['#e74c3c', '#e67e22', '#f39c12', '#27ae60', '#3498db', '#2980b9']
+            
+            fig_stock = go.Figure()
+            fig_stock.add_trace(go.Bar(
+                x=stock_counts['Stock Range'],
+                y=stock_counts['Count'],
+                marker_color=colors_gradient[:len(stock_counts)],
+                text=stock_counts['Count'],
+                textposition='outside',
+                textfont=dict(size=12),
+                hovertemplate='<b>%{x}</b><br>Books: %{y}<extra></extra>'
+            ))
+            
+            fig_stock.update_layout(
+                title={
+                    'text': '📦 Stock Level Distribution',
+                    'x': 0.5,
+                    'xanchor': 'center',
+                    'font': {'size': 18, 'color': '#2c3e50'}
+                },
+                xaxis_title='Stock Range',
+                yaxis_title='Number of Books',
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                height=400,
+                showlegend=False
+            )
+            
+            fig_stock.update_xaxes(showgrid=False)
+            fig_stock.update_yaxes(showgrid=True, gridcolor='rgba(0,0,0,0.1)')
+            
+            st.plotly_chart(fig_stock, use_container_width=True)
+        else:
+            st.info("ℹ️ No stock data available to display.")
+    
+    with stock_col2:
+        st.markdown("### 📈 Stock Insights")
+        if not stock_counts.empty:
+            out_of_stock = stock_counts[stock_counts['Stock Range'] == 'Out of Stock']['Count'].sum() if 'Out of Stock' in stock_counts['Stock Range'].values else 0
+            low_stock = stock_counts[stock_counts['Stock Range'] == '1-2']['Count'].sum() if '1-2' in stock_counts['Stock Range'].values else 0
+            
+            st.metric("⚠️ Out of Stock", int(out_of_stock))
+            st.metric("⚡ Low Stock (1-2)", int(low_stock))
+            st.metric("✅ Adequate Stock", int(stock_counts[~stock_counts['Stock Range'].isin(['Out of Stock', '1-2'])]['Count'].sum()))
+
+
 
 numeric_columns = ['books_sent_to_authors', 'website_sales', 'amazon_sales', 
                   'flipkart_sales', 'direct_sales', 'total_printed_books']
@@ -594,51 +904,6 @@ def update_book_details(book_id, current_data):
                 st.error(f"Failed to save changes: {str(e)}")
 
 
-@st.dialog("Inventory Visualizations", width="medium")
-def show_charts():
-    # # Cell No. Occupancy Chart
-    # st.markdown("### Cell No. Occupancy")
-    # cell_df = df.groupby('Cell No.').size().reset_index(name='Count')
-    # cell_df['Cell No.'] = cell_df['Cell No.'].astype(str).replace('nan', 'Unknown').fillna('Unknown')
-    # st.write("Contents of cell_df:")
-    # st.write(cell_df)
-
-    # if not cell_df.empty:
-    #     fig_cell = px.bar(cell_df, x='Cell No.', y='Count', color_discrete_sequence=['#F44336'],
-    #                       title='Books per Cell', labels={'Count': 'Number of Books'})
-    #     st.plotly_chart(fig_cell, width="stretch")
-    # else:
-    #     st.write("No Cell No. data available to display.")
-
-    # # In Stock Distribution Chart
-    # st.markdown("### In Stock Distribution")
-    # bins = [0, 1, 3, 6, float('inf')]
-    # labels = ['0', '1-2', '3-5', '6+']
-    # chart_df = df.copy()
-    # chart_df['Stock Range'] = pd.cut(chart_df['In Stock'], bins=bins, labels=labels, include_lowest=True, right=False)
-    # stock_counts = chart_df.groupby('Stock Range', observed=True).size().reset_index(name='Count')
-
-    # if not stock_counts.empty and stock_counts['Count'].sum() > 0:
-    #     fig_stock = px.bar(stock_counts, x='Stock Range', y='Count', color_discrete_sequence=['#FF6B6B'],
-    #                        title='Distribution of In Stock Books', labels={'Count': 'Number of Books'})
-    #     st.plotly_chart(fig_stock, width="stretch")
-    # else:
-    #     st.write("No In Stock data available to display.")
-
-    # # Sales Breakdown Pie Chart
-    # st.markdown("### Sales Breakdown")
-    # sales_data = df[['AGPH Store', 'Amazon', 'Filpkart', 'Direct']].sum().reset_index()
-    # sales_data.columns = ['Channel', 'Sales']
-
-    # if sales_data['Sales'].sum() > 0:
-    #     fig_sales = px.pie(sales_data, values='Sales', names='Channel', title='Sales by Channel',
-    #                        color='Channel', color_discrete_sequence=['#F44336', '#FF6B6B', '#FFCDD2', '#FFEBEE'])
-    #     fig_sales.update_traces(textinfo='percent+label')
-    #     st.plotly_chart(fig_sales, width="stretch")
-    # else:
-    #     st.write("No sales data available to display.")
-    st.write("Comming Soon 😊")
-
 # Initialize session state for filters and pagination
 if 'search_term' not in st.session_state:
     st.session_state['search_term'] = ''
@@ -681,7 +946,7 @@ with filcol2:
 
 with filcol4:
     if st.button("📉", key="show_visualizations", type="secondary", width="stretch"):
-        show_charts()
+        show_charts(data_for_chart)
 
 with filcol3:
     with st.popover("More Filters & Sort", width="stretch"):
