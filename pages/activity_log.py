@@ -434,7 +434,8 @@ with col_checklist:
         
         for (book_id, title), book_group in grouped:
             update_count = len(book_group)
-            with st.expander(f"📖 **{title}** • {update_count} {"update" if update_count == 1 else "updates"}", expanded=True):
+            label = "update" if update_count == 1 else "updates"
+            with st.expander(f"📖 **{title}** • {update_count} {label}",expanded=True):
                 # Sort updates by timestamp, most recent first
                 book_group = book_group.sort_values('timestamp', ascending=False)
                 
