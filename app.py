@@ -1055,9 +1055,9 @@ def manage_users(conn):
                     "Role": st.column_config.SelectboxColumn("Role", options=["Admin", "User"]),
                     "Start Date": st.column_config.DateColumn("Start Date")
                 },
-                column_order=["ID", "Username", "Email", "Associate ID", "Designation", 
+                column_order=["ID", "Username", "Email", "Password", "Associate ID", "Designation", 
                              "Role", "Apps", "Access Types", "Levels", "Reports To", 
-                             "Start Date", "Password"],
+                             "Start Date"],
                 num_rows="fixed", key="user_table"
             )
 
