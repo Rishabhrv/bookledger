@@ -1,4 +1,4 @@
-name: Deploy NewCRM App to VPS
+name: Deploy MIS to VPS
 
 on:
   push:
@@ -25,3 +25,7 @@ jobs:
           git fetch origin main
           git reset --hard origin/main  # Ensure server matches GitHub repo
           git clean -fd                # Remove untracked files/folders
+          source /home/rishabhvyas/bookledger/venv/bin/activate
+          pip install -r requirements.txt
+          sudo systemctl restart newcrm.service
+          EOF

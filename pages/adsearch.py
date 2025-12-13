@@ -197,8 +197,9 @@ SELECT
 FROM books b
 LEFT JOIN RankedAuthors ba ON b.book_id = ba.book_id AND ba.rn <= 4
 LEFT JOIN authors a ON ba.author_id = a.author_id
+WHERE b.is_cancelled = 0
 GROUP BY 
-    b.book_id, b.title, b.date, b.apply_isbn, b.isbn, b.ready_to_print, b.print_status, b.deliver, 
+    b.book_id, b.title, b.date, b.apply_isbn, b.isbn, b.ready_to_print, b.print_status, b.deliver,  
     b.google_review, b.flipkart_link, b.google_link, b.agph_link, b.amazon_link, 
     b.writing_by, b.proofreading_by, b.formatting_by, 
     b.writing_start, b.writing_end, b.proofreading_start, b.proofreading_end, 

@@ -1,31 +1,27 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
+import datetime
 from datetime import date
 import time
 import re
-import datetime
+import io
+import os
+import pytz
 import random
 import uuid
 from urllib.parse import urlencode, quote
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
-from constants import ACCESS_TO_BUTTON
+from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count
 from auth import VALID_APPS
-from constants import log_activity
-from constants import connect_db
-from constants import clean_old_logs
-from constants import VALID_SUBJECTS
-from constants import get_page_url
 import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
-import io
-import os
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -35,13 +31,17 @@ from PIL import Image as PILImage
 import requests
 import ollama
 import difflib
-
+from decimal import Decimal
 
 ####################################################################################################################
 ##################################--------------- Logs ----------------------------#################################
 ####################################################################################################################
 
 start_time = time.time()
+from datetime import datetime
+# Get current time in Indian Standard Time
+ist = pytz.timezone('Asia/Kolkata')
+ist_time = datetime.now(ist)
 
 # Custom filter to exclude watchdog logs
 class NoWatchdogFilter(logging.Filter):
@@ -112,10 +112,12 @@ if "session_id" not in st.session_state:
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
 UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
-EMAIL_ADDRESS = st.secrets["general"]["EMAIL_ADDRESS"]
-EMAIL_PASSWORD = st.secrets["general"]["EMAIL_PASSWORD"]
-SMTP_SERVER = st.secrets["general"]["SMTP_SERVER"]
-SMTP_PORT = st.secrets["general"]["SMTP_PORT"]
+EMAIL_ADDRESS = st.secrets["export_email"]["EMAIL_ADDRESS"]
+EMAIL_PASSWORD = st.secrets["export_email"]["EMAIL_PASSWORD"]
+GMAIL_SMTP_SERVER = st.secrets["email_servers"]["GMAIL_SMTP_SERVER"]
+GMAIL_SMTP_PORT = st.secrets["email_servers"]["GMAIL_SMTP_PORT"]
+HOSTINGER_SMTP_SERVER = st.secrets["email_servers"]["HOSTINGER_SMTP_SERVER"]
+HOSTINGER_SMTP_PORT = st.secrets["email_servers"]["HOSTINGER_SMTP_PORT"]
 ADMIN_EMAIL = st.secrets["general"]["ADMIN_EMAIL"]
 
 ########################################################################################################################
@@ -146,14 +148,45 @@ st.markdown("""
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@0" rel="stylesheet" />
             """, unsafe_allow_html=True)
 
-st.markdown(
-    """
-    <style>
+st.cache_data.clear()
 
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+
+########################################################################################################################
+##################################--------------- Database Connection ----------------------------######################
+#######################################################################################################################
+
+# Connect to MySQL
+conn = connect_db()
+ijisem_conn = connect_ijisem_db()
+ict_conn = connect_ict_db()
+
+########################################################################################################################
+##################################--------------- Activity Log ----------------------------######################
+#######################################################################################################################
+
+if "activity_logged" not in st.session_state:
+    log_activity(
+                conn,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "logged in",
+                f"App: {st.session_state.app}"
+            )
+    st.session_state.activity_logged = True
+
+if "cleanup_done" not in st.session_state:
+    st.session_state.cleanup_done = False
+
+# Run log cleanup on app startup (once per session)
+if not st.session_state.cleanup_done:
+    clean_old_logs(conn)
+    st.session_state.cleanup_done = True
+
+
+########################################################################################################################
+##################################--------------- Button Configuration ----------------------------######################
+#######################################################################################################################
 
 
 # Button configuration
@@ -171,6 +204,14 @@ BUTTON_CONFIG = {
         "page_path": "/",
         "permission": "messages",
         "type": "new_tab",
+    },
+    "amazon": {
+        "label": "Amazon",
+        "icon": "📦",
+        "page_path": "amazon",
+        "permission": "amazon",
+        "type": "new_tab",
+        "admin_only": True,
     },
 
     "team_dashboard": {
@@ -236,20 +277,20 @@ BUTTON_CONFIG = {
         "permission": "open_author_positions",
         "type": "new_tab",
     },
+    "extra_books": {
+        "label": "Extra/Deleted Books",
+        "icon": "🗑️",
+        "page_path": "extra_books",
+        "permission": "extra_books",
+        "type": "new_tab",
+        "admin_only": True,
+    },
     "edit_authors": {
         "label": "Edit Authors",
         "icon": "✏️",
         "permission": "edit_author_detail",
         "type": "call_function",
         "function": lambda conn: edit_author_detail(conn),
-    },
-    "user_access": {
-        "label": "User Access",
-        "icon": "👥",
-        "permission": None,
-        "type": "call_function",
-        "function": lambda conn: manage_users(conn),
-        "admin_only": True,
     },
     "activity_log": {
         "label": "Activity Log",
@@ -259,63 +300,86 @@ BUTTON_CONFIG = {
         "type": "new_tab",
         "admin_only": True,
     },
-    "data_export": {
-        "label": "Export Data",
-        "icon": "📤",
+
+    "settings": {
+        "label": "Settings",
+        "icon": "⚙️",
         "permission": None,
         "type": "call_function",
-        "function": lambda conn: export_data_dialog(conn),
+        "function": lambda conn: settings_dialog(conn),
         "admin_only": True,
     },
 }
 
-st.cache_data.clear()
+
+first_print_books = get_ready_to_print_books(conn)
+reprint_books = get_reprint_eligible_books(conn)
+total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
 
 
-########################################################################################################################
-##################################--------------- Database Connection ----------------------------######################
-#######################################################################################################################
-
-# Connect to MySQL
-conn = connect_db()
-
-# Database connection
-@st.cache_resource
-def connect_ijisem_db():
+# Helper to update button labels with counts
+def update_button_counts(conn):
     try:
-        def get_connection():
-            return st.connection('ijisem', type='sql')
-        connect_ijisem_db_conn = get_connection()
-        return connect_ijisem_db_conn
-    except Exception as e:
-        st.error(f"Error connecting to MySQL: {e}")
-        st.stop()
+        # 1. Extra Books (Rewritten in extra_books) + Deleted Books (in deleted_books)
+        extra_count_query = """
+            SELECT 
+                (SELECT COUNT(*) FROM extra_books) as total_count
+        """
+        extra_count = conn.query(extra_count_query, ttl=0, show_spinner = False).iloc[0]["total_count"]
+        if "extra_books" in BUTTON_CONFIG and extra_count > 0:
+            BUTTON_CONFIG["extra_books"]["label"] += f" 🔴 ({extra_count})"
 
-ijisem_conn = connect_ijisem_db()
+        # 2. Pending Work
+        pending_count = conn.query("SELECT COUNT(*) AS count FROM books WHERE deliver = 0 AND is_archived = 0 AND is_cancelled = 0", ttl=0, show_spinner = False).iloc[0]["count"]
+        if "pending_books" in BUTTON_CONFIG and pending_count > 0:
+            BUTTON_CONFIG["pending_books"]["label"] += f" 🔴 ({pending_count})"
 
+        # 3. Operations (Pending Writing)
+        ops_count = conn.query("SELECT COUNT(*) AS count FROM books WHERE writing_start IS NULL AND is_publish_only = 0 AND is_thesis_to_book = 0 AND is_cancelled = 0", ttl=0,show_spinner = False).iloc[0]["count"]
+        if "team_dashboard" in BUTTON_CONFIG and ops_count > 0:
+            BUTTON_CONFIG["team_dashboard"]["label"] += f" 🔴 ({ops_count})"
 
-########################################################################################################################
-##################################--------------- Activity Log ----------------------------######################
-#######################################################################################################################
+        # 4. Open Positions
+        open_pos_query = """
+        SELECT SUM(
+            CASE 
+                WHEN author_type = 'Double' THEN GREATEST(0, 2 - cnt)
+                WHEN author_type = 'Triple' THEN GREATEST(0, 3 - cnt)
+                WHEN author_type = 'Multiple' THEN GREATEST(0, 4 - cnt)
+                ELSE 0
+            END
+        ) as count
+        FROM (
+            SELECT b.author_type, COUNT(ba.author_id) as cnt
+            FROM books b
+            LEFT JOIN book_authors ba ON b.book_id = ba.book_id
+            WHERE b.author_type IN ('Double', 'Triple', 'Multiple') AND b.is_cancelled = 0
+            GROUP BY b.book_id, b.author_type
+        ) as sub
+        """
+        open_pos_res = conn.query(open_pos_query, ttl=0, show_spinner = False)
+        open_pos_count = int(open_pos_res.iloc[0]["count"]) if not open_pos_res.empty and pd.notna(open_pos_res.iloc[0]["count"]) else 0
+        if "author_positions" in BUTTON_CONFIG and open_pos_count > 0:
+            BUTTON_CONFIG["author_positions"]["label"] += f" 🔴 ({open_pos_count})"
+        
+        # 5. Print Management
+        first_print_count = len(first_print_books)
+        reprint_count = len(reprint_books)
+        total_print = first_print_count + reprint_count
+        if "print_management" in BUTTON_CONFIG and total_print > 0:
+            BUTTON_CONFIG["print_management"]["label"] += f" 🔴 ({total_print})"
 
-if "activity_logged" not in st.session_state:
-    log_activity(
-                conn,
-                st.session_state.user_id,
-                st.session_state.username,
-                st.session_state.session_id,
-                "logged in",
-                f"App: {st.session_state.app}"
-            )
-    st.session_state.activity_logged = True
+        # 6. Messages
+        if "messages" in BUTTON_CONFIG and total_unread > 0:
+            BUTTON_CONFIG["messages"]["label"] += f" 🔴 ({total_unread})"
+            if "unread_toast_shown" not in st.session_state:
+                st.toast(f"You have {total_unread} unread messages!", icon="💬")
+                st.session_state.unread_toast_shown = True
 
-if "cleanup_done" not in st.session_state:
-    st.session_state.cleanup_done = False
+    except Exception:
+        pass
 
-# Run log cleanup on app startup (once per session)
-if not st.session_state.cleanup_done:
-    clean_old_logs(conn)
-    st.session_state.cleanup_done = True
+update_button_counts(conn)
 
 ########################################################################################################################
 ##################################--------------- Main App Started ----------------------------######################
@@ -326,7 +390,7 @@ if not st.session_state.cleanup_done:
 query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
 "proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end," \
-"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, images FROM books"
+"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, images FROM books WHERE is_cancelled = 0"
 
 books = conn.query(query,show_spinner = False)
 
@@ -362,7 +426,7 @@ elif user_role != "admin":
 def fetch_book_details(book_id, conn):
     query = f"""
     SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, 
-    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price
+    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price, writing_start, is_cancelled, cancellation_reason
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -768,7 +832,7 @@ def send_email(subject, body, attachment_data, filename):
         )
         msg.attach(part)
 
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server = smtplib.SMTP(GMAIL_SMTP_SERVER, GMAIL_SMTP_PORT)
         server.starttls()
         server.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
         server.send_message(msg)
@@ -928,14 +992,14 @@ def fetch_tags(conn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Users", width="large", on_dismiss='rerun')
-def manage_users(conn):
+@st.dialog("Settings", width="large", on_dismiss='rerun')
+def settings_dialog(conn):
     # Check if user is admin
     if st.session_state.get("role", None) != "admin":
-        st.error("❌ Access Denied: Only admins can manage users.")
+        st.error("❌ Access Denied: Only admins can access settings.")
         return
 
-    # Initialize session state
+    # Initialize session state (from manage_users)
     if "show_passwords" not in st.session_state:
         st.session_state.show_passwords = False
     if "confirm_delete_user_id" not in st.session_state:
@@ -945,941 +1009,962 @@ def manage_users(conn):
     if "selected_user_for_edit" not in st.session_state:
         st.session_state.selected_user_for_edit = None
 
-    # Fetch unique publishing consultants
-    try:
-        with conn.session as s:
-            publishing_consultants = s.execute(
-                text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
-            ).fetchall()
-            publishing_consultant_names = [pc[0] for pc in publishing_consultants]
-    except Exception as e:
-        st.error(f"❌ Error fetching publishing consultants: {str(e)}")
-        publishing_consultant_names = []
+    settings_tab1, settings_tab2 = st.tabs(["👥 Manage Users", "📤 Export Data"])
 
-    # Database cleanup
-    try:
-        with conn.session as s:
-            for correct_access in ACCESS_TO_BUTTON.keys():
-                s.execute(
-                    text("""
-                        UPDATE user_app_access 
-                        SET access_type = :correct_access 
-                        WHERE LOWER(access_type) = LOWER(:correct_access)
-                        AND access_type != :correct_access
-                    """),
-                    {"correct_access": correct_access}
-                )
-            s.commit()
-    except Exception as e:
-        st.error(f"❌ Database error during cleanup: {str(e)}")
-        return
+    with settings_tab1:
+            # Check if user is admin
+            if st.session_state.get("role", None) != "admin":
+                st.error("❌ Access Denied: Only admins can manage users.")
+                return
 
-    # Fetch all users
-    try:
-        with conn.session as s:
-            users = s.execute(
-                text("""
-                    SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
-                           GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
-                           GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
-                           GROUP_CONCAT(DISTINCT 
-                               CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') AND uaa.report_to IS NOT NULL 
-                                    THEN (SELECT username FROM userss WHERE id = uaa.report_to) 
-                                    ELSE NULL END
-                           ) as report_to
-                    FROM userss u
-                    LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
-                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role
-                    ORDER BY u.username
-                """)
-            ).fetchall()
-    except Exception as e:
-        st.error(f"❌ Database error while fetching users: {str(e)}")
-        return
+            # Initialize session state
+            if "show_passwords" not in st.session_state:
+                st.session_state.show_passwords = False
+            if "confirm_delete_user_id" not in st.session_state:
+                st.session_state.confirm_delete_user_id = None
+            if "show_passwords_prev" not in st.session_state:
+                st.session_state.show_passwords_prev = st.session_state.show_passwords
+            if "selected_user_for_edit" not in st.session_state:
+                st.session_state.selected_user_for_edit = None
+
+            # Fetch unique publishing consultants
+            try:
+                with conn.session as s:
+                    publishing_consultants = s.execute(
+                        text("SELECT DISTINCT publishing_consultant FROM book_authors WHERE publishing_consultant IS NOT NULL AND publishing_consultant != '' ORDER BY publishing_consultant")
+                    ).fetchall()
+                    publishing_consultant_names = [pc[0] for pc in publishing_consultants]
+            except Exception as e:
+                st.error(f"❌ Error fetching publishing consultants: {str(e)}")
+                publishing_consultant_names = []
+
+            # Database cleanup
+            try:
+                with conn.session as s:
+                    for correct_access in ACCESS_TO_BUTTON.keys():
+                        s.execute(
+                            text("""
+                                UPDATE user_app_access 
+                                SET access_type = :correct_access 
+                                WHERE LOWER(access_type) = LOWER(:correct_access)
+                                AND access_type != :correct_access
+                            """),
+                            {"correct_access": correct_access}
+                        )
+                    s.commit()
+            except Exception as e:
+                st.error(f"❌ Database error during cleanup: {str(e)}")
+                return
+
+            # Fetch all users
+            try:
+                with conn.session as s:
+                    users = s.execute(
+                        text("""
+                            SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
+                                   GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
+                                   GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
+                                   GROUP_CONCAT(DISTINCT 
+                                       CASE WHEN uaa.app = 'tasks' AND uaa.level IN ('worker', 'both') AND uaa.report_to IS NOT NULL 
+                                            THEN (SELECT username FROM userss WHERE id = uaa.report_to) 
+                                            ELSE NULL END
+                                   ) as report_to
+                            FROM userss u
+                            LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
+                            GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role
+                            ORDER BY u.username
+                        """)
+                    ).fetchall()
+            except Exception as e:
+                st.error(f"❌ Database error while fetching users: {str(e)}")
+                return
     
-    # App configurations
-    app_display_names = list(VALID_APPS.keys())
-    app_db_values = {display: db_value for display, db_value in VALID_APPS.items()}
-    FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
-    LEVEL_SUPPORT_APPS = ["IJISEM", "Tasks", "Operations", "Sales"]
+            # App configurations
+            app_display_names = list(VALID_APPS.keys())
+            app_db_values = {display: db_value for display, db_value in VALID_APPS.items()}
+            FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
+            LEVEL_SUPPORT_APPS = ["IJISEM", "Tasks", "Operations", "Sales"]
 
-    # Create 3 tabs
-    tab1, tab2, tab3 = st.tabs(["👥 Users Table", "✏️ Edit User", "➕ Add User"])
+            # Create 3 tabs
+            col_nav, col_content = st.columns([0.5, 5])
+            with col_nav:
+                selected_user_tab = st.radio("Manage Users", ["Users", "Edit User", "Add User"], label_visibility="collapsed")
 
-    with tab1:
-        st.write("### Users Overview")
-        if not users:
-            st.error("❌ No users found in database.")
-        else:
-            show_passwords = st.checkbox(
-                "🔓 Show Passwords",
-                value=st.session_state.show_passwords,
-                key="toggle_passwords",
-                help="Check to reveal all passwords in the table"
-            )
-            if show_passwords:
-                st.toast("⚠️ Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️")
-
-            if show_passwords != st.session_state.show_passwords_prev:
-                try:
-                    log_activity(
-                        conn, st.session_state.user_id, st.session_state.username,
-                        st.session_state.session_id, "toggled checkbox",
-                        f"Show Passwords changed to '{show_passwords}'"
-                    )
-                    st.session_state.show_passwords = show_passwords
-                    st.session_state.show_passwords_prev = show_passwords
-                except Exception as e:
-                    st.error(f"❌ Error logging activity: {str(e)}")
-
-            user_data = [{
-                "ID": user.id, "Username": user.username, "Email": user.email or "",
-                "Associate ID": user.associate_id or "", "Designation": user.designation or "",
-                "Password": user.password if st.session_state.show_passwords else "••••••••",
-                "Real_Password": user.password, "Role": user.role.capitalize() if user.role else "",
-                "Apps": user.apps or "", "Access Types": user.access_types or "",
-                "Levels": user.levels or "", "Reports To": user.report_to or "",
-                "Start Date": user.start_date
-            } for user in users]
-            
-            df = pd.DataFrame(user_data)
-            st.data_editor(
-                df, width="stretch", hide_index=True,
-                disabled=["ID", "Username", "Email", "Associate ID", "Designation", 
-                         "Password", "Real_Password", "Role", "Apps", "Access Types", 
-                         "Levels", "Reports To", "Start Date"],
-                column_config={
-                    "ID": st.column_config.NumberColumn("ID", disabled=True),
-                    "Password": st.column_config.TextColumn("Password"),
-                    "Real_Password": None,
-                    "Role": st.column_config.SelectboxColumn("Role", options=["Admin", "User"]),
-                    "Start Date": st.column_config.DateColumn("Start Date")
-                },
-                column_order=["ID", "Username", "Email", "Password", "Associate ID", "Designation", 
-                             "Role", "Apps", "Access Types", "Levels", "Reports To", 
-                             "Start Date"],
-                num_rows="fixed", key="user_table"
-            )
-
-    with tab2:
-
-        tab_col1, _ = st.columns([2,1])
-
-        with tab_col1:
-            st.write("### ✏️ Edit Existing User")
-            if not users:
-                st.error("❌ No users found in database.")
-                st.stop()
-
-            with st.container(border=True):
-                user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
-                selected_user_key = st.selectbox(
-                    "Select User to Edit", 
-                    options=list(user_dict.keys()), 
-                    key="edit_user_select",
-                    format_func=lambda x: x
-                )
-                selected_user = user_dict[selected_user_key]
-
-            with st.container(border=True):
-                
-                if selected_user.id == 1:
-                    st.warning("⚠️ Primary admin (ID: 1) - Limited editing capabilities.")
-
-                # Check if current user is Sales app user
-                try:
-                    with conn.session as s:
-                        uaa = s.execute(
-                            text("SELECT app, access_type, level, report_to, start_date FROM user_app_access WHERE user_id = :user_id"),
-                            {"user_id": selected_user.id}
-                        ).fetchone()
-                        is_sales_user = uaa and uaa.app and uaa.app.lower() == 'sales'
-                        current_app_db = uaa.app if uaa else None
-                        current_access_type = uaa.access_type if uaa else None
-                        current_level = uaa.level if uaa else None
-                        current_report_to = uaa.report_to if uaa else None
-                        current_start_date = uaa.start_date if uaa else None
-                except:
-                    is_sales_user = False
-                    current_app_db = None
-                    current_access_type = None
-                    current_level = None
-                    current_report_to = None
-                    current_start_date = None
-
-                current_app_display = next((display for display, db_val in app_db_values.items() if db_val == current_app_db), "Main")
-
-                # Basic Information Section
-                st.subheader("👤 Basic Information")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if is_sales_user and publishing_consultant_names:
-                        st.text_input(
-                            "Username", value=selected_user.username, disabled=True,
-                            help="💡 Sales users must use publishing consultant names. Contact admin to change."
-                        )
-                        new_username = selected_user.username
-                        st.info(f"👤 Publishing Consultant: **{new_username}**")
+            with col_content:
+                if selected_user_tab == "Users":
+                    st.write("### Users Overview")
+                    if not users:
+                        st.error("❌ No users found in database.")
                     else:
-                        new_username = st.text_input(
-                            "Username", value=selected_user.username,
-                            key=f"edit_username_{selected_user.id}"
+                        show_passwords = st.checkbox(
+                            "🔓 Show Passwords",
+                            value=st.session_state.show_passwords,
+                            key="toggle_passwords",
+                            help="Check to reveal all passwords in the table"
                         )
-                    
-                    new_email = st.text_input(
-                        "Email", value=selected_user.email or "",
-                        key=f"edit_email_{selected_user.id}"
-                    )
-                
-                with col2:
-                    new_password = st.text_input(
-                        "Password", value="", type="password",
-                        key=f"edit_password_{selected_user.id}",
-                        placeholder="Leave empty to keep current"
-                    )
-                    
-                    current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
-                    if selected_user.id == 1:
-                        st.selectbox("Role", options=["Admin"], disabled=True, key=f"edit_role_{selected_user.id}")
-                        new_role = "Admin"
-                    else:
-                        new_role = st.selectbox(
-                            "Role", options=["Admin", "User"],
-                            index=["Admin", "User"].index(current_role),
-                            key=f"edit_role_{selected_user.id}"
-                        )
+                        if show_passwords:
+                            st.toast("⚠️ Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️")
 
-                # Application and Access Section
-                st.write("---")
-                st.subheader("🔧 Application & Access")
-                col_app1, col_app2 = st.columns(2)
-                with col_app1:
-                    if new_role == "Admin":
-                        st.selectbox("Application", options=["Main"], disabled=True, key=f"edit_app_admin_{selected_user.id}")
-                        new_app = "Main"
-                    else:
-                        new_app = st.selectbox(
-                            "Application", options=app_display_names,
-                            format_func=lambda x: x.capitalize(),
-                            index=app_display_names.index(current_app_display) if current_app_display in app_display_names else 0,
-                            key=f"edit_app_select_{selected_user.id}"
-                        )
-
-                with col_app2:
-                    access_options = (
-                        list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
-                        else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
-                        else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
-                    )
-                    
-                    current_access = current_access_type.split(",") if current_access_type else []
-                    current_access = [acc.strip() for acc in current_access if acc.strip() in access_options]
-                    
-                    if new_app == "Main":
-                        new_access_type = st.multiselect(
-                            "Access Permissions", options=access_options,
-                            default=current_access, key=f"edit_access_type_{selected_user.id}"
-                        )
-                    elif new_app in FULL_ACCESS_APPS:
-                        default_access = current_access_type if current_access_type in access_options else "Full Access"
-                        new_access_type = st.selectbox(
-                            "Access Permissions", options=access_options,
-                            index=access_options.index(default_access) if default_access in access_options else 0,
-                            key=f"edit_access_type_full_{selected_user.id}"
-                        )
-                    else:
-                        default_access = current_access_type if current_access_type in access_options else (access_options[0] if access_options else "")
-                        new_access_type = st.selectbox(
-                            "Access Permissions", options=access_options,
-                            index=access_options.index(default_access) if default_access in access_options else 0,
-                            key=f"edit_access_type_ops_{selected_user.id}"
-                        )
-
-                # Additional Information
-                st.write("---")
-                st.subheader("📋 Additional Information")
-                col_add1, col_add2 = st.columns(2)
-                with col_add1:
-                    new_associate_id = st.text_input(
-                        "Associate ID", value=selected_user.associate_id or "",
-                        key=f"edit_associate_id_{selected_user.id}"
-                    )
-                with col_add2:
-                    new_designation = st.text_input(
-                        "Designation", value=selected_user.designation or "",
-                        key=f"edit_designation_{selected_user.id}"
-                    )
-
-                # Level and Reports To
-                show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
-                if show_level_report:
-                    st.write("---")
-                    col_level1, col_level2 = st.columns(2)
-                    with col_level1:
-                        current_level_display = "Worker" if current_level == "worker" else "Reporting Manager" if current_level == "reporting_manager" else "Both"
-                        new_level_display = st.selectbox(
-                            "Access Level", options=["Worker", "Reporting Manager", "Both"],
-                            index=["Worker", "Reporting Manager", "Both"].index(current_level_display) if current_level_display in ["Worker", "Reporting Manager", "Both"] else 0,
-                            key=f"edit_level_{selected_user.id}"
-                        )
-                        new_level = new_level_display.lower().replace(" ", "_")
-                    
-                    with col_level2:
-                        if new_level in ["worker", "both"]:
-                            report_to_options = ["None"] + [f"{user.username} (ID: {user.id})" for user in users]
-                            current_report_to_display = "None"
-                            if current_report_to:
-                                try:
-                                    with conn.session as s:
-                                        report_user = s.execute(
-                                            text("SELECT username FROM userss WHERE id = :id"),
-                                            {"id": current_report_to}
-                                        ).fetchone()
-                                        if report_user:
-                                            current_report_to_display = f"{report_user[0]} (ID: {current_report_to})"
-                                except:
-                                    pass
-                            
-                            new_report_to_display = st.selectbox(
-                                "Reports To", options=report_to_options,
-                                index=report_to_options.index(current_report_to_display),
-                                key=f"edit_report_to_{selected_user.id}"
-                            )
-                            new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if " (ID: " in new_report_to_display else None
-                        else:
-                            new_report_to = None
-                            st.selectbox("Reports To", options=["None"], disabled=True, key=f"edit_report_to_disabled_{selected_user.id}")
-                else:
-                    new_level = None
-                    new_report_to = None
-
-                # Start Date
-                new_start_date = st.date_input(
-                    "Start Date", value=current_start_date,
-                    key=f"edit_start_date_{selected_user.id}",
-                    disabled=new_app != "Main"
-                )
-
-                # Action Buttons
-                st.write("---")
-                col_btn1, col_btn2 = st.columns([3, 1])
-                with col_btn1:
-                    if st.button("💾 Save Changes", key=f"save_edit_{selected_user.id}", type="primary", width='stretch'):
-                        if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
-                            st.error("❌ Invalid email format.")
-                        else:
+                        if show_passwords != st.session_state.show_passwords_prev:
                             try:
-                                with st.spinner("Saving changes..."):
-                                    with conn.session as s:
-                                        # Update users table
-                                        s.execute(
-                                            text("""
-                                                UPDATE userss SET username = :username, email = :email,
-                                                associate_id = :associate_id, designation = :designation,
-                                                password = :password, role = :role WHERE id = :id
-                                            """),
-                                            {
-                                                "username": new_username,
-                                                "email": new_email or None,
-                                                "associate_id": new_associate_id or None,
-                                                "designation": new_designation or None,
-                                                "password": new_password if new_password else selected_user.password,
-                                                "role": new_role.lower(),
-                                                "id": selected_user.id
-                                            }
-                                        )
-                                        
-                                        # Update user_app_access
-                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :user_id"), {"user_id": selected_user.id})
-                                        
-                                        if new_role != "Admin" and new_app:
-                                            db_app_value = app_db_values.get(new_app, new_app.lower())
-                                            access_value = (
-                                                ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
-                                                else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
-                                                else None
-                                            )
-                                            s.execute(
-                                                text("""
-                                                    INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
-                                                    VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
-                                                """),
-                                                {
-                                                    "user_id": selected_user.id, "app": db_app_value,
-                                                    "access_type": access_value, "level": new_level,
-                                                    "report_to": new_report_to, "start_date": new_start_date
-                                                }
-                                            )
-                                        s.commit()
-                                    
-                                    log_activity(
-                                        conn, st.session_state.user_id, st.session_state.username,
-                                        st.session_state.session_id, "updated user",
-                                        f"User ID: {selected_user.id}, Username: {new_username}"
-                                    )
-                                    st.success("✅ User Updated Successfully!")
-                                    st.rerun()
-                            except Exception as e:
-                                error_message = str(e).lower()
-                                if "duplicate entry" in error_message and "'username'" in error_message:
-                                    st.error("❌ Username already exists.")
-                                else:
-                                    st.error(f"❌ Database error: {str(e)}")
-
-                with col_btn2:
-                    if selected_user.id != 1:
-                        if st.button("🗑️ Delete", key=f"delete_{selected_user.id}", type="secondary"):
-                            st.session_state.confirm_delete_user_id = selected_user.id
-
-                if st.session_state.confirm_delete_user_id == selected_user.id:
-                    st.warning(f"⚠️ Are you sure you want to delete {selected_user.username}?")
-                    col_confirm1, col_confirm2 = st.columns(2)
-                    with col_confirm1:
-                        if st.button("❌ Cancel", key=f"cancel_delete_{selected_user.id}"):
-                            st.session_state.confirm_delete_user_id = None
-                    with col_confirm2:
-                        if st.button("🗑️ Confirm Delete", key=f"confirm_delete_{selected_user.id}", type="secondary"):
-                            try:
-                                with st.spinner("Deleting user..."):
-                                    with conn.session as s:
-                                        s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
-                                        s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
-                                        s.commit()
-                                    log_activity(
-                                        conn, st.session_state.user_id, st.session_state.username,
-                                        st.session_state.session_id, "deleted user",
-                                        f"User ID: {selected_user.id}, Username: {selected_user.username}"
-                                    )
-                                    st.success("✅ User Deleted Successfully!")
-                                    st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Database error: {str(e)}")
-                            st.session_state.confirm_delete_user_id = None
-
-    with tab3:
-
-        tab3_col1, _ = st.columns([2,1])
-
-        with tab3_col1:
-            st.write("### ➕ Add New User")
-            with st.container(border=True):
-                # Role and Application Selection
-                st.subheader("🔧 Role & Application")
-                col_role1, col_role2 = st.columns(2)
-                with col_role1:
-                    new_role = st.selectbox(
-                        "Role", options=["Admin", "User"],
-                        format_func=lambda x: x.capitalize(),
-                        key="add_role"
-                    )
-                
-                with col_role2:
-                    if new_role == "Admin":
-                        st.selectbox("Application", options=["Main"], disabled=True, key="add_app_admin")
-                        new_app = "Main"
-                    else:
-                        new_app = st.selectbox(
-                            "Application", options=app_display_names,
-                            format_func=lambda x: x.capitalize(),
-                            key="add_app_select"
-                        )
-
-                # Username Section
-                st.write("---")
-                st.subheader("👤 Username")
-                if new_role == "Admin":
-                    new_username = st.text_input("Username", key="add_username_admin", placeholder="Admin username")
-                elif new_app == "Sales" and publishing_consultant_names:
-                    st.info("💡 Sales users must use publishing consultant names for data integrity")
-                    selected_consultant = st.selectbox(
-                        "Select Publishing Consultant",
-                        options=publishing_consultant_names,
-                        key="add_publishing_consultant",
-                        help="Username will be automatically set to the selected consultant name"
-                    )
-                    new_username = selected_consultant
-                    st.success(f"✅ Username: **{new_username}**")
-                else:
-                    new_username = st.text_input("Username", key="add_username", placeholder="Enter username")
-
-                # Contact Information
-                st.write("---")
-                st.subheader("📧 Contact Information")
-                col_contact1, col_contact2 = st.columns(2)
-                with col_contact1:
-                    new_email = st.text_input("Email", key="add_email", placeholder="Enter email")
-                with col_contact2:
-                    new_password = st.text_input("Password", type="password", key="add_password", placeholder="Enter password")
-
-                # Additional Information
-                st.write("---")
-                st.subheader("📋 Additional Information")
-                col_add1, col_add2 = st.columns(2)
-                with col_add1:
-                    new_associate_id = st.text_input("Associate ID", key="add_associate_id", placeholder="Enter associate ID")
-                with col_add2:
-                    new_designation = st.text_input("Designation", key="add_designation", placeholder="Enter designation")
-
-                # Access Permissions
-                if new_role != "Admin":
-                    st.write("---")
-                    st.subheader("🔐 Access Permissions")
-                    with st.container(border=True):
-                        access_options = (
-                            list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
-                            else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
-                            else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
-                        )
-                        
-                        if new_app == "Main":
-                            new_access_type = st.multiselect(
-                                "Access Permissions", options=access_options, default=[],
-                                key="add_access_type_select"
-                            )
-                        elif new_app in FULL_ACCESS_APPS:
-                            new_access_type = st.selectbox(
-                                "Access Permissions", options=access_options, index=0,
-                                key=f"add_access_type_full_{new_app.lower()}",
-                                help=f"{new_app} users have full access by default"
-                            )
-                        else:
-                            new_access_type = st.selectbox(
-                                "Access Permissions", options=access_options,
-                                key="add_access_type_operations"
-                            )
-
-                        # Level and Reports To
-                        show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
-                        if show_level_report:
-                            col_level1, col_level2 = st.columns(2)
-                            with col_level1:
-                                new_level_display = st.selectbox(
-                                    "Access Level", options=["Worker", "Reporting Manager", "Both"],
-                                    key="add_level_select"
-                                )
-                                new_level = new_level_display.lower().replace(" ", "_")
-                            with col_level2:
-                                if new_level in ["worker", "both"]:
-                                    report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
-                                    new_report_to_display = st.selectbox(
-                                        "Reports To", options=["None"] + report_to_options,
-                                        key="add_report_to_select"
-                                    )
-                                    new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if new_report_to_display != "None" else None
-                                else:
-                                    new_report_to = None
-                                    st.selectbox("Reports To", options=["None"], disabled=True, key="add_report_to_disabled")
-                        else:
-                            new_level = None
-                            new_report_to = None
-
-                # Start Date
-                if new_app == "Main":
-                    new_start_date = st.date_input("Start Date", key="add_start_date")
-                else:
-                    new_start_date = None
-
-                # Add Button
-                if st.button("➕ Add User", key="add_user_btn", type="primary", width='stretch'):
-                    if not new_username or not new_password:
-                        st.error("❌ Username and password are required.")
-                    elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
-                        st.error("❌ Invalid email format.")
-                    elif new_role != "Admin" and not new_app:
-                        st.error("❌ Application selection is required.")
-                    elif new_app == "Sales" and not publishing_consultant_names:
-                        st.error("❌ No publishing consultants available.")
-                    else:
-                        try:
-                            with st.spinner("Adding user..."):
-                                with conn.session as s:
-                                    s.execute(
-                                        text("""
-                                            INSERT INTO userss (username, email, associate_id, designation, password, role)
-                                            VALUES (:username, :email, :associate_id, :designation, :password, :role)
-                                        """),
-                                        {
-                                            "username": new_username, "email": new_email or None,
-                                            "associate_id": new_associate_id or None,
-                                            "designation": new_designation or None,
-                                            "password": new_password, "role": new_role.lower()
-                                        }
-                                    )
-                                    new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
-                                    
-                                    if new_role != "Admin" and new_app:
-                                        db_app_value = app_db_values.get(new_app, new_app.lower())
-                                        access_value = (
-                                            ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
-                                            else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
-                                            else None
-                                        )
-                                        s.execute(
-                                            text("""
-                                                INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
-                                                VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
-                                            """),
-                                            {
-                                                "user_id": new_user_id, "app": db_app_value,
-                                                "access_type": access_value, "level": new_level,
-                                                "report_to": new_report_to, "start_date": new_start_date
-                                            }
-                                        )
-                                    s.commit()
-                                
                                 log_activity(
                                     conn, st.session_state.user_id, st.session_state.username,
-                                    st.session_state.session_id, "added user",
-                                    f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
+                                    st.session_state.session_id, "toggled checkbox",
+                                    f"Show Passwords changed to '{show_passwords}'"
                                 )
-                                st.success("✅ User Added Successfully!")
-                                st.rerun()
-                        except Exception as e:
-                            error_message = str(e).lower()
-                            if "duplicate entry" in error_message:
-                                if "'username'" in error_message:
-                                    st.error("❌ Username already exists.")
-                                elif "'email'" in error_message:
-                                    st.error("❌ Email already exists.")
+                                st.session_state.show_passwords = show_passwords
+                                st.session_state.show_passwords_prev = show_passwords
+                            except Exception as e:
+                                st.error(f"❌ Error logging activity: {str(e)}")
+
+                        user_data = [{
+                            "ID": user.id, "Username": user.username, "Email": user.email or "",
+                            "Associate ID": user.associate_id or "", "Designation": user.designation or "",
+                            "Password": user.password if st.session_state.show_passwords else "••••••••",
+                            "Real_Password": user.password, "Role": user.role.capitalize() if user.role else "",
+                            "Apps": user.apps or "", "Access Types": user.access_types or "",
+                            "Levels": user.levels or "", "Reports To": user.report_to or "",
+                            "Start Date": user.start_date
+                        } for user in users]
+            
+                        df = pd.DataFrame(user_data)
+                        st.data_editor(
+                            df, width="stretch", hide_index=True,
+                            disabled=["ID", "Username", "Email", "Associate ID", "Designation", 
+                                     "Password", "Real_Password", "Role", "Apps", "Access Types", 
+                                     "Levels", "Reports To", "Start Date"],
+                            column_config={
+                                "ID": st.column_config.NumberColumn("ID", disabled=True),
+                                "Password": st.column_config.TextColumn("Password"),
+                                "Real_Password": None,
+                                "Role": st.column_config.SelectboxColumn("Role", options=["Admin", "User"]),
+                                "Start Date": st.column_config.DateColumn("Start Date")
+                            },
+                            column_order=["ID", "Username", "Email", "Password", "Associate ID", "Designation", 
+                                         "Role", "Apps", "Access Types", "Levels", "Reports To", 
+                                         "Start Date"],
+                            num_rows="fixed", key="user_table"
+                        )
+
+                elif selected_user_tab == "Edit User":
+
+                    tab_col1, _ = st.columns([2,1])
+
+                    with tab_col1:
+                        st.write("### ✏️ Edit Existing User")
+                        if not users:
+                            st.error("❌ No users found in database.")
+                            st.stop()
+
+                        with st.container(border=True):
+                            user_dict = {f"{user.username} (ID: {user.id})": user for user in users}
+                            selected_user_key = st.selectbox(
+                                "Select User to Edit", 
+                                options=list(user_dict.keys()), 
+                                key="edit_user_select",
+                                format_func=lambda x: x
+                            )
+                            selected_user = user_dict[selected_user_key]
+
+                        with st.container(border=True):
+                
+                            if selected_user.id == 1:
+                                st.warning("⚠️ Primary admin (ID: 1) - Limited editing capabilities.")
+
+                            # Check if current user is Sales app user
+                            try:
+                                with conn.session as s:
+                                    uaa = s.execute(
+                                        text("SELECT app, access_type, level, report_to, start_date FROM user_app_access WHERE user_id = :user_id"),
+                                        {"user_id": selected_user.id}
+                                    ).fetchone()
+                                    is_sales_user = uaa and uaa.app and uaa.app.lower() == 'sales'
+                                    current_app_db = uaa.app if uaa else None
+                                    current_access_type = uaa.access_type if uaa else None
+                                    current_level = uaa.level if uaa else None
+                                    current_report_to = uaa.report_to if uaa else None
+                                    current_start_date = uaa.start_date if uaa else None
+                            except:
+                                is_sales_user = False
+                                current_app_db = None
+                                current_access_type = None
+                                current_level = None
+                                current_report_to = None
+                                current_start_date = None
+
+                            current_app_display = next((display for display, db_val in app_db_values.items() if db_val == current_app_db), "Main")
+
+                            # Basic Information Section
+                            st.subheader("👤 Basic Information")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if is_sales_user and publishing_consultant_names:
+                                    st.text_input(
+                                        "Username", value=selected_user.username, disabled=True,
+                                        help="💡 Sales users must use publishing consultant names. Contact admin to change."
+                                    )
+                                    new_username = selected_user.username
+                                    st.info(f"👤 Publishing Consultant: **{new_username}**")
                                 else:
-                                    st.error(f"❌ Duplicate entry: {str(e)}")
-                            else:
-                                st.error(f"❌ Database error: {str(e)}")
-
-        
-
-
-###################################################################################################################################
-##################################--------------- Export Data in PDF/Excel ----------------------------##################################
-###################################################################################################################################
-
-
-@st.dialog("Export Data", width="large")
-def export_data_dialog(conn):
-
-    def export_data():
-        st.write(" ### Export Filtered Books as Excel")
-        
-        with st.container(border=True):
-            col1, col2 = st.columns([1,1], gap="small")
-            with col1:
-                st.subheader("Database Selection")
-                database = st.radio(
-                    "Select Database",
-                    ["MIS", "IJISEM"],
-                    index=0,
-                    horizontal=True
-                )
-            
-            with col2:
-                st.subheader("Export Options")
-                if database == "MIS":
-                    export_all = st.checkbox("All Data Export", value=True)
-                    export_authors = st.checkbox("Only Author Data")
-                    export_books = st.checkbox("Only Book Data")
-                    export_inventory = st.checkbox("Only Inventory Data")
+                                    new_username = st.text_input(
+                                        "Username", value=selected_user.username,
+                                        key=f"edit_username_{selected_user.id}"
+                                    )
                     
-                    export_options = []
-                    if export_all:
-                        export_options.append("All Data Export")
-                    if export_authors:
-                        export_options.append("Only Author Data")
-                    if export_books:
-                        export_options.append("Only Book Data")
-                    if export_inventory:
-                        export_options.append("Only Inventory Data")
-                else:
-                    export_all = st.checkbox("All Data Export", value=True)
-                    export_authors = st.checkbox("Only Author Data")
-                    export_papers = st.checkbox("Only Papers Data")
+                                new_email = st.text_input(
+                                    "Email", value=selected_user.email or "",
+                                    key=f"edit_email_{selected_user.id}"
+                                )
+                
+                            with col2:
+                                new_password = st.text_input(
+                                    "Password", value="", type="password",
+                                    key=f"edit_password_{selected_user.id}",
+                                    placeholder="Leave empty to keep current"
+                                )
                     
-                    export_options = []
-                    if export_all:
-                        export_options.append("All Data Export")
-                    if export_authors:
-                        export_options.append("Only Author Data")
-                    if export_papers:
-                        export_options.append("Only Papers Data")
-            
-            if st.button("Export to Excel", key="export_button", type="primary"):
-                if not export_options:
-                    st.error("Please select at least one export option")
-                    return
+                                current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
+                                if selected_user.id == 1:
+                                    st.selectbox("Role", options=["Admin"], disabled=True, key=f"edit_role_{selected_user.id}")
+                                    new_role = "Admin"
+                                else:
+                                    new_role = st.selectbox(
+                                        "Role", options=["Admin", "User"],
+                                        index=["Admin", "User"].index(current_role),
+                                        key=f"edit_role_{selected_user.id}"
+                                    )
+
+                            # Application and Access Section
+                            st.write("---")
+                            st.subheader("🔧 Application & Access")
+                            col_app1, col_app2 = st.columns([0.5,2])
+                            with col_app1:
+                                if new_role == "Admin":
+                                    st.selectbox("Application", options=["Main"], disabled=True, key=f"edit_app_admin_{selected_user.id}")
+                                    new_app = "Main"
+                                else:
+                                    new_app = st.selectbox(
+                                        "Application", options=app_display_names,
+                                        format_func=lambda x: x.capitalize(),
+                                        index=app_display_names.index(current_app_display) if current_app_display in app_display_names else 0,
+                                        key=f"edit_app_select_{selected_user.id}"
+                                    )
+
+                            with col_app2:
+                                access_options = (
+                                    list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
+                                    else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
+                                    else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
+                                )
                     
-                with st.spinner("Generating export..."):
-                    dfs = []
-                    if database == "IJISEM":
-                        for option in export_options:
-                            if option == "All Data Export":
-                                df = get_all_ijisem_data(ijisem_conn)
-                                dfs.append(('All_Data', df))
-                            elif option == "Only Author Data":
-                                df = ijisem_conn.query("SELECT * FROM authors")
-                                dfs.append(('Authors', df))
-                            else:  # Only Papers Data
-                                df = ijisem_conn.query("SELECT * FROM papers")
-                                dfs.append(('Papers', df))
-                    else:  # booktracker
-                        for option in export_options:
-                            if option == "All Data Export":
-                                df = get_all_booktracker_data(conn)
-                                dfs.append(('All_Data', df))
-                            elif option == "Only Author Data":
-                                df = conn.query("SELECT * FROM authors")
-                                dfs.append(('Authors', df))
-                            elif option == "Only Book Data":
-                                df = conn.query("SELECT * FROM books")
-                                dfs.append(('Books', df))
-                            else:  # Inventory Data Export
-                                df = conn.query("SELECT * FROM inventory")
-                                dfs.append(('Inventory', df))
+                                current_access = current_access_type.split(",") if current_access_type else []
+                                current_access = [acc.strip() for acc in current_access if acc.strip() in access_options]
                     
-                    # Create Excel file in memory
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        for sheet_name, df in dfs:
-                            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+                                if new_app == "Main":
+                                    new_access_type = st.multiselect(
+                                        "Access Permissions", options=access_options,
+                                        default=current_access, key=f"edit_access_type_{selected_user.id}"
+                                    )
+                                elif new_app in FULL_ACCESS_APPS:
+                                    default_access = current_access_type if current_access_type in access_options else "Full Access"
+                                    new_access_type = st.selectbox(
+                                        "Access Permissions", options=access_options,
+                                        index=access_options.index(default_access) if default_access in access_options else 0,
+                                        key=f"edit_access_type_full_{selected_user.id}"
+                                    )
+                                else:
+                                    default_access = current_access_type if current_access_type in access_options else (access_options[0] if access_options else "")
+                                    new_access_type = st.selectbox(
+                                        "Access Permissions", options=access_options,
+                                        index=access_options.index(default_access) if default_access in access_options else 0,
+                                        key=f"edit_access_type_ops_{selected_user.id}"
+                                    )
+
+                            # Additional Information
+                            st.write("---")
+                            st.subheader("📋 Additional Information")
+                            col_add1, col_add2 = st.columns(2)
+                            with col_add1:
+                                new_associate_id = st.text_input(
+                                    "Associate ID", value=selected_user.associate_id or "",
+                                    key=f"edit_associate_id_{selected_user.id}"
+                                )
+                            with col_add2:
+                                new_designation = st.text_input(
+                                    "Designation", value=selected_user.designation or "",
+                                    key=f"edit_designation_{selected_user.id}"
+                                )
+
+                            # Level and Reports To
+                            show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
+                            if show_level_report:
+                                st.write("---")
+                                col_level1, col_level2 = st.columns(2)
+                                with col_level1:
+                                    current_level_display = "Worker" if current_level == "worker" else "Reporting Manager" if current_level == "reporting_manager" else "Both"
+                                    new_level_display = st.selectbox(
+                                        "Access Level", options=["Worker", "Reporting Manager", "Both"],
+                                        index=["Worker", "Reporting Manager", "Both"].index(current_level_display) if current_level_display in ["Worker", "Reporting Manager", "Both"] else 0,
+                                        key=f"edit_level_{selected_user.id}"
+                                    )
+                                    new_level = new_level_display.lower().replace(" ", "_")
                     
-                    # Get current timestamp for filename
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    filename = f"{database}_export_{timestamp}.xlsx"
-                    
-                    # Send email
-                    subject = f"{database} Data Export - {', '.join(export_options)}"
-                    body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
-                    
-                    if send_email(subject, body, output.getvalue(), filename):
-                        st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
-                        st.toast(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}", icon="✔️", duration="long")
-                        st.balloons()
-                    else:
-                        st.error("Failed to send export email")
-
-
-
-    def export_filtered_books_pdf(conn):
-        st.write("### Export Filtered Books as PDF")
-
-        global_col1, global_col2 = st.columns([1,1.5], gap="small")
-
-        with global_col1:
-            with st.container(border=True):
-                # Publisher filter (Radio button at the top)
-                publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
-                selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
-                
-                # Delivery Status, Author Type, and Subject filters (side-by-side selectboxes)
-                col1, col2 = st.columns([1, 1], gap="small")
-                
-                with col1:
-                    delivery_status = st.selectbox("Delivery Status", ["All", "Delivered", "Ongoing"], index=0, key="filter_delivery_status")
-                
-                with col2:
-                    author_types = ["All", "Single", "Double", "Triple", "Multiple"]
-                    selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
-                
-                # Subject filter
-                selected_subject = st.selectbox("Subject", ["All"] + VALID_SUBJECTS, index=0, key="filter_subject")
-                
-                # Tags filter (multiselect below)
-                sorted_tags = fetch_tags(conn)
-                selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
-                
-                # Build query with filters, joining book_authors and authors to get author names and positions
-                query = """
-                SELECT b.images, b.title, b.isbn, b.book_mrp, b.publisher,
-                    GROUP_CONCAT(CONCAT(a.name, ' (', ba.author_position, ')')) AS authors
-                FROM books b
-                LEFT JOIN book_authors ba ON b.book_id = ba.book_id
-                LEFT JOIN authors a ON ba.author_id = a.author_id
-                WHERE 1=1
-                """
-                params = {}
-                if selected_publisher != "All":
-                    query += " AND b.publisher = :publisher"
-                    params["publisher"] = selected_publisher
-                if delivery_status != "All":
-                    query += " AND b.deliver = :deliver"
-                    params["deliver"] = 1 if delivery_status == "Delivered" else 0
-                if selected_tags:
-                    query += " AND (" + " OR ".join(["b.tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
-                    for i, tag in enumerate(selected_tags):
-                        params[f"tag{i}"] = f"%{tag}%"
-                if selected_author_type != "All":
-                    query += " AND b.author_type = :author_type"
-                    params["author_type"] = selected_author_type
-                if selected_subject != "All":
-                    query += " AND b.subject = :subject"
-                    params["subject"] = selected_subject
-                
-                query += " GROUP BY b.book_id, b.publisher, b.images, b.title, b.isbn, b.book_mrp"
-                
-                # Fetch filtered data for preview
-                df = conn.query(query, params=params)
-
-            button_col1, button_col2 = st.columns([3.9,1.9], gap="small")   
-
-            with button_col1:
-                # Export button
-                if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
-                    with st.spinner("Generating PDF (This may take while)..."):
-                        # Generate PDF using reportlab
-                        pdf_output = io.BytesIO()
-                        doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2.5*cm, leftMargin=2.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
-                        elements = []
-                        
-                        # Styles
-                        styles = getSampleStyleSheet()
-                        title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=14, spaceAfter=8)
-                        normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=8, spaceAfter=4, wordWrap='CJK')
-                        summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=8, spaceAfter=6)
-                        
-                        # Add title
-                        elements.append(Paragraph("Exported Books Report", title_style))
-                        elements.append(Spacer(1, 8))
-                        elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
-                        elements.append(Spacer(1, 8))
-                        
-                        # Add summary
-                        book_count = len(df)
-                        publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
-                        tags_text = ", ".join(selected_tags) if selected_tags else "None"
-                        subject_text = selected_subject if selected_subject != "All" else "All Subjects"
-                        elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
-                        elements.append(Paragraph(f"Subject: {subject_text}", summary_style))
-                        elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
-                        elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
-                        elements.append(Spacer(1, 8))
-                        
-                        # Table data
-                        table_data = [["Image", "Title", "Authors", "ISBN", "MRP", "Publisher"]]
-                        for idx, row in df.iterrows():
-                            image_url = row['images'] if pd.notna(row['images']) else ''
-                            title = row['title'] if pd.notna(row['title']) else ''
-                            authors = row['authors'] if pd.notna(row['authors']) else 'No Authors'
-                            isbn = row['isbn'] if pd.notna(row['isbn']) else ''
-                            mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
-                            publisher_ = str(row['publisher']) if pd.notna(row['publisher']) else ''
+                                with col_level2:
+                                    if new_level in ["worker", "both"]:
+                                        report_to_options = ["None"] + [f"{user.username} (ID: {user.id})" for user in users]
+                                        current_report_to_display = "None"
+                                        if current_report_to:
+                                            try:
+                                                with conn.session as s:
+                                                    report_user = s.execute(
+                                                        text("SELECT username FROM userss WHERE id = :id"),
+                                                        {"id": current_report_to}
+                                                    ).fetchone()
+                                                    if report_user:
+                                                        current_report_to_display = f"{report_user[0]} (ID: {current_report_to})"
+                                            except:
+                                                pass
                             
-                            # Handle image (fetch from URL and compress/resize)
-                            image_element = Paragraph("No Image", normal_style)
-                            if image_url and image_url.startswith(('http://', 'https://')):
-                                try:
-                                    response = requests.get(image_url, stream=True, timeout=5)
-                                    if response.status_code == 200:
-                                        # Load image with PIL
-                                        pil_image = PILImage.open(io.BytesIO(response.content))
-                                        # Resize to 100x150 pixels for compactness
-                                        pil_image.thumbnail((100, 150), PILImage.Resampling.LANCZOS)
-                                        # Save compressed to BytesIO as JPEG
-                                        img_buffer = io.BytesIO()
-                                        pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
-                                        img_buffer.seek(0)
-                                        # Load into reportlab Image
-                                        image_element = Image(img_buffer, width=3*cm, height=4*cm)
-                                except Exception:
-                                    pass
+                                        new_report_to_display = st.selectbox(
+                                            "Reports To", options=report_to_options,
+                                            index=report_to_options.index(current_report_to_display),
+                                            key=f"edit_report_to_{selected_user.id}"
+                                        )
+                                        new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if " (ID: " in new_report_to_display else None
+                                    else:
+                                        new_report_to = None
+                                        st.selectbox("Reports To", options=["None"], disabled=True, key=f"edit_report_to_disabled_{selected_user.id}")
+                            else:
+                                new_level = None
+                                new_report_to = None
+
+                            # Start Date
+                            new_start_date = st.date_input(
+                                "Start Date", value=current_start_date,
+                                key=f"edit_start_date_{selected_user.id}",
+                                disabled=new_app != "Main"
+                            )
+
+                            # Action Buttons
+                            st.write("---")
+                            col_btn1, col_btn2 = st.columns([3, 1])
+                            with col_btn1:
+                                if st.button("💾 Save Changes", key=f"save_edit_{selected_user.id}", type="primary", width='stretch'):
+                                    if new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+                                        st.error("❌ Invalid email format.")
+                                    else:
+                                        try:
+                                            with st.spinner("Saving changes..."):
+                                                with conn.session as s:
+                                                    # Update users table
+                                                    s.execute(
+                                                        text("""
+                                                            UPDATE userss SET username = :username, email = :email,
+                                                            associate_id = :associate_id, designation = :designation,
+                                                            password = :password, role = :role WHERE id = :id
+                                                        """),
+                                                        {
+                                                            "username": new_username,
+                                                            "email": new_email or None,
+                                                            "associate_id": new_associate_id or None,
+                                                            "designation": new_designation or None,
+                                                            "password": new_password if new_password else selected_user.password,
+                                                            "role": new_role.lower(),
+                                                            "id": selected_user.id
+                                                        }
+                                                    )
+                                        
+                                                    # Update user_app_access
+                                                    s.execute(text("DELETE FROM user_app_access WHERE user_id = :user_id"), {"user_id": selected_user.id})
+                                        
+                                                    if new_role != "Admin" and new_app:
+                                                        db_app_value = app_db_values.get(new_app, new_app.lower())
+                                                        access_value = (
+                                                            ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
+                                                            else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
+                                                            else None
+                                                        )
+                                                        s.execute(
+                                                            text("""
+                                                                INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                                VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                            """),
+                                                            {
+                                                                "user_id": selected_user.id, "app": db_app_value,
+                                                                "access_type": access_value, "level": new_level,
+                                                                "report_to": new_report_to, "start_date": new_start_date
+                                                            }
+                                                        )
+                                                    s.commit()
                                     
-                            table_data.append([
-                                image_element,
-                                Paragraph(title, normal_style),
-                                Paragraph(authors, normal_style),
-                                Paragraph(isbn, normal_style),
-                                Paragraph(mrp, normal_style),
-                                Paragraph(publisher_, normal_style)
-                            ])
+                                                log_activity(
+                                                    conn, st.session_state.user_id, st.session_state.username,
+                                                    st.session_state.session_id, "updated user",
+                                                    f"User ID: {selected_user.id}, Username: {new_username}"
+                                                )
+                                                st.success("✅ User Updated Successfully!")
+                                                st.rerun()
+                                        except Exception as e:
+                                            error_message = str(e).lower()
+                                            if "duplicate entry" in error_message and "'username'" in error_message:
+                                                st.error("❌ Username already exists.")
+                                            else:
+                                                st.error(f"❌ Database error: {str(e)}")
+
+                            with col_btn2:
+                                if selected_user.id != 1:
+                                    if st.button("🗑️ Delete", key=f"delete_{selected_user.id}", type="secondary"):
+                                        st.session_state.confirm_delete_user_id = selected_user.id
+
+                            if st.session_state.confirm_delete_user_id == selected_user.id:
+                                st.warning(f"⚠️ Are you sure you want to delete {selected_user.username}?")
+                                col_confirm1, col_confirm2 = st.columns(2)
+                                with col_confirm1:
+                                    if st.button("❌ Cancel", key=f"cancel_delete_{selected_user.id}"):
+                                        st.session_state.confirm_delete_user_id = None
+                                with col_confirm2:
+                                    if st.button("🗑️ Confirm Delete", key=f"confirm_delete_{selected_user.id}", type="secondary"):
+                                        try:
+                                            with st.spinner("Deleting user..."):
+                                                with conn.session as s:
+                                                    s.execute(text("DELETE FROM user_app_access WHERE user_id = :id"), {"id": selected_user.id})
+                                                    s.execute(text("DELETE FROM userss WHERE id = :id"), {"id": selected_user.id})
+                                                    s.commit()
+                                                log_activity(
+                                                    conn, st.session_state.user_id, st.session_state.username,
+                                                    st.session_state.session_id, "deleted user",
+                                                    f"User ID: {selected_user.id}, Username: {selected_user.username}"
+                                                )
+                                                st.success("✅ User Deleted Successfully!")
+                                                st.rerun()
+                                        except Exception as e:
+                                            st.error(f"❌ Database error: {str(e)}")
+                                        st.session_state.confirm_delete_user_id = None
+
+                elif selected_user_tab == "Add User":
+
+                    tab3_col1, _ = st.columns([2,1])
+
+                    with tab3_col1:
+                        st.write("### ➕ Add New User")
+                        with st.container(border=True):
+                            # Role and Application Selection
+                            st.subheader("🔧 Role & Application")
+                            col_role1, col_role2 = st.columns(2)
+                            with col_role1:
+                                new_role = st.selectbox(
+                                    "Role", options=["Admin", "User"],
+                                    format_func=lambda x: x.capitalize(),
+                                    key="add_role"
+                                )
+                
+                            with col_role2:
+                                if new_role == "Admin":
+                                    st.selectbox("Application", options=["Main"], disabled=True, key="add_app_admin")
+                                    new_app = "Main"
+                                else:
+                                    new_app = st.selectbox(
+                                        "Application", options=app_display_names,
+                                        format_func=lambda x: x.capitalize(),
+                                        key="add_app_select"
+                                    )
+
+                            # Username Section
+                            st.write("---")
+                            st.subheader("👤 Username")
+                            if new_role == "Admin":
+                                new_username = st.text_input("Username", key="add_username_admin", placeholder="Admin username")
+                            elif new_app == "Sales" and publishing_consultant_names:
+                                st.info("💡 Sales users must use publishing consultant names for data integrity")
+                                selected_consultant = st.selectbox(
+                                    "Select Publishing Consultant",
+                                    options=publishing_consultant_names,
+                                    key="add_publishing_consultant",
+                                    help="Username will be automatically set to the selected consultant name"
+                                )
+                                new_username = selected_consultant
+                                st.success(f"✅ Username: **{new_username}**")
+                            else:
+                                new_username = st.text_input("Username", key="add_username", placeholder="Enter username")
+
+                            # Contact Information
+                            st.write("---")
+                            st.subheader("📧 Contact Information")
+                            col_contact1, col_contact2 = st.columns(2)
+                            with col_contact1:
+                                new_email = st.text_input("Email", key="add_email", placeholder="Enter email")
+                            with col_contact2:
+                                new_password = st.text_input("Password", type="password", key="add_password", placeholder="Enter password")
+
+                            # Additional Information
+                            st.write("---")
+                            st.subheader("📋 Additional Information")
+                            col_add1, col_add2 = st.columns(2)
+                            with col_add1:
+                                new_associate_id = st.text_input("Associate ID", key="add_associate_id", placeholder="Enter associate ID")
+                            with col_add2:
+                                new_designation = st.text_input("Designation", key="add_designation", placeholder="Enter designation")
+
+                            # Access Permissions
+                            if new_role != "Admin":
+                                st.write("---")
+                                st.subheader("🔐 Access Permissions")
+                                with st.container(border=True):
+                                    access_options = (
+                                        list(ACCESS_TO_BUTTON.keys()) if new_app == "Main"
+                                        else ["writer", "proofreader", "formatter", "cover_designer"] if new_app == "Operations"
+                                        else ["Full Access"] if new_app in FULL_ACCESS_APPS else []
+                                    )
                         
-                        # Create table with modern styling
-                        table = Table(table_data, colWidths=[3*cm, 4.5*cm, 5.5*cm, 2.7*cm, 1.5*cm, 1.5*cm])
-                        table.setStyle(TableStyle([
-                            # Header
-                            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),  # Dark slate blue header
-                            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                            ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                            ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, 0), 9),
-                            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-                            ('TOPPADDING', (0, 0), (-1, 0), 6),
-                            # Body
-                            ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Center image
-                            ('ALIGN', (1, 1), (-1, -1), 'LEFT'),   # Left-align text for readability
-                            ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
-                            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                            ('FONTSIZE', (0, 1), (-1, -1), 8),
-                            # Alternate row colors (clean and minimal)
-                            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
-                                colors.HexColor('#FFFFFF'),  # White
-                                colors.HexColor('#F7F9FB')   # Very light gray
-                            ]),
-                            # Grid & borders
-                            ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#D3D8E0')),  # Subtle gray grid
-                            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#A0A8B3')),   # Clean outer border
-                            # Padding for compactness
-                            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-                            ('BOTTOMPADDING', (0, 1), (-1, -1), 3),
-                            ('TOPPADDING', (0, 1), (-1, -1), 3),
-                        ]))
-                        
-                        elements.append(table)
-                        
-                        # Build PDF
-                        try:
-                            doc.build(elements)
-                        except Exception as e:
-                            st.error(f"Failed to generate PDF: {str(e)}")
-                            st.toast(f"Failed to generate PDF: {str(e)}", icon="❌", duration="long")
-                            return
-                        
-                        # Send email
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"Filtered_Books_{timestamp}.pdf"
-                        subject = f"Filtered Books PDF Export"
-                        body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Subject={selected_subject}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
-                        
-                        if send_email(subject, body, pdf_output.getvalue(), filename):
-                            st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
-                            st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
-                            st.balloons()
+                                    if new_app == "Main":
+                                        new_access_type = st.multiselect(
+                                            "Access Permissions", options=access_options, default=[],
+                                            key="add_access_type_select"
+                                        )
+                                    elif new_app in FULL_ACCESS_APPS:
+                                        new_access_type = st.selectbox(
+                                            "Access Permissions", options=access_options, index=0,
+                                            key=f"add_access_type_full_{new_app.lower()}",
+                                            help=f"{new_app} users have full access by default"
+                                        )
+                                    else:
+                                        new_access_type = st.selectbox(
+                                            "Access Permissions", options=access_options,
+                                            key="add_access_type_operations"
+                                        )
+
+                                    # Level and Reports To
+                                    show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
+                                    if show_level_report:
+                                        col_level1, col_level2 = st.columns(2)
+                                        with col_level1:
+                                            new_level_display = st.selectbox(
+                                                "Access Level", options=["Worker", "Reporting Manager", "Both"],
+                                                key="add_level_select"
+                                            )
+                                            new_level = new_level_display.lower().replace(" ", "_")
+                                        with col_level2:
+                                            if new_level in ["worker", "both"]:
+                                                report_to_options = [f"{user.username} (ID: {user.id})" for user in users]
+                                                new_report_to_display = st.selectbox(
+                                                    "Reports To", options=["None"] + report_to_options,
+                                                    key="add_report_to_select"
+                                                )
+                                                new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if new_report_to_display != "None" else None
+                                            else:
+                                                new_report_to = None
+                                                st.selectbox("Reports To", options=["None"], disabled=True, key="add_report_to_disabled")
+                                    else:
+                                        new_level = None
+                                        new_report_to = None
+
+                            # Start Date
+                            if new_app == "Main":
+                                new_start_date = st.date_input("Start Date", key="add_start_date")
+                            else:
+                                new_start_date = None
+
+                            # Add Button
+                            if st.button("➕ Add User", key="add_user_btn", type="primary", width='stretch'):
+                                if not new_username or not new_password:
+                                    st.error("❌ Username and password are required.")
+                                elif new_email and not re.match(r"[^@]+@[^@]+\.[^@]+", new_email):
+                                    st.error("❌ Invalid email format.")
+                                elif new_role != "Admin" and not new_app:
+                                    st.error("❌ Application selection is required.")
+                                elif new_app == "Sales" and not publishing_consultant_names:
+                                    st.error("❌ No publishing consultants available.")
+                                else:
+                                    try:
+                                        with st.spinner("Adding user..."):
+                                            with conn.session as s:
+                                                s.execute(
+                                                    text("""
+                                                        INSERT INTO userss (username, email, associate_id, designation, password, role)
+                                                        VALUES (:username, :email, :associate_id, :designation, :password, :role)
+                                                    """),
+                                                    {
+                                                        "username": new_username, "email": new_email or None,
+                                                        "associate_id": new_associate_id or None,
+                                                        "designation": new_designation or None,
+                                                        "password": new_password, "role": new_role.lower()
+                                                    }
+                                                )
+                                                new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
+                                    
+                                                if new_role != "Admin" and new_app:
+                                                    db_app_value = app_db_values.get(new_app, new_app.lower())
+                                                    access_value = (
+                                                        ",".join(new_access_type) if new_app == "Main" and isinstance(new_access_type, list) and new_access_type
+                                                        else new_access_type if new_app in FULL_ACCESS_APPS + ["Operations"] and new_access_type
+                                                        else None
+                                                    )
+                                                    s.execute(
+                                                        text("""
+                                                            INSERT INTO user_app_access (user_id, app, access_type, level, report_to, start_date)
+                                                            VALUES (:user_id, :app, :access_type, :level, :report_to, :start_date)
+                                                        """),
+                                                        {
+                                                            "user_id": new_user_id, "app": db_app_value,
+                                                            "access_type": access_value, "level": new_level,
+                                                            "report_to": new_report_to, "start_date": new_start_date
+                                                        }
+                                                    )
+                                                s.commit()
+                                
+                                            log_activity(
+                                                conn, st.session_state.user_id, st.session_state.username,
+                                                st.session_state.session_id, "added user",
+                                                f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
+                                            )
+                                            st.success("✅ User Added Successfully!")
+                                            st.rerun()
+                                    except Exception as e:
+                                        error_message = str(e).lower()
+                                        if "duplicate entry" in error_message:
+                                            if "'username'" in error_message:
+                                                st.error("❌ Username already exists.")
+                                            elif "'email'" in error_message:
+                                                st.error("❌ Email already exists.")
+                                            else:
+                                                st.error(f"❌ Duplicate entry: {str(e)}")
+                                        else:
+                                            st.error(f"❌ Database error: {str(e)}")
+
+        
+
+
+        ###################################################################################################################################
+        ##################################--------------- Export Data in PDF/Excel ----------------------------##################################
+        ###################################################################################################################################
+
+
+
+
+    with settings_tab2:
+
+        def export_data():
+                st.write(" ### Export Filtered Books as Excel")
+                
+                with st.container(border=True):
+                    col1, col2 = st.columns([1,1], gap="small")
+                    with col1:
+                        st.subheader("Database Selection")
+                        database = st.radio(
+                            "Select Database",
+                            ["MIS", "IJISEM"],
+                            index=0,
+                            horizontal=True
+                        )
+                    
+                    with col2:
+                        st.subheader("Export Options")
+                        if database == "MIS":
+                            export_all = st.checkbox("All Data Export", value=True)
+                            export_authors = st.checkbox("Only Author Data")
+                            export_books = st.checkbox("Only Book Data")
+                            export_inventory = st.checkbox("Only Inventory Data")
+                            
+                            export_options = []
+                            if export_all:
+                                export_options.append("All Data Export")
+                            if export_authors:
+                                export_options.append("Only Author Data")
+                            if export_books:
+                                export_options.append("Only Book Data")
+                            if export_inventory:
+                                export_options.append("Only Inventory Data")
                         else:
-                            st.error("Failed to send export email")
-                            st.toast("Failed to send export email", icon="❌", duration="long")
+                            export_all = st.checkbox("All Data Export", value=True)
+                            export_authors = st.checkbox("Only Author Data")
+                            export_papers = st.checkbox("Only Papers Data")
+                            
+                            export_options = []
+                            if export_all:
+                                export_options.append("All Data Export")
+                            if export_authors:
+                                export_options.append("Only Author Data")
+                            if export_papers:
+                                export_options.append("Only Papers Data")
+                    
+                    if st.button("Export to Excel", key="export_button", type="primary"):
+                        if not export_options:
+                            st.error("Please select at least one export option")
+                            return
+                            
+                        with st.spinner("Generating export..."):
+                            dfs = []
+                            if database == "IJISEM":
+                                for option in export_options:
+                                    if option == "All Data Export":
+                                        df = get_all_ijisem_data(ijisem_conn)
+                                        dfs.append(('All_Data', df))
+                                    elif option == "Only Author Data":
+                                        df = ijisem_conn.query("SELECT * FROM authors")
+                                        dfs.append(('Authors', df))
+                                    else:  # Only Papers Data
+                                        df = ijisem_conn.query("SELECT * FROM papers")
+                                        dfs.append(('Papers', df))
+                            else:  # booktracker
+                                for option in export_options:
+                                    if option == "All Data Export":
+                                        df = get_all_booktracker_data(conn)
+                                        dfs.append(('All_Data', df))
+                                    elif option == "Only Author Data":
+                                        df = conn.query("SELECT * FROM authors")
+                                        dfs.append(('Authors', df))
+                                    elif option == "Only Book Data":
+                                        df = conn.query("SELECT * FROM books")
+                                        dfs.append(('Books', df))
+                                    else:  # Inventory Data Export
+                                        df = conn.query("SELECT * FROM inventory")
+                                        dfs.append(('Inventory', df))
+                            
+                            # Create Excel file in memory
+                            output = io.BytesIO()
+                            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                                for sheet_name, df in dfs:
+                                    df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+                            
+                            # Get current timestamp for filename
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            filename = f"{database}_export_{timestamp}.xlsx"
+                            
+                            # Send email
+                            subject = f"{database} Data Export - {', '.join(export_options)}"
+                            body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
+                            
+                            if send_email(subject, body, output.getvalue(), filename):
+                                st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
+                                st.toast(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}", icon="✔️", duration="long")
+                                st.balloons()
+                            else:
+                                st.error("Failed to send export email")
 
-            with button_col2:
-                st.markdown(f"**Total Books: <span style='color:red;'>{len(df)}</span>**", unsafe_allow_html=True)
-            
-        with global_col2:
-            # Display preview of filtered data
-            if df.empty:
-                st.warning("No books match the selected filters.")
-            else:
-                st.dataframe(
-                    df[['images', 'title', 'authors', 'isbn', 'book_mrp', 'publisher']],
-                    column_config={
-                        "images": st.column_config.ImageColumn("Image"),
-                        "title": "Book Title",
-                        "authors": "Authors",
-                        "isbn": "ISBN",
-                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f"),
-                        "publisher": "Publisher",
-                    },
-                    width="stretch",
-                    hide_index=True,
-                )
 
-    tab1, tab2 = st.tabs(["Export as PDF", "Export as Excel"])
 
-    with tab1:
-        export_filtered_books_pdf(conn)
-    with tab2:
+        def export_filtered_books_pdf(conn):
+            st.write("### Export Filtered Books as PDF")
 
-        col1,_ = st.columns(2)
-        with col1:
-            export_data()
-        
-        
-###################################################################################################################################
+            global_col1, global_col2 = st.columns([0.9,1.5], gap="small")
+
+            with global_col1:
+                with st.container(border=True):
+                    # Publisher filter (Radio button at the top)
+                    publishers = conn.query("SELECT DISTINCT publisher FROM books WHERE publisher IS NOT NULL").publisher.tolist()
+                    selected_publisher = st.radio("Publisher", ["All"] + publishers, index=0, key="filter_publisher", horizontal=True)
+                    
+                    # Delivery Status, Author Type, and Subject filters (side-by-side selectboxes)
+                    col1, col2 = st.columns([1, 1], gap="small")
+                    
+                    with col1:
+                        delivery_status = st.selectbox("Delivery Status", ["All", "Delivered", "Ongoing"], index=0, key="filter_delivery_status")
+                    
+                    with col2:
+                        author_types = ["All", "Single", "Double", "Triple", "Multiple"]
+                        selected_author_type = st.selectbox("Author Type", author_types, index=0, key="filter_author_type")
+                    
+                    # Subject filter
+                    selected_subject = st.selectbox("Subject", ["All"] + VALID_SUBJECTS, index=0, key="filter_subject")
+                    
+                    # Tags filter (multiselect below)
+                    sorted_tags = fetch_tags(conn)
+                    selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
+                    
+                    # Build query with filters, joining book_authors and authors to get author names and positions
+                    query = """
+                    SELECT b.images, b.title, b.isbn, b.book_mrp, b.publisher,
+                        GROUP_CONCAT(CONCAT(a.name, ' (', ba.author_position, ')')) AS authors
+                    FROM books b
+                    LEFT JOIN book_authors ba ON b.book_id = ba.book_id
+                    LEFT JOIN authors a ON ba.author_id = a.author_id
+                    WHERE 1=1
+                    """
+                    params = {}
+                    if selected_publisher != "All":
+                        query += " AND b.publisher = :publisher"
+                        params["publisher"] = selected_publisher
+                    if delivery_status != "All":
+                        query += " AND b.deliver = :deliver"
+                        params["deliver"] = 1 if delivery_status == "Delivered" else 0
+                    if selected_tags:
+                        query += " AND (" + " OR ".join(["b.tags LIKE :tag" + str(i) for i in range(len(selected_tags))]) + ")"
+                        for i, tag in enumerate(selected_tags):
+                            params[f"tag{i}"] = f"%{tag}%"
+                    if selected_author_type != "All":
+                        query += " AND b.author_type = :author_type"
+                        params["author_type"] = selected_author_type
+                    if selected_subject != "All":
+                        query += " AND b.subject = :subject"
+                        params["subject"] = selected_subject
+                    
+                    query += " GROUP BY b.book_id, b.publisher, b.images, b.title, b.isbn, b.book_mrp"
+                    
+                    # Fetch filtered data for preview
+                    df = conn.query(query, params=params)
+
+                button_col1, button_col2 = st.columns([3.9,1.9], gap="small")   
+
+                with button_col1:
+                    # Export button
+                    if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
+                        with st.spinner("Generating PDF (This may take while)..."):
+                            # Generate PDF using reportlab
+                            pdf_output = io.BytesIO()
+                            doc = SimpleDocTemplate(pdf_output, pagesize=A4, rightMargin=2.5*cm, leftMargin=2.5*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
+                            elements = []
+                            
+                            # Styles
+                            styles = getSampleStyleSheet()
+                            title_style = ParagraphStyle(name='Title', fontName='Helvetica-Bold', fontSize=14, spaceAfter=8)
+                            normal_style = ParagraphStyle(name='Normal', fontName='Helvetica', fontSize=8, spaceAfter=4, wordWrap='CJK')
+                            summary_style = ParagraphStyle(name='Summary', fontName='Helvetica-Oblique', fontSize=8, spaceAfter=6)
+                            
+                            # Add title
+                            elements.append(Paragraph("Exported Books Report", title_style))
+                            elements.append(Spacer(1, 8))
+                            elements.append(Paragraph(f"Generated on {datetime.now().strftime('%Y-%m-%d')}", normal_style))
+                            elements.append(Spacer(1, 8))
+                            
+                            # Add summary
+                            book_count = len(df)
+                            publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
+                            tags_text = ", ".join(selected_tags) if selected_tags else "None"
+                            subject_text = selected_subject if selected_subject != "All" else "All Subjects"
+                            elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
+                            elements.append(Paragraph(f"Subject: {subject_text}", summary_style))
+                            elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
+                            elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
+                            elements.append(Spacer(1, 8))
+                            
+                            # Table data
+                            table_data = [["Image", "Title", "Authors", "ISBN", "MRP", "Publisher"]]
+                            for idx, row in df.iterrows():
+                                image_url = row['images'] if pd.notna(row['images']) else ''
+                                title = row['title'] if pd.notna(row['title']) else ''
+                                authors = row['authors'] if pd.notna(row['authors']) else 'No Authors'
+                                isbn = row['isbn'] if pd.notna(row['isbn']) else ''
+                                mrp = str(row['book_mrp']) if pd.notna(row['book_mrp']) else ''
+                                publisher_ = str(row['publisher']) if pd.notna(row['publisher']) else ''
+                                
+                                # Handle image (fetch from URL and compress/resize)
+                                image_element = Paragraph("No Image", normal_style)
+                                if image_url and image_url.startswith(('http://', 'https://')):
+                                    try:
+                                        response = requests.get(image_url, stream=True, timeout=5)
+                                        if response.status_code == 200:
+                                            # Load image with PIL
+                                            pil_image = PILImage.open(io.BytesIO(response.content))
+                                            # Resize to 100x150 pixels for compactness
+                                            pil_image.thumbnail((100, 150), PILImage.Resampling.LANCZOS)
+                                            # Save compressed to BytesIO as JPEG
+                                            img_buffer = io.BytesIO()
+                                            pil_image.convert('RGB').save(img_buffer, format='JPEG', quality=70, optimize=True)
+                                            img_buffer.seek(0)
+                                            # Load into reportlab Image
+                                            image_element = Image(img_buffer, width=3*cm, height=4*cm)
+                                    except Exception:
+                                        pass
+                                        
+                                table_data.append([
+                                    image_element,
+                                    Paragraph(title, normal_style),
+                                    Paragraph(authors, normal_style),
+                                    Paragraph(isbn, normal_style),
+                                    Paragraph(mrp, normal_style),
+                                    Paragraph(publisher_, normal_style)
+                                ])
+                            
+                            # Create table with modern styling
+                            table = Table(table_data, colWidths=[3*cm, 4.5*cm, 5.5*cm, 2.7*cm, 1.5*cm, 1.5*cm])
+                            table.setStyle(TableStyle([
+                                # Header
+                                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),  # Dark slate blue header
+                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                                ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                                ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+                                ('TOPPADDING', (0, 0), (-1, 0), 6),
+                                # Body
+                                ('ALIGN', (0, 1), (0, -1), 'CENTER'),  # Center image
+                                ('ALIGN', (1, 1), (-1, -1), 'LEFT'),   # Left-align text for readability
+                                ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+                                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                                # Alternate row colors (clean and minimal)
+                                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [
+                                    colors.HexColor('#FFFFFF'),  # White
+                                    colors.HexColor('#F7F9FB')   # Very light gray
+                                ]),
+                                # Grid & borders
+                                ('GRID', (0, 0), (-1, -1), 0.3, colors.HexColor('#D3D8E0')),  # Subtle gray grid
+                                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#A0A8B3')),   # Clean outer border
+                                # Padding for compactness
+                                ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                                ('BOTTOMPADDING', (0, 1), (-1, -1), 3),
+                                ('TOPPADDING', (0, 1), (-1, -1), 3),
+                            ]))
+                            
+                            elements.append(table)
+                            
+                            # Build PDF
+                            try:
+                                doc.build(elements)
+                            except Exception as e:
+                                st.error(f"Failed to generate PDF: {str(e)}")
+                                st.toast(f"Failed to generate PDF: {str(e)}", icon="❌", duration="long")
+                                return
+                            
+                            # Send email
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            filename = f"Filtered_Books_{timestamp}.pdf"
+                            subject = f"Filtered Books PDF Export"
+                            body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Subject={selected_subject}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
+                            
+                            if send_email(subject, body, pdf_output.getvalue(), filename):
+                                st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
+                                st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
+                                st.balloons()
+                            else:
+                                st.error("Failed to send export email")
+                                st.toast("Failed to send export email", icon="❌", duration="long")
+
+                with button_col2:
+                    st.markdown(f"**Total Books: <span style='color:red;'>{len(df)}</span>**", unsafe_allow_html=True)
+                
+            with global_col2:
+                # Display preview of filtered data
+                if df.empty:
+                    st.warning("No books match the selected filters.")
+                else:
+                    st.dataframe(
+                        df[['images', 'title', 'authors', 'isbn', 'book_mrp', 'publisher']],
+                        column_config={
+                            "images": st.column_config.ImageColumn("Image"),
+                            "title": "Book Title",
+                            "authors": "Authors",
+                            "isbn": "ISBN",
+                            "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f"),
+                            "publisher": "Publisher",
+                        },
+                        width="stretch",
+                        hide_index=True,
+                    )
+
+        col_exp_nav, col_exp_content = st.columns([0.7, 5])
+        with col_exp_nav:
+            selected_export_tab = st.radio("Export Data", ["Export as PDF", "Export as Excel"], label_visibility="collapsed")
+
+        with col_exp_content:
+            if selected_export_tab == "Export as PDF":
+                export_filtered_books_pdf(conn)
+            elif selected_export_tab == "Export as Excel":
+                col1, _ = st.columns(2)
+                with col1:
+                    export_data()
 ##################################--------------- Edit Auhtor Details ----------------------------##################################
 ###################################################################################################################################
 
@@ -2153,6 +2238,191 @@ def generate_tags_with_ollama(book_title):
     except Exception as e:
         st.error(f"Failed to generate tags with gemma3:1b for '{book_title}': {str(e)}")
         return []
+    
+
+agph_email = st.secrets["agph_mail"]["EMAIL_ADDRESS"]
+cipher_email = st.secrets["cipher_mail"]["EMAIL_ADDRESS"]
+ag_volumes_email = st.secrets["ag_volumes_mail"]["EMAIL_ADDRESS"]
+
+
+# Updated Configuration with specific SMTP settings per publisher
+PUBLISHER_CONFIG = {
+    "AGPH": {
+        "name": "AG Publishing House", 
+        "email": agph_email, 
+        "secret_section": "agph_mail",
+        "smtp_server": GMAIL_SMTP_SERVER,
+        "smtp_port": GMAIL_SMTP_PORT
+    },
+    "Cipher": {
+        "name": "Cipher Publishing", 
+        "email": cipher_email, 
+        "secret_section": "cipher_mail",
+        "smtp_server": HOSTINGER_SMTP_SERVER,
+        "smtp_port": HOSTINGER_SMTP_PORT
+    },
+    "AG Volumes": {
+        "name": "AG Volumes", 
+        "email": ag_volumes_email, 
+        "secret_section": "ag_volumes_mail",
+        "smtp_server": GMAIL_SMTP_SERVER,
+        "smtp_port": GMAIL_SMTP_PORT
+    },
+}
+
+def send_welcome_email(to_email, author_name, author_phone, book_title, book_id, author_id, author_position, publisher="AGPH"):
+    """
+    Sends a formatted HTML welcome email.
+    Dynamically switches between SMTP_SSL (Port 465) and STARTTLS (Port 587).
+    Returns: (bool, str) -> (Success Status, Sender Email Address)
+    """
+    if not to_email:
+        return False, None
+    
+    # 1. Load Configuration
+    config = PUBLISHER_CONFIG.get(publisher, PUBLISHER_CONFIG.get("AGPH"))
+    if not config:
+        st.error(f"Configuration for publisher '{publisher}' not found.")
+        return False, None
+
+    pub_name = config.get("name")
+    pub_email = config.get("email")
+    secret_section = config.get("secret_section")
+    
+    # Get specific server details, default to Gmail/587 if missing
+    smtp_server = config.get("smtp_server", "smtp.gmail.com")
+    smtp_port = config.get("smtp_port", 587)
+
+    try:
+        # 2. Load Credentials
+        if secret_section in st.secrets:
+            secrets_source = st.secrets[secret_section]
+            email_address = secrets_source["EMAIL_ADDRESS"]
+            email_password = secrets_source["EMAIL_PASSWORD"]
+        else:
+            st.error(f"Secrets section '{secret_section}' not found.")
+            return False, None
+
+        # 3. Construct Email
+        msg = MIMEMultipart("alternative")
+        msg['From'] = email_address
+        msg['To'] = to_email
+        msg['Subject'] = f"Publication Confirmation - {book_title} | {pub_name}"
+
+        # HTML Body (Professional solid color header - deep blue)
+        html_body = f"""
+        <html>
+          <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50; max-width: 700px; margin: 0 auto; padding: 20px;">
+            
+            <div style="background-color: #1e4976; padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 0.5px;">{pub_name}</h1>
+                <p style="color: #b8d4f1; margin: 8px 0 0 0; font-size: 14px;">Publication Confirmation</p>
+            </div>
+
+            <div style="background-color: #ffffff; padding: 35px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 8px 8px;">
+                <p style="margin-top: 0;">Dear <strong>{author_name}</strong>,</p>
+                
+                <p>Thank you for choosing {pub_name}. We are pleased to confirm receipt of your publication request for "<strong>{book_title}</strong>".</p>
+                
+                <div style="background-color: #f8f9fa; padding: 20px; border-left: 4px solid #1e4976; margin: 25px 0; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 15px;"><strong>Timeline:</strong> Publication process takes 30-45 days, with an additional 10-12 days for printing and delivery.</p>
+                </div>
+
+                <h3 style="color: #1e4976; margin-top: 30px; margin-bottom: 15px; font-size: 18px; border-bottom: 2px solid #e8f5e9; padding-bottom: 8px;">Submission Details</h3>
+                
+                <!-- Compact Table -->
+                <table style="border-collapse: collapse; width: 100%; max-width: 420px; margin-bottom: 25px; font-size: 13px;">
+                    <tr style="background-color: #f5f5f5;">
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600; width: 35%;">Book Title</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{book_title}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Book ID</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{book_id}</td>
+                    </tr>
+                    <tr style="background-color: #f5f5f5;">
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Author Name</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{author_name}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Author Email</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{to_email}</td>
+                    </tr>
+                    <tr style="background-color: #f5f5f5;">
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Author Phone</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{author_phone}</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Author ID</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{author_id}</td>
+                    </tr>
+                    <tr style="background-color: #f5f5f5;">
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0; font-weight: 600;">Author Position</td>
+                        <td style="padding: 6px 10px; border: 1px solid #e0e0e0;">{author_position}</td>
+                    </tr>
+                </table>
+
+                <h3 style="color: #1e4976; margin-top: 30px; margin-bottom: 15px; font-size: 18px; border-bottom: 2px solid #e3f2fd; padding-bottom: 8px;">Required Documentation</h3>
+                <p style="margin-bottom: 12px;">Please provide the following within <strong>24 hours</strong> by replying to this email:</p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li><strong>Author Profile:</strong> 100-150 words maximum</li>
+                    <li><strong>Passport Size Photo:</strong> High-resolution image suitable for cover page</li>
+                    <li><strong>ID Proof:</strong> Aadhar Card or PAN Card copy</li>
+                    <li><strong>Full Name with Prefix:</strong> Include appropriate title (Dr., Prof., Mr., Ms., etc.)</li>
+                    <li><strong>Payment Receipt:</strong> Digital copy</li>
+                    <li><strong>Delivery Address:</strong> Complete address with pincode for author copy delivery</li>
+                </ol>
+
+                <div style="background-color: #fff8e1; border-left: 4px solid #f57c00; padding: 18px; margin: 25px 0; border-radius: 4px;">
+                    <h4 style="margin: 0 0 12px 0; color: #e65100; font-size: 16px;">⚠️ Critical: ISBN Application Details</h4>
+                    <p style="margin-bottom: 10px; font-size: 14px;">Please verify the following information carefully before submission:</p>
+                    <ul style="margin: 10px 0; padding-left: 20px; font-size: 14px; line-height: 1.7;">
+                        <li>Complete author name with correct prefix (Dr., Prof., Mr., Ms., etc.)</li>
+                        <li>Professional designation</li>
+                        <li>Exact formatting including spacing, punctuation, and capitalization</li>
+                    </ul>
+                </div>
+
+                <div style="background-color: #e3f2fd; padding: 15px; border-radius: 4px; margin: 25px 0;">
+                    <p style="margin: 0; font-size: 14px;">📧 <strong>Communication:</strong> All future updates regarding your publication will be sent to this email address. Please check regularly until publication is complete.</p>
+                </div>
+
+                <hr style="border: 0; border-top: 1px solid #e0e0e0; margin: 30px 0;">
+                
+                <p style="font-size: 14px; color: #666;">For any queries or assistance, please contact us at:<br>
+                <a href="mailto:{pub_email}" style="color: #1e4976; text-decoration: none; font-weight: 600;">{pub_email}</a></p>
+                
+                <p style="margin-bottom: 0; margin-top: 25px;">Best regards,<br>
+                <strong style="color: #1e4976;">Team {pub_name}</strong></p>
+            </div>
+            <div style="text-align: center; padding: 20px; font-size: 12px; color: #999;">
+                <p style="margin: 0;">© 2025 {pub_name}. All rights reserved.</p>
+            </div>
+          </body>
+        </html>
+        """
+        msg.attach(MIMEText(html_body, 'html'))
+
+        # 4. Connect to Server (Logic Branch for SSL vs TLS)
+        # Port 465 = SSL (Hostinger), Port 587 = TLS (Gmail)
+        
+        if smtp_port == 465:
+            # SSL Connection (Hostinger)
+            with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+                server.login(email_address, email_password)
+                server.send_message(msg)
+        else:
+            # TLS Connection (Gmail)
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(email_address, email_password)
+                server.send_message(msg)
+            
+        return True, email_address
+
+    except Exception as e:
+        st.error(f"Failed to send email to {to_email} via {publisher}: {str(e)}")
+        return False, None
 
 @st.dialog("Add New Book", width="large", on_dismiss = 'rerun')
 def add_book_dialog(conn):
@@ -2466,23 +2736,31 @@ def add_book_dialog(conn):
             author_data = author_details_section(conn, book_data["author_type"], publisher)
             book_note = book_note_section()
             book_data["book_note"] = book_note
+            
+            send_welcome = st.checkbox("Send welcome email to authors", 
+                                       value=False, 
+                                       key="send_welcome_chk", 
+                                       disabled=True,
+                                       help="Feature coming soon.")
 
     # Save, Clear, and Cancel Buttons
     col1, col2 = st.columns([7, 1])
     with col1:
         if st.button("Save", key="dialog_save", type="primary"):
-            with st.spinner("Saving Book and Generating Tags/Subject with AI..."):
-                # Generate tags and subject when Save is clicked
-                if book_data["title"]:
-                    book_data["tags"] = generate_tags_with_ollama(book_data["title"])
-                    book_data["subject"] = generate_subject_with_ollama(book_data["title"])
-
-                errors = validate_form(book_data, author_data, book_data["author_type"], publisher)
-                if errors:
-                    st.error("\n".join(errors), icon="🚨")
-                else:
-                    with conn.session as s:
-                        try:
+            errors = validate_form(book_data, author_data, book_data["author_type"], publisher)
+            if errors:
+                st.error("\n".join(errors), icon="🚨")
+            else:
+                with st.status("Processing Book...", expanded=True) as status:
+                    try:
+                        # Generate tags and subject
+                        if book_data["title"]:
+                            st.write("🤖 Generating AI Tags & Subject...")
+                            book_data["tags"] = generate_tags_with_ollama(book_data["title"])
+                            book_data["subject"] = generate_subject_with_ollama(book_data["title"])
+                        
+                        st.write("💾 Saving Book Details...")
+                        with conn.session as s:
                             # Handle syllabus file upload
                             syllabus_path = None
                             if book_data["syllabus_file"] and not book_data["is_publish_only"] and not book_data["is_thesis_to_book"]:
@@ -2523,6 +2801,7 @@ def add_book_dialog(conn):
                             book_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
 
                             # Process active authors
+                            st.write("👥 Linking Authors...")
                             active_authors = [a for a in author_data if is_author_active(a)]
                             if publisher not in ["AG Kids", "NEET/JEE"]:
                                 for author in active_authors:
@@ -2535,6 +2814,7 @@ def add_book_dialog(conn):
                                             ON DUPLICATE KEY UPDATE name=name
                                         """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
+                                        author["author_id"] = author_id_to_link
                                     
                                     if book_id and author_id_to_link:
                                         s.execute(text("""
@@ -2549,6 +2829,56 @@ def add_book_dialog(conn):
                                         })
                             s.commit()
 
+                            if send_welcome and publisher not in ["AG Kids", "NEET/JEE"]:
+                                st.write("📧 Sending Welcome Emails...")
+                                for author in active_authors:
+                                    if author.get("email") and author.get("author_id"):
+                                        st.write(f"⏳Sending email to {author['name']}...")
+                                        email_status = "Failed"
+                                        
+                                        email_success, sender_email = send_welcome_email(author["email"], author["name"], author["phone"], book_data["title"], book_id, author["author_id"], author["author_position"], publisher)
+                                        if email_success:
+                                            email_status = "Success"
+                                            s.execute(text("""
+                                                UPDATE book_authors 
+                                                SET welcome_mail_sent = 1 
+                                                WHERE book_id = :book_id AND author_id = :author_id
+                                            """), {"book_id": book_id, "author_id": author["author_id"]})
+                                            st.write(f"✅ Sent to {author['name']}")
+                                        else:
+                                            email_status = "Failed"
+                                            st.write(f"❌ Failed to send to {author['name']}")
+
+                                        # Log activity
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "sent welcome email",
+                                            f"To: {author['name']} ({author['email']}), Book ID: {book_id}, Status: {email_status}"
+                                        )
+                                        
+                                        # Insert into email_history
+                                        try:
+                                            s.execute(text("""
+                                                INSERT INTO email_history (timestamp, recipient, sender_email, status, book_id, book_title, triggered_by, details)
+                                                VALUES (:timestamp, :recipient, :sender_email, :status, :book_id, :book_title, :triggered_by, :details)
+                                            """), {
+                                                "timestamp": ist_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                                "recipient": author["email"],
+                                                "sender_email": sender_email,
+                                                "status": email_status,
+                                                "book_id": book_id,
+                                                "book_title": book_data["title"],   
+                                                "triggered_by": st.session_state.username,
+                                                "details": f"Author: {author['name']}, Position: {author['author_position']}"
+                                            })
+                                        except Exception as e:
+                                            st.error(f"Failed to log email history: {str(e)}")
+                                            
+                                s.commit()
+
                             # Log save action
                             log_activity(
                                 conn,
@@ -2558,6 +2888,8 @@ def add_book_dialog(conn):
                                 "added book",
                                 f"Book ID: {book_id}, Publisher: {book_data['publisher']}, Author Type: {book_data['author_type']}, Is Publish Only: {book_data['is_publish_only']}, Is Thesis to Book: {book_data['is_thesis_to_book']}, Book Note: {book_data['book_note'][:50] + '...' if book_data['book_note'] else 'None'}, Tags: {tags_json}, Subject: {book_data['subject']}"
                             )
+
+                            status.update(label="✅ Book Added Successfully!", state="complete", expanded=False)
 
                             st.success(
                                         f"Book saved successfully! "
@@ -2571,10 +2903,11 @@ def add_book_dialog(conn):
                                 {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                                 for i in range(4)
                             ]
-                        except Exception as db_error:
-                            s.rollback()
-                            st.error(f"Database error: {db_error}")
-                            st.toast(f"Database error: {db_error}", icon="❌", duration="long")
+                    except Exception as db_error:
+                        s.rollback()
+                        status.update(label="❌ Error Occurred", state="error", expanded=True)
+                        st.error(f"Database error: {db_error}")
+                        st.toast(f"Database error: {db_error}", icon="❌", duration="long")
 
     with col2:
         if st.button("Cancel", key="dialog_cancel", type="secondary"):
@@ -2698,6 +3031,14 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     if f"publisher_{book_id}" not in st.session_state:
         st.session_state[f"publisher_{book_id}"] = current_publisher if current_publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics", "AG Kids", "NEET/JEE"] else "AGPH"
 
+    # Initialize PREVIOUS state for logging immediate actions (Subject, Tags, Publisher)
+    if f"subject_{book_id}_prev" not in st.session_state:
+        st.session_state[f"subject_{book_id}_prev"] = st.session_state[f"subject_{book_id}"]
+    if f"tags_{book_id}_prev" not in st.session_state:
+        st.session_state[f"tags_{book_id}_prev"] = st.session_state[f"tags_{book_id}"]
+    if f"publisher_{book_id}_prev" not in st.session_state:
+        st.session_state[f"publisher_{book_id}_prev"] = st.session_state[f"publisher_{book_id}"]
+
 
     def syllabus_upload_section(is_publish_only, is_thesis_to_book, toggles_enabled, book_id):
 
@@ -2741,6 +3082,18 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         )
         # Update session state with the selected publisher
         st.session_state[f"publisher_{book_id}"] = selected_publisher
+
+        # Log Publisher Change
+        if st.session_state[f"publisher_{book_id}"] != st.session_state[f"publisher_{book_id}_prev"]:
+            log_activity(
+                conn,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "changed publisher",
+                f"Book ID: {book_id}, Publisher changed to '{selected_publisher}'"
+            )
+            st.session_state[f"publisher_{book_id}_prev"] = selected_publisher
     
 
     def book_note_section(current_book_note, book_id):
@@ -2937,6 +3290,18 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
             )
             st.session_state[f"subject_{book_id}"] = selected_subject if selected_subject else ''
 
+            # Log Subject Change
+            if st.session_state[f"subject_{book_id}"] != st.session_state[f"subject_{book_id}_prev"]:
+                log_activity(
+                    conn,
+                    st.session_state.user_id,
+                    st.session_state.username,
+                    st.session_state.session_id,
+                    "changed subject",
+                    f"Book ID: {book_id}, Subject changed to '{selected_subject}'"
+                )
+                st.session_state[f"subject_{book_id}_prev"] = st.session_state[f"subject_{book_id}"]
+
             st.markdown("<h5 style='color: #4CAF50;'>Manage Tags</h5>", unsafe_allow_html=True)
 
             # Fetch all unique tags and their counts from the database
@@ -2958,6 +3323,35 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                 help="Select or deselect tags for the book, or type to add new tags",
                 label_visibility="collapsed",
             )
+
+            # Log Tags Change
+            if st.session_state[f"tags_{book_id}"] != st.session_state[f"tags_{book_id}_prev"]:
+                new_tags_str = ", ".join(st.session_state[f"tags_{book_id}"])
+                log_activity(
+                    conn,
+                    st.session_state.user_id,
+                    st.session_state.username,
+                    st.session_state.session_id,
+                    "updated tags",
+                    f"Book ID: {book_id}, Tags updated: {new_tags_str}"
+                )
+                st.session_state[f"tags_{book_id}_prev"] = st.session_state[f"tags_{book_id}"]
+
+        # Fetch current syllabus and book note for the book
+        with conn.session as s:
+            result = s.execute(text("SELECT syllabus_path, book_note FROM books WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+            current_syllabus_path = result[0] if result else None
+            current_book_note = result[1] if result else None
+
+        with st.expander("Syllabus & Book Note", expanded=False):
+            # Add syllabus and book note section
+            syllabus_file = syllabus_upload_section(
+                new_is_publish_only,
+                new_is_thesis_to_book,
+                publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"],
+                current_syllabus_path
+            )
+            book_note = book_note_section(current_book_note, book_id)
 
 
     with dialog_col2:    
@@ -3047,22 +3441,134 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         position = author['author_position'] if pd.notna(author['author_position']) else "Not specified"
                         st.markdown(f"<div style='color: #0288d1; margin-bottom: 6px;'>{position}</div>", unsafe_allow_html=True)
 
-        # Fetch current syllabus and book note for the book
-        with conn.session as s:
-            result = s.execute(text("SELECT syllabus_path, book_note FROM books WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
-            current_syllabus_path = result[0] if result else None
-            current_book_note = result[1] if result else None
-
         
-        with st.expander("Syllabus & Book Note", expanded=False):
-            # Add syllabus and book note section
-            syllabus_file = syllabus_upload_section(
-                new_is_publish_only,
-                new_is_thesis_to_book,
-                publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"],
-                current_syllabus_path
-            )
-            book_note = book_note_section(current_book_note, book_id)
+        # -------------------- CANCEL BOOK FEATURE --------------------
+        #st.markdown("<h5 style='color: #D32F2F;'>Danger Zone</h5>", unsafe_allow_html=True)
+
+        with st.popover("🚫 Cancel Book", width="stretch"):
+            # Fetch latest status
+            current_book_details = fetch_book_details(book_id, conn)
+            if not current_book_details.empty:
+                writing_start_val = current_book_details.iloc[0].get('writing_start')
+            else:
+                writing_start_val = None
+            
+            # Check digital_book_sent status
+            authors_df = fetch_book_authors(book_id, conn)
+            digital_sent_count = 0
+            if not authors_df.empty and 'digital_book_sent' in authors_df.columns:
+                digital_sent_count = authors_df['digital_book_sent'].sum()
+            
+            if digital_sent_count > 0:
+                st.error(f"❌ Cannot cancel the book once digital book has been sent to author(s).")
+            else:
+                st.caption("Cancel this book if it is no longer needed or the author has withdrawn.")
+                cancel_reason = st.text_area(
+                    "Reason for Cancellation (Required)", 
+                    key=f"cancel_reason_{book_id}",
+                    placeholder="e.g. Author withdrew, Duplicate entry, etc."
+                )
+                
+                if st.button("🗑️ Confirm Cancel", key=f"confirm_cancel_{book_id}", type="primary"):
+                    if not cancel_reason.strip():
+                        st.error("Please provide a reason for cancellation.")
+                    else:
+                        with st.spinner("Cancelling book..."):
+                            time.sleep(5)
+                            # Determine target status
+
+                            has_writing = pd.notna(writing_start_val)
+                            
+                            try:
+                                with conn.session as s:
+                                    if has_writing:
+                                        # Archive to extra_books
+                                        s.execute(text("""
+                                            INSERT INTO extra_books (
+                                                book_id, title, date, reason,
+                                                writing_start, writing_end, writing_by,
+                                                proofreading_start, proofreading_end, proofreading_by,
+                                                formatting_start, formatting_end, formatting_by,
+                                                book_pages
+                                            )
+                                            SELECT 
+                                                book_id, title, date, :reason,
+                                                writing_start, writing_end, writing_by,
+                                                proofreading_start, proofreading_end, proofreading_by,
+                                                formatting_start, formatting_end, formatting_by,
+                                                book_pages
+                                            FROM books
+                                            WHERE book_id = :book_id
+                                        """), {"book_id": book_id, "reason": cancel_reason})
+                                        
+                                        # Set as deleted and clear operations in original book
+                                        s.execute(text("""
+                                            UPDATE books SET 
+                                                is_cancelled = 2, 
+                                                cancellation_reason = :reason,
+                                                writing_start = NULL, writing_end = NULL, writing_by = NULL,
+                                                proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
+                                                formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
+                                                cover_start = NULL, cover_end = NULL, cover_by = NULL,
+                                                book_pages = 0
+                                            WHERE book_id = :book_id
+                                        """), {"status": 2, "reason": cancel_reason, "book_id": book_id})
+                                        
+                                        status_label = "Extra Books (Archived)"
+                                    else:
+                                        # 1. Fetch Authors
+                                        authors_rows = s.execute(text("SELECT * FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id}).mappings().all()
+                                        authors_list = [dict(row) for row in authors_rows]
+                                        # Handle date serialization
+                                        def json_serial(obj):
+                                            if isinstance(obj, (datetime, date)):
+                                                return obj.isoformat()
+                                            if isinstance(obj, Decimal):
+                                                return float(obj)
+                                            raise TypeError (f"Type {type(obj)} not serializable")
+                                        
+                                        authors_json_str = json.dumps(authors_list, default=json_serial)
+                                        
+                                        # 2. Update reason in books (so it copies correctly)
+                                        s.execute(text("UPDATE books SET cancellation_reason = :reason WHERE book_id = :book_id"), {"reason": cancel_reason, "book_id": book_id})
+
+                                        # 3. Insert into deleted_books
+                                        s.execute(text("""
+                                            INSERT INTO deleted_books
+                                            SELECT b.*, :authors, NOW()
+                                            FROM books b
+                                            WHERE b.book_id = :book_id
+                                        """), {"book_id": book_id, "authors": authors_json_str})
+                                        
+                                        # 4. Delete Authors
+                                        s.execute(text("DELETE FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id})
+                                        
+                                        # 5. Clear Books Data (Soft Delete)
+                                        s.execute(text("""
+                                            UPDATE books SET 
+                                                is_cancelled = 2, 
+                                                cancellation_reason = :reason,
+                                                isbn = NULL,
+                                                isbn_receive_date = NULL,
+                                                writing_start = NULL, writing_end = NULL, writing_by = NULL,
+                                                proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
+                                                formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
+                                                cover_start = NULL, cover_end = NULL, cover_by = NULL,
+                                                book_pages = 0
+                                            WHERE book_id = :book_id
+                                        """), {"reason": cancel_reason, "book_id": book_id})
+                                        
+                                        status_label = "Deleted Books"
+                                        
+                                    s.commit()
+                                
+                                log_activity(
+                                    conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                                    "cancelled book", f"Book ID: {book_id}, Status: {status_label}, Reason: {cancel_reason}"
+                                )
+                                st.success(f"Book moved to {status_label}.")
+                            except Exception as e:
+                                st.error(f"Error cancelling book: {e}")
         
 
     # Save Button
@@ -3840,6 +4346,7 @@ def get_unique_agents_and_consultants(conn):
         except Exception as e:
             st.error(f"Error fetching agents/consultants: {e}")
             return [], []
+
 # Constants
 MAX_AUTHORS = 4
 MAX_CHAPTERS = 30
@@ -3862,6 +4369,7 @@ def edit_author_dialog(book_id, conn):
     is_single_author = book_details.iloc[0]['is_single_author']
     num_copies = book_details.iloc[0]['num_copies']
     print_status = book_details.iloc[0]['print_status']
+    publisher = book_details.iloc[0]['publisher']
     col1, col2 = st.columns([6, 1])
     with col1:
         st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
@@ -4107,6 +4615,10 @@ def edit_author_dialog(book_id, conn):
         # Add or Cancel buttons (outside the column layout to maintain original placement)
         col1, col2 = st.columns([7, 1])
         with col1:
+            send_welcome = st.checkbox("Send welcome email to new authors", 
+                                       value=False, 
+                                       key="send_welcome_new_author",
+                                       disabled=True)
             if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
                 errors = []
                 for i, author in enumerate(st.session_state.new_authors):
@@ -4150,6 +4662,8 @@ def edit_author_dialog(book_id, conn):
                                     added_authors.append({
                                         "author_id": author_id_to_link,
                                         "name": author["name"],
+                                        "email": author["email"],
+                                        "phone": author["phone"],
                                         "author_position": author["author_position"],
                                         "corresponding_agent": author["corresponding_agent"],
                                         "publishing_consultant": author["publishing_consultant"]
@@ -4166,6 +4680,57 @@ def edit_author_dialog(book_id, conn):
                                     "added author to book",
                                     f"Book ID: {book_id}, Author ID: {author['author_id']}, Name: {author['name']}, Position: {author['author_position']}, Agent: {author['corresponding_agent'] or 'None'}, Consultant: {author['publishing_consultant'] or 'None'}"
                                 )
+
+                            # Send Welcome Emails
+                            if send_welcome and publisher not in ["AG Kids", "NEET/JEE"]:
+                                st.write("📧 Sending Welcome Emails...")
+                                with conn.session as s:
+                                    for author in added_authors:
+                                        if author.get("email") and author.get("author_id"):
+                                            email_status = "Failed"
+                                            
+                                            email_success, sender_email = send_welcome_email(author["email"], author["name"], author["phone"], book_title, book_id, author["author_id"], author["author_position"], publisher)
+                                            if email_success:
+                                                email_status = "Success"
+                                                s.execute(text("""
+                                                    UPDATE book_authors 
+                                                    SET welcome_mail_sent = 1 
+                                                    WHERE book_id = :book_id AND author_id = :author_id
+                                                """), {"book_id": book_id, "author_id": author["author_id"]})
+                                                s.commit()
+                                                st.success(f"✅ Sent to {author['name']}")
+                                            else:
+                                                email_status = "Failed"
+                                                st.error(f"❌ Failed to send to {author['name']}")
+
+                                            # Log activity
+                                            log_activity(
+                                                conn,
+                                                st.session_state.user_id,
+                                                st.session_state.username,
+                                                st.session_state.session_id,
+                                                "sent welcome email",
+                                                f"To: {author['name']} ({author['email']}), Book ID: {book_id}, Status: {email_status}"
+                                            )
+                                            
+                                            # Insert into email_history
+                                            try:
+                                                s.execute(text("""
+                                                    INSERT INTO email_history (timestamp, recipient, sender_email, status, book_id, book_title, triggered_by, details)
+                                                    VALUES (:timestamp, :recipient, :sender_email, :status, :book_id, :book_title, :triggered_by, :details)
+                                                """), {
+                                                    "timestamp": ist_time.strftime('%Y-%m-%d %H:%M:%S'),
+                                                    "recipient": author["email"],
+                                                    "sender_email": sender_email,
+                                                    "status": email_status,
+                                                    "book_id": book_id,
+                                                    "book_title": book_title,   
+                                                    "triggered_by": st.session_state.username,
+                                                    "details": f"Author: {author['name']}, Position: {author['author_position']}"
+                                                })
+                                            except Exception as e:
+                                                st.error(f"Failed to log email history: {str(e)}")
+                                    s.commit()
                             st.cache_data.clear()
                             st.success("✔️ New authors added successfully!")
                             st.toast("New authors added successfully!", icon="✔️", duration="long")
@@ -5342,7 +5907,12 @@ def edit_author_dialog(book_id, conn):
                             else:
                                 st.session_state.new_authors[i]["publishing_consultant"] = ""
 
-                # Add or Cancel buttons (outside the column layout to maintain original placement)
+                send_welcome_new_authors = st.checkbox("Send welcome email to newly added authors", 
+                                                       value=False, 
+                                                       key="send_welcome_new_authors_chk", 
+                                                       disabled=True,
+                                                       help="Feature coming soon.")
+                
                 col1, col2 = st.columns([7, 1])
                 with col1:
                     if st.button("Add Authors to Book", key="add_authors_to_book", type="primary"):
@@ -5384,15 +5954,71 @@ def edit_author_dialog(book_id, conn):
                                                 }
                                             )
                                             authors_added = True
-                                            # Store author details for logging
+                                            # Store author details for logging and email
                                             added_authors.append({
                                                 "author_id": author_id_to_link,
                                                 "name": author["name"],
+                                                "email": author["email"],
+                                                "phone": author["phone"],
                                                 "author_position": author["author_position"],
                                                 "corresponding_agent": author["corresponding_agent"],
                                                 "publishing_consultant": author["publishing_consultant"]
                                             })
                                     s.commit()
+                                    
+                                    # Send welcome emails if requested
+                                    if authors_added and send_welcome_new_authors:
+                                        with st.status("Sending Welcome Emails...", expanded=True) as status:
+                                            for author in added_authors:
+                                                if author.get("email") and author.get("author_id"):
+                                                    st.write(f"Sending email to {author['name']}...")
+                                                    email_status = "Failed"
+                                                    subject_line = f"Publication Confirmation - {book_title}"
+                                                    
+                                                    email_success, sender_email = send_welcome_email(author["email"], author["name"], author["phone"], book_title, book_id, author["author_id"], author["author_position"], publisher)
+                                                    if email_success:
+                                                        email_status = "Success"
+                                                        s.execute(text("""
+                                                            UPDATE book_authors 
+                                                            SET welcome_mail_sent = 1 
+                                                            WHERE book_id = :book_id AND author_id = :author_id
+                                                        """), {"book_id": book_id, "author_id": author["author_id"]})
+                                                        st.write(f"✅ Sent to {author['name']}")
+                                                    else:
+                                                        email_status = "Failed"
+                                                        st.write(f"❌ Failed to send to {author['name']}")
+                                                    
+                                                    # Log activity for email send
+                                                    log_activity(
+                                                        conn,
+                                                        st.session_state.user_id,
+                                                        st.session_state.username,
+                                                        st.session_state.session_id,
+                                                        "sent welcome email",
+                                                        f"To: {author['name']} ({author['email']}), Book ID: {book_id}, Status: {email_status}"
+                                                    )
+                                                    
+                                                    # Insert into email_history
+                                                    try:
+                                                        s.execute(text("""
+                                                            INSERT INTO email_history (timestamp, recipient, sender_email, status, book_id, book_title, triggered_by, details)
+                                                            VALUES (:timestamp, :recipient, :sender_email, :status, :book_id, :book_title, :triggered_by, :details)
+                                                        """), {
+                                                            "timestamp": pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                                            "recipient": author["email"],
+                                                            "sender_email": sender_email,
+                                                            "status": email_status,
+                                                            "book_id": book_id,
+                                                            "book_title": book_title,
+                                                            "triggered_by": st.session_state.username,
+                                                            "details": f"Author: {author['name']}, Position: {author['author_position']}"
+                                                        })
+                                                    except Exception as e:
+                                                        st.error(f"Failed to log email history: {str(e)}")
+                                                        
+                                            status.update(label="Welcome Emails Processed", state="complete", expanded=False)
+                                        s.commit()
+
                                 if authors_added:
                                     # Log each added author
                                     for author in added_authors:
@@ -5432,24 +6058,87 @@ def fetch_unique_names(column):
     query = f"SELECT DISTINCT {column} AS name FROM books WHERE {column} IS NOT NULL AND {column} != ''"
     return sorted(conn.query(query,show_spinner = False)['name'].tolist())
 
-@st.dialog("Edit Operation Details", width='medium', on_dismiss='rerun')
+def rewrite_book_logic(book_id, reason, conn):
+    """Archives current book operations to extra_books and resets them."""
+    try:
+        with conn.session as s:
+
+            s.execute(text("""
+                INSERT INTO extra_books (
+                    book_id, title, date, reason,
+                    writing_start, writing_end, writing_by,
+                    proofreading_start, proofreading_end, proofreading_by,
+                    formatting_start, formatting_end, formatting_by,
+                    book_pages
+                )
+                SELECT 
+                    book_id, title, date, :reason,
+                    writing_start, writing_end, writing_by,
+                    proofreading_start, proofreading_end, proofreading_by,
+                    formatting_start, formatting_end, formatting_by,
+                    book_pages
+                FROM books
+                WHERE book_id = :book_id
+            """), {"book_id": book_id, "reason": reason})
+
+            # 3. Reset details in books table
+            s.execute(text("""
+                UPDATE books SET
+                    writing_start = NULL, writing_end = NULL, writing_by = NULL,
+                    proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
+                    formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
+                    book_pages = 0
+                WHERE book_id = :book_id
+            """), {"book_id": book_id})
+
+            s.commit()
+        return True, "Book operations archived and reset successfully!"
+    except Exception as e:
+        return False, f"Error rewriting book: {str(e)}"
+
+@st.dialog("Edit Operation Details", width='medium', on_dismiss="rerun")
 def edit_operation_dialog(book_id, conn):
     # Fetch book details for title, is_publish_only, is_thesis_to_book, and syllabus_path
     book_details = fetch_book_details(book_id, conn)
     is_publish_only = False
     is_thesis_to_book = False
     current_syllabus_path = None
+    
+    # Fetch operation details EARLY to use for button logic
+    query = f"""
+        SELECT writing_start, writing_end, writing_by, 
+               proofreading_start, proofreading_end, proofreading_by, 
+               formatting_start, formatting_end, formatting_by, 
+               cover_start, cover_end, cover_by, book_pages
+        FROM books WHERE book_id = {book_id}
+    """
+    book_operations = conn.query(query, show_spinner=False)
+    
+    if book_operations.empty:
+        current_data = {}
+        writing_done = False
+    else:
+        current_data = book_operations.iloc[0].to_dict()
+        writing_done = pd.notna(current_data.get('writing_end'))
+
+    # Check for print confirmation
+    print_conf_query = "SELECT COUNT(*) as count FROM book_authors WHERE book_id = :book_id AND printing_confirmation = 1"
+    print_conf_res = conn.query(print_conf_query, params={"book_id": book_id}, show_spinner=False)
+    has_print_conf = print_conf_res.iloc[0]['count'] > 0 if not print_conf_res.empty else False
+
     if not book_details.empty:
         book_title = book_details.iloc[0]['title']
         is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
         is_thesis_to_book = book_details.iloc[0].get('is_thesis_to_book', 0) == 1
         current_syllabus_path = book_details.iloc[0].get('syllabus_path', None)
-        col1, col2 = st.columns([6, 1])
+        
+        col1, col2 = st.columns([5, 2])
         with col1:
             st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
         with col2:
-            if st.button(":material/refresh: Refresh", key="refresh_operations", type="tertiary"):
+            if st.button("🔄 Refresh", key="refresh_operations", type="tertiary", use_container_width=True):
                 st.cache_data.clear()
+                st.rerun()
     else:
         st.markdown(f"### Operations for Book ID: {book_id}")
         st.warning("Book title not found.")
@@ -5484,16 +6173,6 @@ def edit_operation_dialog(book_id, conn):
         }
         </style>
     """, unsafe_allow_html=True)
-
-    # Fetch operation details
-    query = f"""
-        SELECT writing_start, writing_end, writing_by, 
-               proofreading_start, proofreading_end, proofreading_by, 
-               formatting_start, formatting_end, formatting_by, 
-               cover_start, cover_end, cover_by, book_pages
-        FROM books WHERE book_id = {book_id}
-    """
-    book_operations = conn.query(query, show_spinner=False)
     
     if book_operations.empty:
         st.warning(f"No operation details found for Book ID: {book_id}")
@@ -5550,6 +6229,8 @@ def edit_operation_dialog(book_id, conn):
             """
             st.markdown(html, unsafe_allow_html=True)
 
+    st.write("")  # Spacer
+
     # Fetch unique names for each role
     writing_names = fetch_unique_names("writing_by")
     proofreading_names = fetch_unique_names("proofreading_by")
@@ -5572,458 +6253,319 @@ def edit_operation_dialog(book_id, conn):
     formatting_options = ["Select Formatter"] + formatting_names + ["Add New..."]
     cover_options = ["Select Cover Designer"] + cover_names + ["Add New..."]
 
-    # Define tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
+    # --- Tabs Layout ---
+    op_tabs = st.tabs(["✍️ Writing", "📏 Formatting", "🔍 Proofreading", "🎨 Book Cover"])
 
-    # Writing Tab
-    with tab1:
-        if is_publish_only or is_thesis_to_book:
-            st.warning("Writing section is disabled because this book is in 'Publish Only' or 'Thesis to Book' mode.")
-        
-        # Form for input collection
-        with st.form(key=f"writing_form_{book_id}", border=False):
-            # Worker selection
-            selected_writer = st.selectbox(
-                "Writer",
-                writing_options,
-                index=(writing_options.index(st.session_state[f"writing_by_{book_id}"]) 
-                       if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
-                key=f"writing_select_{book_id}",
-                disabled=is_publish_only or is_thesis_to_book
-            )
-            new_writer = ""
-            if selected_writer == "Add New..." and not (is_publish_only or is_thesis_to_book):
-                new_writer = st.text_input(
-                    "New Writer Name",
-                    key=f"writing_new_input_{book_id}",
-                    placeholder="Enter new writer name..."
-                )
-                if new_writer:
-                    st.session_state[f"writing_by_{book_id}"] = new_writer
-            elif selected_writer != "Select Writer" and not (is_publish_only or is_thesis_to_book):
-                st.session_state[f"writing_by_{book_id}"] = selected_writer
-
-            writing_by = st.session_state[f"writing_by_{book_id}"] if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] != "Select Writer" else ""
-
-            col1, col2 = st.columns(2)
-            with col1:
-                writing_start_date = st.date_input(
-                    "Start Date",
-                    value=current_data.get('writing_start'),
-                    key=f"writing_start_date_{book_id}",
+    # ==========================
+    # TAB 1: Writing
+    # ==========================
+    with op_tabs[0]:
+        with st.container(border=True):
+            if is_publish_only or is_thesis_to_book:
+                st.warning("Writing section is disabled (Publish Only / Thesis to Book).")
+            
+            with st.form(key=f"writing_form_{book_id}", border=False):
+                # Worker selection
+                selected_writer = st.selectbox(
+                    "Writer",
+                    writing_options,
+                    index=(writing_options.index(st.session_state[f"writing_by_{book_id}"]) 
+                           if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] in writing_options else 0),
+                    key=f"writing_select_{book_id}",
                     disabled=is_publish_only or is_thesis_to_book
                 )
-                writing_start_time = st.time_input(
-                    "Start Time",
-                    value=current_data.get('writing_start'),
-                    key=f"writing_start_time_{book_id}",
-                    disabled=is_publish_only or is_thesis_to_book
-                )
-            with col2:
-                writing_end_date = st.date_input(
-                    "End Date",
-                    value=current_data.get('writing_end'),
-                    key=f"writing_end_date_{book_id}",
-                    disabled=is_publish_only or is_thesis_to_book
-                )
-                writing_end_time = st.time_input(
-                    "End Time",
-                    value=current_data.get('writing_end'),
-                    key=f"writing_end_time_{book_id}",
-                    disabled=is_publish_only or is_thesis_to_book
-                )
-
-            book_pages = st.number_input(
-                "Total Book Pages",
-                min_value=0,
-                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
-                step=1,
-                key=f"book_pages_writing_{book_id}",
-                disabled=is_publish_only or is_thesis_to_book
-            )
-
-            # Book Syllabus Section
-            st.markdown("<h5 style='color: #4CAF50;'>Book Syllabus</h5>", unsafe_allow_html=True)
-            with st.popover("Book Syllabus", width='stretch'):
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                # Syllabus uploader
-                syllabus_file = None
-                if not (is_publish_only or is_thesis_to_book):
-                    syllabus_file = st.file_uploader(
-                        "Upload New Syllabus",
-                        type=["pdf", "docx", "jpg", "jpeg", "png"],
-                        key=f"syllabus_upload_{book_id}",
-                        help="Upload a new syllabus to replace the existing one (PDF, DOCX, or image).",
-                        label_visibility="collapsed",
+                new_writer = ""
+                if selected_writer == "Add New..." and not (is_publish_only or is_thesis_to_book):
+                    new_writer = st.text_input(
+                        "New Writer Name",
+                        key=f"writing_new_input_{book_id}",
+                        placeholder="Enter new writer name..."
                     )
-                    if syllabus_file and current_syllabus_path:
-                        st.warning("Uploading a new syllabus will replace the existing one.")
-                else:
-                    st.info("Syllabus upload is disabled for Publish Only or Thesis to Book.")
-                st.markdown('</div>', unsafe_allow_html=True)
+                    if new_writer:
+                        st.session_state[f"writing_by_{book_id}"] = new_writer
+                elif selected_writer != "Select Writer" and not (is_publish_only or is_thesis_to_book):
+                    st.session_state[f"writing_by_{book_id}"] = selected_writer
 
-            # Form submit button
-            if st.form_submit_button("💾 Save Writing", width="stretch", disabled=is_publish_only or is_thesis_to_book, type="primary"):
-                with st.spinner("Saving Writing details..."):
-                    os.makedirs(UPLOAD_DIR, exist_ok=True)
+                writing_by = st.session_state[f"writing_by_{book_id}"] if f"writing_by_{book_id}" in st.session_state and st.session_state[f"writing_by_{book_id}"] != "Select Writer" else ""
 
-                    # Handle syllabus file upload
-                    new_syllabus_path = current_syllabus_path
-                    if syllabus_file and not (is_publish_only or is_thesis_to_book):
-                        file_extension = os.path.splitext(syllabus_file.name)[1]
-                        unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
-                        new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                # DateTime Inputs
+                col_dt1, col_dt2 = st.columns(2)
+                with col_dt1:
+                    writing_start_dt = st.datetime_input(
+                        "Start",
+                        value=current_data.get('writing_start'),
+                        key=f"writing_start_dt_{book_id}",
+                        disabled=is_publish_only or is_thesis_to_book
+                    )
+                with col_dt2:
+                    writing_end_dt = st.datetime_input(
+                        "End",
+                        value=current_data.get('writing_end'),
+                        key=f"writing_end_dt_{book_id}",
+                        disabled=is_publish_only or is_thesis_to_book
+                    )
+
+                book_pages = st.number_input(
+                    "Total Book Pages",
+                    min_value=0,
+                    value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
+                    step=1,
+                    key=f"book_pages_writing_{book_id}",
+                    disabled=is_publish_only or is_thesis_to_book
+                )
+
+                # Book Syllabus Section
+                if not (is_publish_only or is_thesis_to_book):
+                    with st.expander("📂 Book Syllabus", expanded=False):
+                        # Syllabus uploader
+                        syllabus_file = st.file_uploader(
+                            "Upload New Syllabus",
+                            type=["pdf", "docx", "jpg", "jpeg", "png"],
+                            key=f"syllabus_upload_{book_id}",
+                            help="Upload a new syllabus to replace the existing one.",
+                            label_visibility="collapsed",
+                        )
+                        if syllabus_file and current_syllabus_path:
+                            st.caption("⚠️ Will replace existing syllabus.")
                         
-                        try:
-                            with open(new_syllabus_path_temp, "wb") as f:
-                                f.write(syllabus_file.getbuffer())
-                            new_syllabus_path = new_syllabus_path_temp
+                        # Download link if exists
+                        if current_syllabus_path and os.path.exists(current_syllabus_path):
+                            with open(current_syllabus_path, "rb") as f:
+                                st.download_button(
+                                    label="Download Current Syllabus",
+                                    data=f,
+                                    file_name=os.path.basename(current_syllabus_path),
+                                    key=f"download_syllabus_{book_id}",
+                                    use_container_width=True
+                                )
+                
+
+                st.write("") # Spacer
+                if st.form_submit_button("💾 Save Writing", width="stretch", disabled=is_publish_only or is_thesis_to_book, type="primary"):
+                    with st.spinner("Saving..."):
+                        os.makedirs(UPLOAD_DIR, exist_ok=True)
+                        # Handle syllabus file upload
+                        new_syllabus_path = current_syllabus_path
+                        if syllabus_file and not (is_publish_only or is_thesis_to_book):
+                            file_extension = os.path.splitext(syllabus_file.name)[1]
+                            unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
+                            new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                            try:
+                                with open(new_syllabus_path_temp, "wb") as f:
+                                    f.write(syllabus_file.getbuffer())
+                                new_syllabus_path = new_syllabus_path_temp
+                                if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
+                                    try: os.remove(current_syllabus_path)
+                                    except OSError: pass
+                            except Exception as e:
+                                st.error(f"Failed to save syllabus: {str(e)}")
+                                raise
+
+                        # Format dates
+                        writing_start = writing_start_dt.strftime('%Y-%m-%d %H:%M:%S') if writing_start_dt else None
+                        writing_end = writing_end_dt.strftime('%Y-%m-%d %H:%M:%S') if writing_end_dt else None
+
+                        if writing_start and writing_end and writing_start > writing_end:
+                            st.error("Start must be before End.")
+                        else:
+                            updates = {
+                                "writing_start": writing_start,
+                                "writing_end": writing_end,
+                                "writing_by": writing_by if writing_by else None,
+                                "book_pages": book_pages,
+                                "syllabus_path": new_syllabus_path
+                            }
+                            update_operation_details(book_id, updates)
                             
-                            if current_syllabus_path and current_syllabus_path != new_syllabus_path and os.path.exists(current_syllabus_path):
-                                try:
-                                    os.remove(current_syllabus_path)
-                                except OSError as e:
-                                    st.warning(f"Could not delete old syllabus file: {str(e)}")
-                        except Exception as e:
-                            st.error(f"Failed to save syllabus file: {str(e)}")
-                            raise
+                            syllabus_info = f"Syllabus: {os.path.basename(new_syllabus_path)}" if new_syllabus_path else "Syllabus: None"
+                            details = (f"Book ID: {book_id}, Writer: {writing_by}, Pages: {book_pages}, {syllabus_info}")
+                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated writing details", details)
+                            st.success("Saved!")
+                            st.toast("Updated Writing details", icon="✔️")
+                            if selected_writer == "Add New..." and new_writer: st.cache_data.clear()
 
-                    writing_start = f"{writing_start_date} {writing_start_time}" if writing_start_date and writing_start_time else None
-                    writing_end = f"{writing_end_date} {writing_end_time}" if writing_end_date and writing_end_time else None
-                    if writing_start and writing_end and writing_start > writing_end:
-                        st.error("Start date/time must be before end date/time.")
+        with st.popover("Rewrite", use_container_width=True, type="tertiary"):
+            if is_publish_only or is_thesis_to_book:
+                st.error("⚠️ Cannot rewrite 'Publish Only' or 'Thesis to Book' projects.")
+            elif not writing_done:
+                st.error("⚠️ Writing must be completed before rewriting.")
+            elif has_print_conf:
+                st.error("⚠️ Cannot rewrite: Print confirmation already received.")
+            else:
+                st.markdown("### ⚠️ Confirm Rewrite")
+                st.info("This will archive current progress to 'Extra Books' and reset operations.")
+                rewrite_reason = st.text_area("Reason", placeholder="e.g. Quality issues...", key=f"reason_{book_id}")
+                
+                if st.button("Confirm", type="primary", key=f"rewrite_confirm_{book_id}", use_container_width=True):
+                    if not rewrite_reason.strip():
+                        st.error("Please provide a reason.")
                     else:
-                        updates = {
-                            "writing_start": writing_start,
-                            "writing_end": writing_end,
-                            "writing_by": writing_by if writing_by else None,
-                            "book_pages": book_pages,
-                            "syllabus_path": new_syllabus_path
-                        }
-                        update_operation_details(book_id, updates)
-                        
-                        # Log the form submission
-                        syllabus_info = f"Syllabus: {os.path.basename(new_syllabus_path)}" if new_syllabus_path else "Syllabus: None"
-                        details = (
-                            f"Book ID: {book_id}, Writer: {writing_by or 'None'}, "
-                            f"Start: {writing_start or 'None'}, End: {writing_end or 'None'}, "
-                            f"Pages: {book_pages}, {syllabus_info}"
-                        )
-                        try:
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated writing details",
-                                details
-                            )
-                        except Exception as e:
-                            st.error(f"Error logging writing details: {str(e)}")
-                        
-                        st.success("✔️ Updated Writing details")
-                        st.toast("Updated Writing details", icon="✔️", duration="long")
-                        if selected_writer == "Add New..." and new_writer:
-                            st.cache_data.clear()
+                        with st.spinner("Resetting book operations and moving to extra books..."):
+                            time.sleep(5)
+                            success, msg = rewrite_book_logic(book_id, rewrite_reason, conn)
+                            if success:
+                                st.success("Reset Complete!")
+                                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "rewrote book", f"Book ID: {book_id}, Reason: {rewrite_reason}, Moved to Extra Books")
+                            else:
+                                st.error(msg)
 
-        # Syllabus download section
-        if current_syllabus_path:
-            with st.container(border=True):
-                st.markdown('<div class="info-box">', unsafe_allow_html=True)
-                st.write(f"**Current Syllabus**: {os.path.basename(current_syllabus_path)}")
-                if os.path.exists(current_syllabus_path):
-                    with open(current_syllabus_path, "rb") as f:
-                        st.download_button(
-                            label=":material/download: Download",
-                            data=f,
-                            file_name=os.path.basename(current_syllabus_path),
-                            key=f"download_syllabus_{book_id}"
-                        )
-                else:
-                    st.warning("Current syllabus file not found on server.")
-                st.markdown('</div>', unsafe_allow_html=True)
+    # ==========================
+    # TAB 2: Formatting
+    # ==========================
+    with op_tabs[1]:
+        with st.container(border=True):
+            with st.form(key=f"formatting_form_{book_id}", border=False):
+                selected_formatter = st.selectbox(
+                    "Formatter",
+                    formatting_options,
+                    index=(formatting_options.index(st.session_state[f"formatting_by_{book_id}"]) 
+                        if f"formatting_by_{book_id}" in st.session_state and st.session_state[f"formatting_by_{book_id}"] in formatting_options else 0),
+                    key=f"formatting_select_{book_id}"
+                )
+                new_formatter = ""
+                if selected_formatter == "Add New...":
+                    new_formatter = st.text_input("New Formatter Name", key=f"formatting_new_input_{book_id}")
+                    if new_formatter: st.session_state[f"formatting_by_{book_id}"] = new_formatter
+                elif selected_formatter != "Select Formatter":
+                    st.session_state[f"formatting_by_{book_id}"] = selected_formatter
 
-    # Proofreading Tab
-    with tab2:
-        with st.form(key=f"proofreading_form_{book_id}", border=False):
-            # Worker selection
-            selected_proofreader = st.selectbox(
-                "Proofreader",
-                proofreading_options,
-                index=(proofreading_options.index(st.session_state[f"proofreading_by_{book_id}"]) 
-                    if f"proofreading_by_{book_id}" in st.session_state and st.session_state[f"proofreading_by_{book_id}"] in proofreading_options else 0),
-                key=f"proofreading_select_{book_id}"
-            )
-            new_proofreader = ""
-            if selected_proofreader == "Add New...":
-                new_proofreader = st.text_input(
-                    "New Proofreader Name",
-                    key=f"proofreading_new_input_{book_id}",
-                    placeholder="Enter new proofreader name..."
-                )
-                if new_proofreader:
-                    st.session_state[f"proofreading_by_{book_id}"] = new_proofreader
-            elif selected_proofreader != "Select Proofreader":
-                st.session_state[f"proofreading_by_{book_id}"] = selected_proofreader
+                formatting_by = st.session_state[f"formatting_by_{book_id}"] if f"formatting_by_{book_id}" in st.session_state and st.session_state[f"formatting_by_{book_id}"] != "Select Formatter" else ""
 
-            proofreading_by = st.session_state[f"proofreading_by_{book_id}"] if f"proofreading_by_{book_id}" in st.session_state and st.session_state[f"proofreading_by_{book_id}"] != "Select Proofreader" else ""
+                col_dt1, col_dt2 = st.columns(2)
+                with col_dt1:
+                    formatting_start_dt = st.datetime_input("Start", value=current_data.get('formatting_start'), key=f"formatting_start_dt_{book_id}")
+                with col_dt2:
+                    formatting_end_dt = st.datetime_input("End", value=current_data.get('formatting_end'), key=f"formatting_end_dt_{book_id}")
 
-            col1, col2 = st.columns(2)
-            with col1:
-                proofreading_start_date = st.date_input(
-                    "Start Date",
-                    value=current_data.get('proofreading_start'),
-                    key=f"proofreading_start_date_{book_id}"
-                )
-                proofreading_start_time = st.time_input(
-                    "Start Time",
-                    value=current_data.get('proofreading_start'),
-                    key=f"proofreading_start_time_{book_id}"
-                )
-            with col2:
-                proofreading_end_date = st.date_input(
-                    "End Date",
-                    value=current_data.get('proofreading_end'),
-                    key=f"proofreading_end_date_{book_id}"
-                )
-                proofreading_end_time = st.time_input(
-                    "End Time",
-                    value=current_data.get('proofreading_end'),
-                    key=f"proofreading_end_time_{book_id}"
+                book_pages = st.number_input(
+                    "Total Book Pages", min_value=0,
+                    value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
+                    step=1, key=f"book_pages_formatting_{book_id}"
                 )
 
-            book_pages = st.number_input(
-                "Total Book Pages",
-                min_value=0,
-                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
-                step=1,
-                key=f"book_pages_proofreading_{book_id}"
-            )
+                st.write("") # Spacer
+                if st.form_submit_button("💾 Save Formatting", width="stretch", type="primary"):
+                    with st.spinner("Saving..."):
+                        formatting_start = formatting_start_dt.strftime('%Y-%m-%d %H:%M:%S') if formatting_start_dt else None
+                        formatting_end = formatting_end_dt.strftime('%Y-%m-%d %H:%M:%S') if formatting_end_dt else None
 
-            if st.form_submit_button("💾 Save Proofreading", width="stretch", type="primary"):
-                with st.spinner("Saving Proofreading details..."):
-                    import time
-                    time.sleep(1)
-                    proofreading_start = f"{proofreading_start_date} {proofreading_start_time}" if proofreading_start_date and proofreading_start_time else None
-                    proofreading_end = f"{proofreading_end_date} {proofreading_end_time}" if proofreading_end_date and proofreading_end_time else None
-                    if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
-                        st.error("Start date/time must be before end date/time.")
-                    else:
-                        updates = {
-                            "proofreading_start": proofreading_start,
-                            "proofreading_end": proofreading_end,
-                            "proofreading_by": proofreading_by if proofreading_by else None,
-                            "book_pages": book_pages
-                        }
-                        update_operation_details(book_id, updates)
-                        
-                        # Log the form submission
-                        details = (
-                            f"Book ID: {book_id}, Proofreader: {proofreading_by or 'None'}, "
-                            f"Start: {proofreading_start or 'None'}, End: {proofreading_end or 'None'}, "
-                            f"Pages: {book_pages}"
-                        )
-                        try:
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated proofreading details",
-                                details
-                            )
-                        except Exception as e:
-                            st.error(f"Error logging proofreading details: {str(e)}")
-                        
-                        st.success("✔️ Updated Proofreading details")
-                        st.toast("Updated Proofreading details", icon="✔️", duration="long")
-                        if selected_proofreader == "Add New..." and new_proofreader:
-                            st.cache_data.clear()
+                        if formatting_start and formatting_end and formatting_start > formatting_end:
+                            st.error("Start must be before End.")
+                        else:
+                            updates = {
+                                "formatting_start": formatting_start,
+                                "formatting_end": formatting_end,
+                                "formatting_by": formatting_by if formatting_by else None,
+                                "book_pages": book_pages
+                            }
+                            update_operation_details(book_id, updates)
+                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated formatting details", f"Book ID: {book_id}")
+                            st.success("Saved!")
+                            st.toast("Updated Formatting details", icon="✔️")
+                            if selected_formatter == "Add New..." and new_formatter: st.cache_data.clear()
 
-    # Formatting Tab
-    with tab3:
-        with st.form(key=f"formatting_form_{book_id}", border=False):
-            # Worker selection
-            selected_formatter = st.selectbox(
-                "Formatter",
-                formatting_options,
-                index=(formatting_options.index(st.session_state[f"formatting_by_{book_id}"]) 
-                    if f"formatting_by_{book_id}" in st.session_state and st.session_state[f"formatting_by_{book_id}"] in formatting_options else 0),
-                key=f"formatting_select_{book_id}"
-            )
-            new_formatter = ""
-            if selected_formatter == "Add New...":
-                new_formatter = st.text_input(
-                    "New Formatter Name",
-                    key=f"formatting_new_input_{book_id}",
-                    placeholder="Enter new formatter name..."
+    # ==========================
+    # TAB 3: Proofreading
+    # ==========================
+    with op_tabs[2]:
+        with st.container(border=True):
+            with st.form(key=f"proofreading_form_{book_id}", border=False):
+                selected_proofreader = st.selectbox(
+                    "Proofreader",
+                    proofreading_options,
+                    index=(proofreading_options.index(st.session_state[f"proofreading_by_{book_id}"]) 
+                        if f"proofreading_by_{book_id}" in st.session_state and st.session_state[f"proofreading_by_{book_id}"] in proofreading_options else 0),
+                    key=f"proofreading_select_{book_id}"
                 )
-                if new_formatter:
-                    st.session_state[f"formatting_by_{book_id}"] = new_formatter
-            elif selected_formatter != "Select Formatter":
-                st.session_state[f"formatting_by_{book_id}"] = selected_formatter
+                new_proofreader = ""
+                if selected_proofreader == "Add New...":
+                    new_proofreader = st.text_input("New Proofreader Name", key=f"proofreading_new_input_{book_id}")
+                    if new_proofreader: st.session_state[f"proofreading_by_{book_id}"] = new_proofreader
+                elif selected_proofreader != "Select Proofreader":
+                    st.session_state[f"proofreading_by_{book_id}"] = selected_proofreader
 
-            formatting_by = st.session_state[f"formatting_by_{book_id}"] if f"formatting_by_{book_id}" in st.session_state and st.session_state[f"formatting_by_{book_id}"] != "Select Formatter" else ""
+                proofreading_by = st.session_state[f"proofreading_by_{book_id}"] if f"proofreading_by_{book_id}" in st.session_state and st.session_state[f"proofreading_by_{book_id}"] != "Select Proofreader" else ""
 
-            col1, col2 = st.columns(2)
-            with col1:
-                formatting_start_date = st.date_input(
-                    "Start Date",
-                    value=current_data.get('formatting_start'),
-                    key=f"formatting_start_date_{book_id}"
-                )
-                formatting_start_time = st.time_input(
-                    "Start Time",
-                    value=current_data.get('formatting_start'),
-                    key=f"formatting_start_time_{book_id}"
-                )
-            with col2:
-                formatting_end_date = st.date_input(
-                    "End Date",
-                    value=current_data.get('formatting_end'),
-                    key=f"formatting_end_date_{book_id}"
-                )
-                formatting_end_time = st.time_input(
-                    "End Time",
-                    value=current_data.get('formatting_end'),
-                    key=f"formatting_end_time_{book_id}"
+                col_dt1, col_dt2 = st.columns(2)
+                with col_dt1:
+                    proofreading_start_dt = st.datetime_input("Start", value=current_data.get('proofreading_start'), key=f"proofreading_start_dt_{book_id}")
+                with col_dt2:
+                    proofreading_end_dt = st.datetime_input("End", value=current_data.get('proofreading_end'), key=f"proofreading_end_dt_{book_id}")
+
+                book_pages = st.number_input(
+                    "Total Book Pages", min_value=0,
+                    value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
+                    step=1, key=f"book_pages_proofreading_{book_id}"
                 )
 
-            book_pages = st.number_input(
-                "Total Book Pages",
-                min_value=0,
-                value=current_data.get('book_pages', 0) if current_data.get('book_pages') is not None else 0,
-                step=1,
-                key=f"book_pages_formatting_{book_id}"
-            )
+                st.write("") # Spacer
+                if st.form_submit_button("💾 Save Proofreading", width="stretch", type="primary"):
+                    with st.spinner("Saving..."):
+                        proofreading_start = proofreading_start_dt.strftime('%Y-%m-%d %H:%M:%S') if proofreading_start_dt else None
+                        proofreading_end = proofreading_end_dt.strftime('%Y-%m-%d %H:%M:%S') if proofreading_end_dt else None
 
-            if st.form_submit_button("💾 Save Formatting", width="stretch", type="primary"):
-                with st.spinner("Saving Formatting details..."):
-                    import time
-                    time.sleep(1)
-                    formatting_start = f"{formatting_start_date} {formatting_start_time}" if formatting_start_date and formatting_start_time else None
-                    formatting_end = f"{formatting_end_date} {formatting_end_time}" if formatting_end_date and formatting_end_time else None
-                    if formatting_start and formatting_end and formatting_start > formatting_end:
-                        st.error("Start date/time must be before end date/time.")
-                    else:
-                        updates = {
-                            "formatting_start": formatting_start,
-                            "formatting_end": formatting_end,
-                            "formatting_by": formatting_by if formatting_by else None,
-                            "book_pages": book_pages
-                        }
-                        update_operation_details(book_id, updates)
-                        
-                        # Log the form submission
-                        details = (
-                            f"Book ID: {book_id}, Formatter: {formatting_by or 'None'}, "
-                            f"Start: {formatting_start or 'None'}, End: {formatting_end or 'None'}, "
-                            f"Pages: {book_pages}"
-                        )
-                        try:
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated formatting details",
-                                details
-                            )
-                        except Exception as e:
-                            st.error(f"Error logging formatting details: {str(e)}")
-                        
-                        st.success("✔️ Updated Formatting details")
-                        st.toast("Updated Formatting details", icon="✔️", duration="long")
-                        if selected_formatter == "Add New..." and new_formatter:
-                            st.cache_data.clear()
+                        if proofreading_start and proofreading_end and proofreading_start > proofreading_end:
+                            st.error("Start must be before End.")
+                        else:
+                            updates = {
+                                "proofreading_start": proofreading_start,
+                                "proofreading_end": proofreading_end,
+                                "proofreading_by": proofreading_by if proofreading_by else None,
+                                "book_pages": book_pages
+                            }
+                            update_operation_details(book_id, updates)
+                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated proofreading details", f"Book ID: {book_id}")
+                            st.success("Saved!")
+                            st.toast("Updated Proofreading details", icon="✔️")
+                            if selected_proofreader == "Add New..." and new_proofreader: st.cache_data.clear()
 
-    # Book Cover Tab
-    with tab4:
-        with st.form(key=f"cover_form_{book_id}", border=False):
-            # Worker selection
-            selected_cover = st.selectbox(
-                "Cover Designer",
-                cover_options,
-                index=(cover_options.index(st.session_state[f"cover_by_{book_id}"]) 
-                    if f"cover_by_{book_id}" in st.session_state and st.session_state[f"cover_by_{book_id}"] in cover_options else 0),
-                key=f"cover_select_{book_id}"
-            )
-            new_cover_designer = ""
-            if selected_cover == "Add New...":
-                new_cover_designer = st.text_input(
-                    "New Cover Designer Name",
-                    key=f"cover_new_input_{book_id}",
-                    placeholder="Enter new cover designer name..."
+    # ==========================
+    # TAB 4: Cover
+    # ==========================
+    with op_tabs[3]:
+        with st.container(border=True):
+            with st.form(key=f"cover_form_{book_id}", border=False):
+                selected_cover = st.selectbox(
+                    "Cover Designer",
+                    cover_options,
+                    index=(cover_options.index(st.session_state[f"cover_by_{book_id}"]) 
+                        if f"cover_by_{book_id}" in st.session_state and st.session_state[f"cover_by_{book_id}"] in cover_options else 0),
+                    key=f"cover_select_{book_id}"
                 )
-                if new_cover_designer:
-                    st.session_state[f"cover_by_{book_id}"] = new_cover_designer
-            elif selected_cover != "Select Cover Designer":
-                st.session_state[f"cover_by_{book_id}"] = selected_cover
+                new_cover_designer = ""
+                if selected_cover == "Add New...":
+                    new_cover_designer = st.text_input("New Cover Designer Name", key=f"cover_new_input_{book_id}")
+                    if new_cover_designer: st.session_state[f"cover_by_{book_id}"] = new_cover_designer
+                elif selected_cover != "Select Cover Designer":
+                    st.session_state[f"cover_by_{book_id}"] = selected_cover
 
-            cover_by = st.session_state[f"cover_by_{book_id}"] if f"cover_by_{book_id}" in st.session_state and st.session_state[f"cover_by_{book_id}"] != "Select Cover Designer" else ""
+                cover_by = st.session_state[f"cover_by_{book_id}"] if f"cover_by_{book_id}" in st.session_state and st.session_state[f"cover_by_{book_id}"] != "Select Cover Designer" else ""
 
-            st.subheader("Book Cover")
-            col1, col2 = st.columns(2)
-            with col1:
-                cover_start_date = st.date_input(
-                    "Start Date",
-                    value=current_data.get('cover_start'),
-                    key=f"cover_start_date_{book_id}"
-                )
-                cover_start_time = st.time_input(
-                    "Start Time",
-                    value=current_data.get('cover_start'),
-                    key=f"cover_start_time_{book_id}"
-                )
-            with col2:
-                cover_end_date = st.date_input(
-                    "End Date",
-                    value=current_data.get('cover_end'),
-                    key=f"cover_end_date_{book_id}"
-                )
-                cover_end_time = st.time_input(
-                    "End Time",
-                    value=current_data.get('cover_end'),
-                    key=f"cover_end_time_{book_id}"
-                )
+                col_dt1, col_dt2 = st.columns(2)
+                with col_dt1:
+                    cover_start_dt = st.datetime_input("Start", value=current_data.get('cover_start'), key=f"cover_start_dt_{book_id}")
+                with col_dt2:
+                    cover_end_dt = st.datetime_input("End", value=current_data.get('cover_end'), key=f"cover_end_dt_{book_id}")
 
-            if st.form_submit_button("💾 Save Cover Details", width="stretch", type="primary"):
-                with st.spinner("Saving Cover details..."):
-                    import time
-                    time.sleep(1)
-                    cover_start = f"{cover_start_date} {cover_start_time}" if cover_start_date and cover_start_time else None
-                    cover_end = f"{cover_end_date} {cover_end_time}" if cover_end_date and cover_end_time else None
-                    if cover_start and cover_end and cover_start > cover_end:
-                        st.error("Cover start date/time must be before end date/time.")
-                    else:
-                        updates = {
-                            "cover_start": cover_start,
-                            "cover_end": cover_end,
-                            "cover_by": cover_by if cover_by else None
-                        }
-                        update_operation_details(book_id, updates)
-                        
-                        # Log the form submission
-                        details = (
-                            f"Book ID: {book_id}, Cover Designer: {cover_by or 'None'}, "
-                            f"Start: {cover_start or 'None'}, End: {cover_end or 'None'}"
-                        )
-                        try:
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated cover details",
-                                details
-                            )
-                        except Exception as e:
-                            st.error(f"Error logging cover details: {str(e)}")
-                        
-                        st.success("✔️ Updated Cover details")
-                        st.toast("Updated Cover details", icon="✔️", duration="long")
-                        if selected_cover == "Add New..." and new_cover_designer:
-                            st.cache_data.clear()
+                st.write("") # Spacer
+                if st.form_submit_button("💾 Save Cover", width="stretch", type="primary"):
+                    with st.spinner("Saving..."):
+                        cover_start = cover_start_dt.strftime('%Y-%m-%d %H:%M:%S') if cover_start_dt else None
+                        cover_end = cover_end_dt.strftime('%Y-%m-%d %H:%M:%S') if cover_end_dt else None
+
+                        if cover_start and cover_end and cover_start > cover_end:
+                            st.error("Start must be before End.")
+                        else:
+                            updates = {
+                                "cover_start": cover_start,
+                                "cover_end": cover_end,
+                                "cover_by": cover_by if cover_by else None
+                            }
+                            update_operation_details(book_id, updates)
+                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated cover details", f"Book ID: {book_id}")
+                            st.success("Saved!")
+                            st.toast("Updated Cover details", icon="✔️")
+                            if selected_cover == "Add New..." and new_cover_designer: st.cache_data.clear()
 
 def update_operation_details(book_id, updates):
     """Update operation details in the books table."""

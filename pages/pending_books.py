@@ -967,7 +967,7 @@ cutoff_date = date.today() - timedelta(days=250)
 archive_query = """
 UPDATE books
 SET is_archived = 1
-WHERE deliver = 0 AND is_archived = 0 AND date <= :cutoff_date
+WHERE deliver = 0 AND is_archived = 0 AND is_cancelled = 0 AND date <= :cutoff_date
 """
 with conn.session as s:
     s.execute(text(archive_query), {"cutoff_date": cutoff_date})
@@ -979,7 +979,7 @@ SELECT book_id, title, date, writing_start, writing_end, proofreading_start,
        proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, is_thesis_to_book ,author_type, is_publish_only,
          apply_isbn, isbn, is_archived
 FROM books
-WHERE deliver = 0
+WHERE deliver = 0 AND is_cancelled = 0
 """
 books_data = conn.query(query, show_spinner=False)
 
@@ -1122,6 +1122,7 @@ def apply_sorting(data):
 
 filtered_pending_data = apply_sorting(filtered_pending_data)
 filtered_archived_data = apply_sorting(filtered_archived_data)
+total_pending_books = len(filtered_pending_data) + len(filtered_archived_data)
 
 col1, col2, col3 = st.columns([8, 0.7, 1], vertical_alignment="bottom")
 with col1:
@@ -1135,9 +1136,9 @@ with col3:
 
 # UI with Popover for Filters and Sorting
 with st.container():
-    col1, col2, col3 = st.columns([3, 7, 6], vertical_alignment="bottom", gap="small")
+    col1, col2, col3 = st.columns([2.5, 7, 6], vertical_alignment="bottom", gap="small")
     with col1:
-        st.markdown(f'<div class="status-badge-red">Overdue Books<span class="badge-count">{len(filtered_pending_data)}</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="status-badge-red">Total Overdue<span class="badge-count">{total_pending_books}</span></div>', unsafe_allow_html=True)
     with col2:
         st.text_input("Search by Book ID or Title", key="search_query", placeholder="Enter Book ID or Title", 
                       label_visibility="collapsed")
@@ -1202,114 +1203,122 @@ with st.expander("⚠️ Pending Books Summary", expanded=False):
     else:
         st.info("No Pending Books Found")
 
-# Display Pending Books
-with st.container():
-    if not filtered_pending_data.empty:
-        column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
-        with st.container(border=True):
-            cols = st.columns(column_widths, vertical_alignment="bottom")
-            cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
-            cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
-            cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
-            cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
-            cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
-            cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
-            cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
+tab1, tab2 = st.tabs(["📋 Pending Books", "📦 Archived Books"])
 
-            for _, book in filtered_pending_data.iterrows():
-                book_id = book['book_id']
-                stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
-                author_count = len(authors_data[authors_data['book_id'] == book_id])
-                
-                # Determine days badge class
-                days_since = (date.today() - book["date"]).days if pd.notnull(book["date"]) else None
-                if days_since is not None:
-                    if days_since <= 30:
-                        days_badge_class = "days-badge-green"
-                    elif days_since <= 40:
-                        days_badge_class = "days-badge-orange"
-                    elif days_since <= 50:
-                        days_badge_class = "days-badge-orange"
+with tab1:
+    
+    # Display Pending Books
+    st.markdown(f'<div class="status-badge-red">Pending Books<span class="badge-count">{len(filtered_pending_data)}</span></div>', unsafe_allow_html=True)
+    with st.container():
+        if not filtered_pending_data.empty:
+            column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
+            with st.container(border=True):
+                cols = st.columns(column_widths, vertical_alignment="bottom")
+                cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
+                cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
+                cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+                cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
+                cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
+                cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
+                cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
+
+                for _, book in filtered_pending_data.iterrows():
+                    book_id = book['book_id']
+                    stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
+                    author_count = len(authors_data[authors_data['book_id'] == book_id])
+                    
+                    # Determine days badge class
+                    days_since = (date.today() - book["date"]).days if pd.notnull(book["date"]) else None
+                    if days_since is not None:
+                        if days_since <= 30:
+                            days_badge_class = "days-badge-green"
+                        elif days_since <= 40:
+                            days_badge_class = "days-badge-orange"
+                        elif days_since <= 50:
+                            days_badge_class = "days-badge-orange"
+                        else:
+                            days_badge_class = "days-badge-red"
                     else:
                         days_badge_class = "days-badge-red"
-                else:
-                    days_badge_class = "days-badge-red"
 
-                # Determine stuck reason badge class
-                stuck_reason_class = f"stuck-reason-{stuck_reason.lower().replace(' ', '-').replace('/', '-')}"
-                
+                    # Determine stuck reason badge class
+                    stuck_reason_class = f"stuck-reason-{stuck_reason.lower().replace(' ', '-').replace('/', '-')}"
+                    
+                    cols = st.columns(column_widths, vertical_alignment="bottom")
+                    cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
+                    cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
+                    cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
+                    publisher_class = {
+                        'AGPH': 'publisher-Penguin',
+                        'Cipher': 'publisher-HarperCollins',
+                        'AG Volumes': 'publisher-Macmillan',
+                        'AG Classics': 'publisher-RandomHouse'
+                    }.get(book['publisher'], 'publisher-default')
+                    cols[3].markdown(f'<div class="table-row"><span class="pill-badge {publisher_class}">{book["publisher"]}</span></div>',unsafe_allow_html=True)
+                    cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
+                    cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
+                    with cols[6]:
+                        if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
+                            show_book_details(book_id, book, authors_data, printeditions_data)
+        else:
+            st.info("No Pending Books Found")
+
+
+with tab2:
+    # Display Archived Books
+    st.markdown(f'<div class="status-badge-red">Archived Books<span class="badge-count">{len(filtered_archived_data)}</span></div>', unsafe_allow_html=True)
+    st.caption("Books that have been archived automatically after being pending for over 250 days or manually by the user.")
+    #st.subheader(f"Archived Books ({len(filtered_archived_data)})")
+    with st.container():
+        if not filtered_archived_data.empty:
+            column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
+            with st.container(border=True):
                 cols = st.columns(column_widths, vertical_alignment="bottom")
-                cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
-                cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
-                cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
-                publisher_class = {
-                    'AGPH': 'publisher-Penguin',
-                    'Cipher': 'publisher-HarperCollins',
-                    'AG Volumes': 'publisher-Macmillan',
-                    'AG Classics': 'publisher-RandomHouse'
-                }.get(book['publisher'], 'publisher-default')
-                cols[3].markdown(f'<div class="table-row"><span class="pill-badge {publisher_class}">{book["publisher"]}</span></div>',unsafe_allow_html=True)
-                cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
-                cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
-                with cols[6]:
-                    if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
-                        show_book_details(book_id, book, authors_data, printeditions_data)
-    else:
-        st.info("No Pending Books Found")
+                cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
+                cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
+                cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+                cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
+                cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
+                cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
+                cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
 
-# Display Archived Books
-st.markdown(f'<div class="status-badge-red">Archived Books<span class="badge-count">{len(filtered_archived_data)}</span></div>', unsafe_allow_html=True)
-#st.subheader(f"Archived Books ({len(filtered_archived_data)})")
-with st.container():
-    if not filtered_archived_data.empty:
-        column_widths = [0.8, 4.2, 1.5, 1, 1.2, 2.1, 0.6]
-        with st.container(border=True):
-            cols = st.columns(column_widths, vertical_alignment="bottom")
-            cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
-            cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
-            cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
-            cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
-            cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
-            cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
-            cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
-
-            for _, book in filtered_archived_data.iterrows():
-                book_id = book['book_id']
-                stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
-                author_count = len(authors_data[authors_data['book_id'] == book_id])
-                
-                # Determine days badge class
-                days_since = (date.today() - book["date"]).days if pd.notnull(book["date"]) else None
-                if days_since is not None:
-                    if days_since <= 30:
-                        days_badge_class = "days-badge-green"
-                    elif days_since <= 40:
-                        days_badge_class = "days-badge-orange"
-                    elif days_since <= 50:
-                        days_badge_class = "days-badge-orange"
+                for _, book in filtered_archived_data.iterrows():
+                    book_id = book['book_id']
+                    stuck_reason = get_stuck_reason(book_id, book, authors_data, printeditions_data)
+                    author_count = len(authors_data[authors_data['book_id'] == book_id])
+                    
+                    # Determine days badge class
+                    days_since = (date.today() - book["date"]).days if pd.notnull(book["date"]) else None
+                    if days_since is not None:
+                        if days_since <= 30:
+                            days_badge_class = "days-badge-green"
+                        elif days_since <= 40:
+                            days_badge_class = "days-badge-orange"
+                        elif days_since <= 50:
+                            days_badge_class = "days-badge-orange"
+                        else:
+                            days_badge_class = "days-badge-red"
                     else:
                         days_badge_class = "days-badge-red"
-                else:
-                    days_badge_class = "days-badge-red"
 
-                # Determine stuck reason badge class
-                stuck_reason_class = f"stuck-reason-{stuck_reason.lower().replace(' ', '-').replace('/', '-')}"
-                
-                cols = st.columns(column_widths, vertical_alignment="bottom")
-                cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
-                cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
-                cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
-                publisher_class = {
-                    'AGPH': 'publisher-Penguin',
-                    'Cipher': 'publisher-HarperCollins',
-                    'AG Volumes': 'publisher-Macmillan',
-                    'AG Classics': 'publisher-RandomHouse'
-                }.get(book['publisher'], 'publisher-default')
-                cols[3].markdown(f'<div class="table-row"><span class="pill-badge {publisher_class}">{book["publisher"]}</span></div>',unsafe_allow_html=True)
-                cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
-                cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
-                with cols[6]:
-                    if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
-                        show_book_details(book_id, book, authors_data, printeditions_data)
-    else:
-        st.info("No Archived Books Found")
+                    # Determine stuck reason badge class
+                    stuck_reason_class = f"stuck-reason-{stuck_reason.lower().replace(' ', '-').replace('/', '-')}"
+                    
+                    cols = st.columns(column_widths, vertical_alignment="bottom")
+                    cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
+                    cols[1].markdown(f'<div class="table-row">{book["title"]}<span class="author-pill">{book["author_type"]}, {author_count}</span></div>', unsafe_allow_html=True)
+                    cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%d %B %Y") if pd.notnull(book["date"]) else ""}</div>', unsafe_allow_html=True)
+                    publisher_class = {
+                        'AGPH': 'publisher-Penguin',
+                        'Cipher': 'publisher-HarperCollins',
+                        'AG Volumes': 'publisher-Macmillan',
+                        'AG Classics': 'publisher-RandomHouse'
+                    }.get(book['publisher'], 'publisher-default')
+                    cols[3].markdown(f'<div class="table-row"><span class="pill-badge {publisher_class}">{book["publisher"]}</span></div>',unsafe_allow_html=True)
+                    cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
+                    cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
+                    with cols[6]:
+                        if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
+                            show_book_details(book_id, book, authors_data, printeditions_data)
+        else:
+            st.info("No Archived Books Found")

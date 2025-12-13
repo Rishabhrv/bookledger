@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
+from constants import log_activity, initialize_click_and_session_id, connect_db
 from auth import validate_token
 from datetime import datetime, date
 
@@ -253,6 +253,27 @@ def get_checklist_updates(selected_date):
         s.commit()
     return df
 
+# Fetch email history
+def get_email_history(selected_date, search_term=None):
+    conn = connect_db()
+    query = """
+        SELECT timestamp, recipient, sender_email, status, book_id, book_title, triggered_by, details 
+        FROM email_history 
+        WHERE DATE(timestamp) = :selected_date
+    """
+    params = {"selected_date": selected_date}
+    
+    if search_term:
+        query += " AND (recipient LIKE :search OR sender_email LIKE :search OR details LIKE :search)"
+        params["search"] = f"%{search_term}%"
+        
+    query += " ORDER BY timestamp DESC"
+    
+    with conn.session as s:
+        result = s.execute(text(query), params=params)
+        df = pd.DataFrame(result.fetchall(), columns=["Timestamp", "Recipient", "Sender Email", "Status", "Book ID", "Book Title", "Triggered By", "Details"])
+    return df
+
 # Format timestamp for display
 def format_timestamp(ts):
     if isinstance(ts, pd.Timestamp):
@@ -355,111 +376,138 @@ selected_user = st.segmented_control("👥 Filter by User", options=user_options
 
 st.divider()
 
-# Create two columns for main activity log and checklist updates
-col_main, col_checklist = st.columns([1.5, 1], gap="medium")
+tab1, tab2 = st.tabs(["📝 Activity Log", "📧 Email History"])
 
-# Main Activity Log
-with col_main:
-    st.markdown('<div class="column-border">', unsafe_allow_html=True)
-    
-    # Fetch data for main activity log
-    selected_user_param = selected_user if selected_user != 'All' else None
-    selected_action_param = selected_action if selected_action and selected_action != 'All' else None
-    df = get_activity_log(selected_date.strftime('%Y-%m-%d'), selected_user_param, selected_action_param)
+with tab1:
+    # Create two columns for main activity log and checklist updates
+    col_main, col_checklist = st.columns([1.5, 1], gap="medium")
 
-    # Apply search filter
-    if search_term:
-        df = df[df['details'].str.contains(search_term, case=False, na=False)]
-
-    # Display activities in tree view
-    if not df.empty:
-        # Show activity count
-        st.caption(f"📊 {len(df)} activities found")
+    # Main Activity Log
+    with col_main:
+        st.markdown('<div class="column-border">', unsafe_allow_html=True)
         
-        grouped = df.groupby(['user_id', 'username'])
-        
-        for (user_id, username), user_group in grouped:
-            with st.expander(f"👤 **{username}** • ID: {user_id}", expanded=True):
-                # Sort sessions by most recent activity
-                session_groups = user_group.groupby('session_id').agg({'timestamp': 'max'}).reset_index()
-                session_groups = session_groups.sort_values('timestamp', ascending=False)
-                
-                for idx, session_id in enumerate(session_groups['session_id'], 1):
-                    session_group = user_group[user_group['session_id'] == session_id].sort_values('timestamp', ascending=False)
-                    duration = calculate_session_duration(session_group)
-                    activity_count = len(session_group)
-                    st.markdown(
-                        f'<div class="session-node">📂 Session {idx} • '
-                        f'{activity_count} {"activity" if activity_count == 1 else "activities"} • '
-                        f'<span class="session-duration">⏱️ {duration}</span></div>', 
-                        unsafe_allow_html=True
-                    )
+        # Fetch data for main activity log
+        selected_user_param = selected_user if selected_user != 'All' else None
+        selected_action_param = selected_action if selected_action and selected_action != 'All' else None
+        df = get_activity_log(selected_date.strftime('%Y-%m-%d'), selected_user_param, selected_action_param)
+
+        # Apply search filter
+        if search_term:
+            df = df[df['details'].str.contains(search_term, case=False, na=False)]
+
+        # Display activities in tree view
+        if not df.empty:
+            # Show activity count
+            st.caption(f"📊 {len(df)} activities found")
+            
+            grouped = df.groupby(['user_id', 'username'])
+            
+            for (user_id, username), user_group in grouped:
+                with st.expander(f"👤 **{username}** • ID: {user_id}", expanded=True):
+                    # Sort sessions by most recent activity
+                    session_groups = user_group.groupby('session_id').agg({'timestamp': 'max'}).reset_index()
+                    session_groups = session_groups.sort_values('timestamp', ascending=False)
                     
-                    # Display activities as tree leaves
-                    for _, row in session_group.iterrows():
+                    for idx, session_id in enumerate(session_groups['session_id'], 1):
+                        session_group = user_group[user_group['session_id'] == session_id].sort_values('timestamp', ascending=False)
+                        duration = calculate_session_duration(session_group)
+                        activity_count = len(session_group)
+                        st.markdown(
+                            f'<div class="session-node">📂 Session {idx} • '
+                            f'{activity_count} {"activity" if activity_count == 1 else "activities"} • '
+                            f'<span class="session-duration">⏱️ {duration}</span></div>', 
+                            unsafe_allow_html=True
+                        )
+                        
+                        # Display activities as tree leaves
+                        for _, row in session_group.iterrows():
+                            formatted_time = format_timestamp(row['timestamp'])
+                            emoji = get_action_emoji(row['action'])
+                            st.markdown(
+                                f"""
+                                <div class="tree-item">
+                                    <span class="timestamp">🕐 {formatted_time}</span>
+                                    <span class="action">{emoji} {row['action']}</span>
+                                    <span class="action-arrow">→</span>
+                                    <span class="details">{row['details']}</span>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+        else:
+            user_filter = f" for **{selected_user}**" if selected_user and selected_user != 'All' else ''
+            action_filter = f" with action **{selected_action}**" if selected_action else ''
+            search_filter = f" matching **'{search_term}'**" if search_term else ''
+            st.info(f"📭 No activities found for **{selected_date.strftime('%B %d, %Y')}**{user_filter}{action_filter}{search_filter}.")
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # Checklist Updates
+    with col_checklist:
+        st.markdown("#### ✅ Author Checklist Updates")
+        
+        # Fetch checklist updates with book and author details
+        checklist_df = get_checklist_updates(selected_date.strftime('%Y-%m-%d'))
+        
+        if not checklist_df.empty:
+            # Show update count
+            st.caption(f"📊 {len(checklist_df)} checklist updates")
+            
+            # Group by book_id and title for a tree-like structure
+            grouped = checklist_df.groupby(['book_id', 'title'])
+            
+            for (book_id, title), book_group in grouped:
+                update_count = len(book_group)
+                label = "update" if update_count == 1 else "updates"
+                with st.expander(f"📖 **{title}** • {update_count} {label}",expanded=True):
+                    # Sort updates by timestamp, most recent first
+                    book_group = book_group.sort_values('timestamp', ascending=False)
+                    
+                    for _, row in book_group.iterrows():
                         formatted_time = format_timestamp(row['timestamp'])
-                        emoji = get_action_emoji(row['action'])
+                        # Extract changed field and value from details
+                        try:
+                            changed_field = row['details'].split(', ')[-1].split(' changed to ')[0]
+                            changed_value = row['details'].split(' changed to ')[-1].strip("'")
+                        except:
+                            changed_field = "Update"
+                            changed_value = row['details']
+                        
                         st.markdown(
                             f"""
-                            <div class="tree-item">
+                            <div class="checklist-item">
                                 <span class="timestamp">🕐 {formatted_time}</span>
-                                <span class="action">{emoji} {row['action']}</span>
-                                <span class="action-arrow">→</span>
-                                <span class="details">{row['details']}</span>
+                                <div class="details_checklist">
+                                    <span class="highlight-author">👤 {row['name']} • ID: {row['author_id']}</span>
+                                    <span class="highlight-update">✨ {changed_field} → {changed_value}</span>
+                                </div>
                             </div>
                             """,
                             unsafe_allow_html=True
                         )
-    else:
-        user_filter = f" for **{selected_user}**" if selected_user and selected_user != 'All' else ''
-        action_filter = f" with action **{selected_action}**" if selected_action else ''
-        search_filter = f" matching **'{search_term}'**" if search_term else ''
-        st.info(f"📭 No activities found for **{selected_date.strftime('%B %d, %Y')}**{user_filter}{action_filter}{search_filter}.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+        else:
+            st.info(f"📭 No author checklist updates for **{selected_date.strftime('%B %d, %Y')}**.")
 
-# Checklist Updates
-with col_checklist:
-    st.markdown("#### ✅ Author Checklist Updates")
+with tab2:
+    st.markdown("### 📧 Email History")
+    email_df = get_email_history(selected_date.strftime('%Y-%m-%d'), search_term)
     
-    # Fetch checklist updates with book and author details
-    checklist_df = get_checklist_updates(selected_date.strftime('%Y-%m-%d'))
-    
-    if not checklist_df.empty:
-        # Show update count
-        st.caption(f"📊 {len(checklist_df)} checklist updates")
-        
-        # Group by book_id and title for a tree-like structure
-        grouped = checklist_df.groupby(['book_id', 'title'])
-        
-        for (book_id, title), book_group in grouped:
-            update_count = len(book_group)
-            label = "update" if update_count == 1 else "updates"
-            with st.expander(f"📖 **{title}** • {update_count} {label}",expanded=True):
-                # Sort updates by timestamp, most recent first
-                book_group = book_group.sort_values('timestamp', ascending=False)
-                
-                for _, row in book_group.iterrows():
-                    formatted_time = format_timestamp(row['timestamp'])
-                    # Extract changed field and value from details
-                    try:
-                        changed_field = row['details'].split(', ')[-1].split(' changed to ')[0]
-                        changed_value = row['details'].split(' changed to ')[-1].strip("'")
-                    except:
-                        changed_field = "Update"
-                        changed_value = row['details']
-                    
-                    st.markdown(
-                        f"""
-                        <div class="checklist-item">
-                            <span class="timestamp">🕐 {formatted_time}</span>
-                            <div class="details_checklist">
-                                <span class="highlight-author">👤 {row['name']} • ID: {row['author_id']}</span>
-                                <span class="highlight-update">✨ {changed_field} → {changed_value}</span>
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+    if not email_df.empty:
+        st.caption(f"📊 {len(email_df)} email records found")
+        st.dataframe(
+            email_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Timestamp": st.column_config.DatetimeColumn("Time", format="h:mm a"),
+                "Recipient": "To",
+                "Sender Email": "From",
+                "Status": st.column_config.TextColumn("Status"),
+                "Book ID": "Book ID",
+                "Book Title": "Book Title",
+                "Triggered By": "Sent By",
+                "Details": "Details"
+            }
+        )
     else:
-        st.info(f"📭 No author checklist updates for **{selected_date.strftime('%B %d, %Y')}**.")
+        st.info(f"📭 No email history found for **{selected_date.strftime('%B %d, %Y')}**.")

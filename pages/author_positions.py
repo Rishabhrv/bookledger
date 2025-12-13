@@ -303,8 +303,8 @@ def open_author_positions_page():
         filtered_df['days_since'] = (current_date - filtered_df['date']).dt.days
         filtered_df['date_str'] = filtered_df['date'].dt.strftime('%Y-%m-%d')
         
-        # Define column widths (adjusted for publisher column)
-        column_widths = [0.6, 2.5, 0.9, 0.7, 0.7, 0.9, 0.9, 0.9, 0.9]
+        # Define column widths (adjusted for publisher column removal)
+        column_widths = [0.6, 3.1, 0.8, 0.7, 1,1,1,1]
         
         with st.container(border=True):
             # Table Headers
@@ -312,24 +312,17 @@ def open_author_positions_page():
             cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
             cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
             cols[2].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
-            cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
-            cols[4].markdown('<div class="table-header">Author Type</div>', unsafe_allow_html=True)
-            cols[5].markdown('<div class="table-header">Position 1</div>', unsafe_allow_html=True)
-            cols[6].markdown('<div class="table-header">Position 2</div>', unsafe_allow_html=True)
-            cols[7].markdown('<div class="table-header">Position 3</div>', unsafe_allow_html=True)
-            cols[8].markdown('<div class="table-header">Position 4</div>', unsafe_allow_html=True)
+            cols[3].markdown('<div class="table-header">Author Type</div>', unsafe_allow_html=True)
+            cols[4].markdown('<div class="table-header">Position 1</div>', unsafe_allow_html=True)
+            cols[5].markdown('<div class="table-header">Position 2</div>', unsafe_allow_html=True)
+            cols[6].markdown('<div class="table-header">Position 3</div>', unsafe_allow_html=True)
+            cols[7].markdown('<div class="table-header">Position 4</div>', unsafe_allow_html=True)
             
             # Table Rows
             for _, book in filtered_df.iterrows():
                 cols = st.columns(column_widths)
                 cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
-                cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
                 
-                cols[2].markdown(
-                    f'<div class="table-row">{book["date_str"]} <span class="date-pill">{book["days_since"]}</span></div>',
-                    unsafe_allow_html=True
-                )
-
                 # Publisher pill using pill-badge class
                 publisher_class = {
                     'AGPH': 'publisher-Penguin',
@@ -337,24 +330,28 @@ def open_author_positions_page():
                     'AG Volumes': 'publisher-Macmillan',
                     'AG Classics': 'publisher-RandomHouse'
                 }.get(book['publisher'], 'publisher-default')
-                cols[3].markdown(
-                    f'<div class="pill-badge {publisher_class}">{book["publisher"]}</div>',
+                
+                publisher_badge = f'<span class="pill-badge {publisher_class}" style="margin-left: 8px;">{book["publisher"]}</span>'
+                cols[1].markdown(f'<div class="table-row">{book["title"]}{publisher_badge}</div>', unsafe_allow_html=True)
+                
+                cols[2].markdown(
+                    f'<div class="table-row">{book["date_str"]} <span class="date-pill">{book["days_since"]}</span></div>',
                     unsafe_allow_html=True
                 )
-                
+
                 # Author Type pill
                 author_type_class = {
                     'Double': 'author-type-double',
                     'Triple': 'author-type-triple',
                     'Multiple': 'author-type-multiple'
                 }.get(book['author_type'], '')
-                cols[4].markdown(
+                cols[3].markdown(
                     f'<div class="pill-badge {author_type_class}">{book["author_type"]}</div>',
                     unsafe_allow_html=True
                 )
                 
                 # Position pills
-                for i, pos in enumerate(['position_1', 'position_2', 'position_3', 'position_4'], 5):
+                for i, pos in enumerate(['position_1', 'position_2', 'position_3', 'position_4'], 4):
                     status = book[pos]
                     status_class = {
                         'Vacant': 'position-vacant',
@@ -367,6 +364,52 @@ def open_author_positions_page():
     else:
         st.info("No books with open author positions match the selected criteria.")
     
+    st.markdown('<div class="container-spacing"></div>', unsafe_allow_html=True)
+
+    # --- Extra Books Section ---
+    def fetch_extra_books_list(conn):
+        try:
+            return conn.query("""
+                SELECT book_id, title, rewritten_at, reason, book_pages
+                FROM extra_books 
+                ORDER BY rewritten_at DESC
+            """, ttl=0)
+        except Exception:
+            return pd.DataFrame()
+
+    extra_books_df = fetch_extra_books_list(conn)
+    
+    # st.markdown("### 📚 Extra Books (Available for Re-enrollment)")
+    st.markdown(
+        f'<div class="status-badge-red">Extra Books <span class="badge-count">{len(extra_books_df)}</span></div>',
+        unsafe_allow_html=True
+    )
+
+    if not extra_books_df.empty:
+        # Format rewritten_at
+        extra_books_df['rewritten_at'] = pd.to_datetime(extra_books_df['rewritten_at']).dt.strftime('%Y-%m-%d')
+        
+        with st.container(border=True):
+            # Headers
+            eb_cols = st.columns([0.8, 3, 1, 1, 1])
+            eb_cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
+            eb_cols[1].markdown('<div class="table-header">Title</div>', unsafe_allow_html=True)
+            eb_cols[2].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
+            eb_cols[3].markdown('<div class="table-header">Archived Date</div>', unsafe_allow_html=True)
+            eb_cols[4].markdown('<div class="table-header">Reason</div>', unsafe_allow_html=True)
+
+            
+            # Rows
+            for _, row in extra_books_df.iterrows():
+                eb_cols = st.columns([0.8, 3, 1, 1, 1])
+                eb_cols[0].markdown(f'<div class="table-row">{row["book_id"]}</div>', unsafe_allow_html=True)
+                eb_cols[1].markdown(f'<div class="table-row">{row["title"]}</div>', unsafe_allow_html=True)
+                eb_cols[2].markdown(f'<div class="table-row">{row["book_pages"]}</div>', unsafe_allow_html=True)
+                eb_cols[3].markdown(f'<div class="table-row">{row["rewritten_at"]}</div>', unsafe_allow_html=True)
+                eb_cols[4].markdown(f'<div class="table-row" style="color:#d32f2f;">{row["reason"] or "-"}</div>', unsafe_allow_html=True)
+    else:
+        st.info("No extra books available.")
+
     st.markdown('<div class="container-spacing"></div>', unsafe_allow_html=True)
 
 # Run the page

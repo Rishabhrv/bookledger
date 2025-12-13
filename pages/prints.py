@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import text
 from io import BytesIO
 from auth import validate_token
-from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
+from constants import log_activity, initialize_click_and_session_id, connect_db, get_ready_to_print_books, get_reprint_eligible_books
 
 
 logo = "logo/logo_black.png"
@@ -172,99 +172,6 @@ if click_id and click_id not in st.session_state.logged_click_ids:
     except Exception as e:
         st.error(f"Error logging navigation: {str(e)}")
 
-# Fetch ready-to-print books (not printed, not in running batches)
-def get_ready_to_print_books(conn):
-    query = """
-    SELECT 
-        b.book_id, 
-        b.title, 
-        b.date, 
-        COALESCE(pe.copies_planned, b.num_copies) AS num_copies,
-        'First Print' AS print_type,
-        COALESCE(pe.book_size, '6x9') AS book_size,
-        COALESCE(pe.binding, 'Paperback') AS binding,
-        COALESCE(pe.print_cost, 00.00) AS print_cost,
-        b.book_pages,
-        pe.print_id  # Added to fetch existing print_id
-    FROM 
-        books b
-    LEFT JOIN 
-        PrintEditions pe ON b.book_id = pe.book_id 
-        AND pe.edition_number = (SELECT MIN(edition_number) FROM PrintEditions WHERE book_id = b.book_id)
-    WHERE 
-        b.print_status = 0
-        AND (
-            (b.is_publish_only = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
-            OR
-            (b.writing_complete = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
-        )
-        AND b.book_id IN (
-            SELECT ba2.book_id
-            FROM book_authors ba2
-            GROUP BY ba2.book_id
-            HAVING 
-                MIN(ba2.welcome_mail_sent) = 1
-                AND MIN(ba2.agreement_received) = 1
-                AND MIN(ba2.digital_book_sent) = 1
-                AND MIN(ba2.printing_confirmation) = 1
-                AND MIN(ba2.photo_recive) = 1
-                AND MIN(ba2.id_proof_recive) = 1
-                AND MIN(ba2.author_details_sent) = 1
-                AND MIN(ba2.cover_agreement_sent) = 1
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM BatchDetails bd
-            JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
-            WHERE bd.print_id IN (SELECT print_id FROM PrintEditions pe3 WHERE pe3.book_id = b.book_id)
-            AND pb.status = 'Sent'
-        )
-    GROUP BY 
-        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost, b.book_pages, pe.print_id;
-    """
-    df = conn.query(query, ttl=0)  # Disable caching
-    return df
-
-def get_reprint_eligible_books(conn):
-    query = """
-        SELECT 
-            b.book_id, 
-            b.title,
-            b.date,
-            b.isbn,
-            'Reprint' AS print_type,
-            COALESCE(pe.book_size, '6x9') AS book_size,
-            COALESCE(pe.binding, 'Paperback') AS binding,
-            COALESCE(pe.print_cost, 0.00) AS print_cost,
-            pe.print_color,
-            pe.copies_planned,
-            b.book_pages,
-            pe.print_id  # Ensure print_id is fetched
-        FROM 
-            books b
-        JOIN (
-            SELECT 
-                pe2.book_id,
-                pe2.book_size,
-                pe2.binding,
-                pe2.print_color,
-                COALESCE(pe2.print_cost, 0.00) AS print_cost,
-                pe2.copies_planned,
-                pe2.print_id,
-                ROW_NUMBER() OVER (PARTITION BY pe2.book_id ORDER BY pe2.edition_number DESC, pe2.print_date DESC) AS rn
-            FROM 
-                PrintEditions pe2
-        ) pe ON b.book_id = pe.book_id AND pe.rn = 1
-        LEFT JOIN 
-            BatchDetails bd ON pe.print_id = bd.print_id
-        WHERE 
-            b.print_status = 1
-            AND bd.print_id IS NULL
-        GROUP BY 
-            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages, pe.print_id;
-    """
-    df = conn.query(query, ttl=0)  # Disable caching
-    return df
 
 # Fetch running batches (status = 'Sent')
 def get_running_batches(conn):

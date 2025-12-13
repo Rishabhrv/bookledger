@@ -5,7 +5,7 @@ from datetime import datetime
 from auth import validate_token
 import altair as alt
 from time import sleep
-from constants import log_activity, connect_db, get_page_url, clean_url_params, initialize_click_and_session_id
+from constants import log_activity, connect_db, get_page_url, initialize_click_and_session_id,get_total_unread_count, connect_ict_db
 import uuid
 from urllib.parse import urlencode, quote
 
@@ -88,6 +88,7 @@ def connect_db_ijisem():
 
 conn_main = connect_db()
 conn = connect_db_ijisem()
+ict_conn = connect_ict_db()
 
 if user_app == 'ijisem':
     if "activity_logged" not in st.session_state:
@@ -101,7 +102,7 @@ if user_app == 'ijisem':
                 )
         st.session_state.activity_logged = True
 
-if user_app == 'main' or user_role == 'admin':
+if user_app == 'main':
 
     # Initialize logged_click_ids if not present
     if "logged_click_ids" not in st.session_state:
@@ -121,6 +122,13 @@ if user_app == 'main' or user_role == 'admin':
             st.session_state.logged_click_ids.add(click_id)
         except Exception as e:
             st.error(f"Error logging navigation: {str(e)}")
+
+
+if user_app == 'ijisem':
+    total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
+    if "unread_toast_shown" not in st.session_state:
+        st.toast(f"You have {total_unread} unread messages!", icon="💬")
+        st.session_state.unread_toast_shown = True
 
 
 

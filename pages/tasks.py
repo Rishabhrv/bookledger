@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytz
 from sqlalchemy import text
 import time
-from constants import connect_db, get_page_url, log_activity, initialize_click_and_session_id, clean_url_params
+from constants import connect_db, get_page_url, log_activity, initialize_click_and_session_id, get_total_unread_count, connect_ict_db
 from urllib.parse import urlencode, quote
 import uuid
 from auth import validate_token
@@ -31,6 +31,7 @@ report_to = st.session_state.get("report_to", "Unknown")
 token = st.session_state.token
 
 conn = connect_db()
+ict_conn = connect_ict_db()
 
 CHAT_URL  = st.secrets["general"]["CHAT_URL"]
 
@@ -86,6 +87,14 @@ if user_app in ["main", "operations", "sales"] and click_id and click_id not in 
         st.session_state.logged_click_ids.add(click_id)
     except Exception as e:
         st.error(f"Error logging navigation: {str(e)}")
+
+
+total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
+
+if user_app == "tasks":
+    if "unread_toast_shown" not in st.session_state:
+        st.toast(f"You have {total_unread} unread messages!", icon="💬")
+        st.session_state.unread_toast_shown = True
 
 
 ###################################################################################################################################

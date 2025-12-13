@@ -1,11 +1,9 @@
 import streamlit as st
-from constants import log_activity
-from constants import connect_db
+from constants import log_activity , get_total_unread_count, connect_ict_db, connect_db, get_page_url
 import re
 import uuid
 import pandas as pd
 from urllib.parse import urlencode, quote
-from constants import get_page_url
 from urllib.parse import urlencode
 from sqlalchemy import text
 from auth import validate_token
@@ -42,6 +40,7 @@ if not (user_role == 'user' and user_access == 'Full Access' and user_app == 'sa
     st.stop()
 
 
+
 st.markdown("""
     <style>
             
@@ -60,6 +59,7 @@ st.markdown("""
 
 
 conn = connect_db()
+ict_conn = connect_ict_db()
 
 
 if "activity_logged" not in st.session_state:
@@ -73,6 +73,11 @@ if "activity_logged" not in st.session_state:
             )
     st.session_state.activity_logged = True
 
+
+total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
+if "unread_toast_shown" not in st.session_state:
+    st.toast(f"You have {total_unread} unread messages!", icon="💬")
+    st.session_state.unread_toast_shown = True
 
 # Custom CSS for modern table styling and pagination controls
 st.markdown("""
@@ -1278,7 +1283,7 @@ query = """
     ba.publishing_consultant
 FROM books b
 INNER JOIN book_authors ba ON b.book_id = ba.book_id
-WHERE ba.publishing_consultant = :user_name
+WHERE ba.publishing_consultant = :user_name AND b.is_cancelled = 0
 GROUP BY 
     b.book_id, b.title, b.date, b.writing_start, b.writing_end,
     b.proofreading_start, b.proofreading_end, b.formatting_start, b.formatting_end,

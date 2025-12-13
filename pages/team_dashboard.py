@@ -8,7 +8,7 @@ import os
 import datetime
 import altair as alt
 from auth import validate_token
-from constants import log_activity, connect_db, get_page_url, clean_url_params, initialize_click_and_session_id
+from constants import log_activity, connect_db, get_page_url, initialize_click_and_session_id, get_total_unread_count, connect_ict_db
 import uuid
 from datetime import datetime, timezone, timedelta, time
 from time import sleep
@@ -63,6 +63,7 @@ role_user = st.session_state.get("role", "Unknown")
 user_app = st.session_state.get("app", "Unknown")
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", [])
+user_id = st.session_state.get("user_id", None)
 token = st.session_state.token
 
 
@@ -103,6 +104,7 @@ st.cache_data.clear()
 
 # Connect to MySQL
 conn = connect_db()
+ict_conn = connect_ict_db()
 
 
 # Initialize session state
@@ -156,6 +158,14 @@ if user_app == 'main' or role_user == 'admin':
             st.session_state.logged_click_ids.add(click_id)
         except Exception as e:
             st.error(f"Error logging navigation: {str(e)}")
+
+total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
+
+if user_app == 'operations':
+
+    if "unread_toast_shown" not in st.session_state:
+        st.toast(f"You have {total_unread} unread messages!", icon="💬")
+        st.session_state.unread_toast_shown = True
 
 # --- Updated CSS ---
 st.markdown("""
@@ -509,7 +519,7 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
             LEFT JOIN book_authors ba ON b.book_id = ba.book_id
             LEFT JOIN authors a ON ba.author_id = a.author_id
             LEFT JOIN holds h ON b.book_id = h.book_id AND h.section = '{section}'
-            WHERE b.date >= '{cutoff_date_str}'
+            WHERE b.date >= '{cutoff_date_str}' AND b.is_cancelled = 0
             {publish_filter}
             GROUP BY b.book_id, b.title, b.date, {', '.join(c.split(' AS ')[0] for c in columns)}, b.is_publish_only, b.is_thesis_to_book, h.hold_start, h.resume_time
             ORDER BY b.date DESC
@@ -528,7 +538,7 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
                 h.reason AS 'hold_reason'
             FROM books b
             LEFT JOIN holds h ON b.book_id = h.book_id AND h.section = '{section}'
-            WHERE b.date >= '{cutoff_date_str}'
+            WHERE b.date >= '{cutoff_date_str}' AND b.is_cancelled = 0
             {publish_filter}
             ORDER BY b.date DESC
         """
