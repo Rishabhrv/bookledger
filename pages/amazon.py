@@ -192,6 +192,18 @@ def calculate_metrics(orders, items):
         'unique_customers': set(),
         'repeat_customers': 0,
         'fulfillment_method': defaultdict(int),
+        # New Financial Metrics
+        'revenue_breakdown': {
+            'product_sales': 0.0,
+            'tax': 0.0,
+            'shipping': 0.0,
+            'discount': 0.0
+        },
+        # New Geo Metrics
+        'geo_distribution': {
+            'states': defaultdict(int),
+            'cities': defaultdict(int)
+        }
     }
     
     for order in orders:
@@ -251,6 +263,16 @@ def calculate_metrics(orders, items):
                     metrics['fulfillment_times'].append(fulfillment_hours)
             except:
                 pass
+
+        # Geo Distribution
+        if 'ShippingAddress' in order:
+            addr = order['ShippingAddress']
+            state = addr.get('StateOrRegion', 'Unknown')
+            city = addr.get('City', 'Unknown')
+            if state and state != 'Unknown':
+                metrics['geo_distribution']['states'][state] += 1
+            if city and city != 'Unknown':
+                metrics['geo_distribution']['cities'][city] += 1
     
     # Calculate from items
     for item in items:
@@ -270,10 +292,26 @@ def calculate_metrics(orders, items):
         if 'ItemPrice' in item and 'Amount' in item['ItemPrice']:
             item_revenue = float(item['ItemPrice']['Amount'])
             metrics['top_products'][sku]['revenue'] += item_revenue
+            metrics['revenue_breakdown']['product_sales'] += item_revenue
+            
+        if 'ItemTax' in item and 'Amount' in item['ItemTax']:
+            metrics['revenue_breakdown']['tax'] += float(item['ItemTax']['Amount'])
+            
+        if 'ShippingPrice' in item and 'Amount' in item['ShippingPrice']:
+            metrics['revenue_breakdown']['shipping'] += float(item['ShippingPrice']['Amount'])
+            
+        if 'PromotionDiscount' in item and 'Amount' in item['PromotionDiscount']:
+            metrics['revenue_breakdown']['discount'] += float(item['PromotionDiscount']['Amount'])
     
     # Average order value
     if metrics['total_orders'] > 0:
         metrics['avg_order_value'] = metrics['total_revenue'] / metrics['total_orders']
+
+    # Average Selling Price
+    if metrics['total_units'] > 0:
+        metrics['avg_selling_price'] = metrics['revenue_breakdown']['product_sales'] / metrics['total_units']
+    else:
+        metrics['avg_selling_price'] = 0
     
     # Average fulfillment time
     if metrics['fulfillment_times']:
@@ -536,6 +574,91 @@ if 'dashboard_data' in st.session_state and st.session_state.dashboard_data:
         )
     
     st.markdown("---")
+
+    # NEW SECTION: Financial Breakdown & Unit Economics
+    st.markdown("### 💰 Financial Breakdown & Unit Economics")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("Revenue Breakdown")
+        breakdown = metrics['revenue_breakdown']
+        
+        # Waterfall Chart
+        fig_waterfall = go.Figure(go.Waterfall(
+            name = "Revenue Walk",
+            orientation = "v",
+            measure = ["relative", "relative", "relative", "relative", "total"],
+            x = ["Product Sales", "Tax Collected", "Shipping", "Discounts", "Total Collected"],
+            textposition = "outside",
+            text = [
+                f"₹{breakdown['product_sales']:,.0f}",
+                f"₹{breakdown['tax']:,.0f}",
+                f"₹{breakdown['shipping']:,.0f}",
+                f"-₹{breakdown['discount']:,.0f}",
+                f"₹{metrics['total_revenue']:,.0f}"
+            ],
+            y = [
+                breakdown['product_sales'],
+                breakdown['tax'],
+                breakdown['shipping'],
+                -breakdown['discount'],
+                0 
+            ],
+            connector = {"line":{"color":"rgb(63, 63, 63)"}},
+        ))
+        
+        fig_waterfall.update_layout(title = "Revenue Components", showlegend = False, height=350)
+        st.plotly_chart(fig_waterfall, use_container_width=True)
+
+    with col2:
+        st.subheader("Unit Economics (Per Order Averages)")
+        
+        ue_col1, ue_col2 = st.columns(2)
+        with ue_col1:
+            st.metric("Avg Selling Price (Unit)", f"₹{metrics['avg_selling_price']:,.2f}")
+            st.metric("Avg Tax per Order", f"₹{(breakdown['tax']/metrics['total_orders'] if metrics['total_orders'] else 0):,.2f}")
+        with ue_col2:
+            st.metric("Avg Shipping Cost (Charged)", f"₹{(breakdown['shipping']/metrics['total_orders'] if metrics['total_orders'] else 0):,.2f}")
+            st.metric("Avg Discount", f"₹{(breakdown['discount']/metrics['total_orders'] if metrics['total_orders'] else 0):,.2f}")
+            
+        st.info(
+            "ℹ️ **Note:** These are gross collected amounts. "
+            "Net Profit requires deduction of COGS and Amazon Fees (refer to Settlement Reports)."
+        )
+
+    st.markdown("---")
+
+    # NEW SECTION: Geographic Distribution
+    st.markdown("### 🌍 Geographic Distribution")
+    
+    geo_col1, geo_col2 = st.columns(2)
+    
+    with geo_col1:
+        if metrics['geo_distribution']['states']:
+            st.subheader("Orders by State")
+            df_geo = pd.DataFrame([
+                {'State': k, 'Orders': v} 
+                for k, v in metrics['geo_distribution']['states'].items()
+            ])
+            df_geo = df_geo.sort_values('Orders', ascending=True).tail(10) # Top 10
+            
+            fig_geo = px.bar(df_geo, x='Orders', y='State', orientation='h', title="Top 10 States")
+            st.plotly_chart(fig_geo, use_container_width=True)
+            
+    with geo_col2:
+        if metrics['geo_distribution']['cities']:
+            st.subheader("Orders by City")
+            df_city = pd.DataFrame([
+                {'City': k, 'Orders': v} 
+                for k, v in metrics['geo_distribution']['cities'].items()
+            ])
+            df_city = df_city.sort_values('Orders', ascending=True).tail(10) # Top 10
+            
+            fig_city = px.bar(df_city, x='Orders', y='City', orientation='h', title="Top 10 Cities")
+            st.plotly_chart(fig_city, use_container_width=True)
+
+    st.markdown("---")
     
     # Charts Row 1
     col1, col2 = st.columns(2)
@@ -756,6 +879,14 @@ Total Orders: {metrics['total_orders']:,}
 Total Revenue: ₹{metrics['total_revenue']:,.2f}
 Total Units Sold: {metrics['total_units']:,}
 Average Order Value: ₹{metrics['avg_order_value']:,.2f}
+Avg Selling Price: ₹{metrics['avg_selling_price']:,.2f}
+
+REVENUE BREAKDOWN
+{'-'*60}
+Product Sales: ₹{metrics['revenue_breakdown']['product_sales']:,.2f}
+Tax Collected: ₹{metrics['revenue_breakdown']['tax']:,.2f}
+Shipping Charges: ₹{metrics['revenue_breakdown']['shipping']:,.2f}
+Discounts: -₹{metrics['revenue_breakdown']['discount']:,.2f}
 
 BUSINESS HEALTH METRICS
 {'-'*60}

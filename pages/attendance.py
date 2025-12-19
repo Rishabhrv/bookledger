@@ -94,12 +94,75 @@ if click_id and click_id not in st.session_state.logged_click_ids:
 
 
 
-# --- Attendance Logic Constants ---
-SCHEDULED_IN = dt_time(9, 30)
-SCHEDULED_OUT = dt_time(18, 0)
-LATE_THRESHOLD = (datetime.combine(date.min, SCHEDULED_IN) + timedelta(minutes=5)).time()
-EARLY_ARRIVAL_THRESHOLD = (datetime.combine(date.min, SCHEDULED_IN) - timedelta(minutes=8)).time()
-OVERTIME_THRESHOLD = (datetime.combine(date.min, SCHEDULED_OUT) + timedelta(minutes=10)).time()
+# --- Attendance Logic Constants (Removed global constants to support dynamic shifts) ---
+
+def add_shift(conn, employee_id, start_time, end_time, effective_from):
+    """Add a new shift and update previous shift's effective_to"""
+    try:
+        with conn.session as s:
+            # 1. Check if there's a shift starting on or after the new effective_from
+            future_shifts = s.execute(text("""
+                SELECT shift_id, effective_from 
+                FROM employee_shifts 
+                WHERE employee_id = :emp_id AND effective_from >= :eff_from
+            """), {"emp_id": employee_id, "eff_from": effective_from}).fetchall()
+            
+            if future_shifts:
+                st.error("Cannot add a shift with effective date older than or equal to existing future shifts.")
+                return False
+
+            # 2. Update the currently active shift to end the day before the new shift starts
+            prev_shift = s.execute(text("""
+                SELECT shift_id, effective_from 
+                FROM employee_shifts 
+                WHERE employee_id = :emp_id AND effective_to IS NULL
+                ORDER BY effective_from DESC LIMIT 1
+            """), {"emp_id": employee_id}).fetchone()
+            
+            if prev_shift:
+                # Ensure new shift is after previous shift
+                if effective_from <= prev_shift[1]:
+                     st.error("New shift must start after the current shift.")
+                     return False
+                     
+                new_effective_to = effective_from - timedelta(days=1)
+                s.execute(text("""
+                    UPDATE employee_shifts 
+                    SET effective_to = :eff_to 
+                    WHERE shift_id = :sid
+                """), {"eff_to": new_effective_to, "sid": prev_shift[0]})
+            
+            # 3. Insert new shift
+            s.execute(text("""
+                INSERT INTO employee_shifts (employee_id, shift_start_time, shift_end_time, effective_from)
+                VALUES (:emp_id, :start, :end, :eff_from)
+            """), {
+                "emp_id": employee_id,
+                "start": start_time,
+                "end": end_time,
+                "eff_from": effective_from
+            })
+            s.commit()
+            return True
+    except Exception as e:
+        st.error(f"Error adding shift: {e}")
+        return False
+
+def get_employee_shift_history(conn, employee_id):
+    """Get shift history for an employee"""
+    try:
+        with conn.session as s:
+            result = s.execute(text("""
+                SELECT e.employee_name, es.shift_start_time, es.shift_end_time, es.effective_from, es.effective_to
+                FROM employee_shifts es
+                JOIN employees e ON es.employee_id = e.employee_id
+                WHERE es.employee_id = :emp_id
+                ORDER BY es.effective_from DESC
+            """), {"emp_id": employee_id})
+            return result.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching shift history: {e}")
+        return []
 
 
 # Custom CSS for better UI
@@ -287,20 +350,33 @@ st.markdown("""
 
 
 def get_all_employees(conn):
-    """Fetch all active employees"""
+    """Fetch all active employees with current shift"""
     try:
         with conn.session as s:
-            result = s.execute(text("SELECT employee_id, employee_name, designation FROM employees WHERE employment_status = 'Active' ORDER BY employee_name"))
+            result = s.execute(text("""
+                SELECT e.employee_id, e.employee_name, e.designation, 
+                       s.shift_start_time, s.shift_end_time, e.joining_date
+                FROM employees e
+                LEFT JOIN employee_shifts s ON e.employee_id = s.employee_id AND s.effective_to IS NULL
+                WHERE e.employment_status = 'Active' 
+                ORDER BY e.employee_name
+            """))
             return result.fetchall()
     except Exception as e:
         st.error(f"Error fetching employees: {e}")
         return []
 
 def get_all_employees_with_status(conn):
-    """Fetch all employees with their employment status"""
+    """Fetch all employees with their employment status and current shift"""
     try:
         with conn.session as s:
-            result = s.execute(text("SELECT employee_id, employee_code, employee_name, designation, employment_status FROM employees ORDER BY employment_status = 'Active' DESC, employee_name"))
+            result = s.execute(text("""
+                SELECT e.employee_id, e.employee_code, e.employee_name, e.designation, e.employment_status,
+                       s.shift_start_time, s.shift_end_time, e.joining_date
+                FROM employees e
+                LEFT JOIN employee_shifts s ON e.employee_id = s.employee_id AND s.effective_to IS NULL
+                ORDER BY e.employment_status = 'Active' DESC, e.employee_name
+            """))
             return result.fetchall()
     except Exception as e:
         st.error(f"Error fetching employees: {e}")
@@ -324,36 +400,81 @@ def update_employee_status(conn, employee_id, status):
 def update_employee(conn, emp_id, details):
     """Update employee details."""
     try:
+        joining_date = details.get('joining_date')
+        
+        # Robust conversion to python date or None
+        if pd.isna(joining_date) or joining_date == "" or joining_date is None:
+            joining_date = None
+        elif isinstance(joining_date, (pd.Timestamp, datetime)):
+            joining_date = joining_date.date()
+        elif not isinstance(joining_date, date):
+            # Try parsing string or other types
+            try:
+                joining_date = pd.to_datetime(joining_date).date()
+            except Exception as e:
+                st.error(f"Error parsing date '{joining_date}': {e}")
+                joining_date = None
+
         with conn.session as s:
             s.execute(text("""
                 UPDATE employees 
                 SET 
                     employee_name = :name,
                     designation = :dept,
-                    employment_status = :status
+                    employment_status = :status,
+                    joining_date = :joining_date
                 WHERE employee_id = :emp_id
             """), {
                 "name": details['employee_name'],
                 "dept": details['designation'],
                 "status": details['employment_status'],
+                "joining_date": joining_date,
                 "emp_id": emp_id
             })
             s.commit()
         return True
     except Exception as e:
-        st.error(f"Error updating employee {details['employee_name']}: {e}")
+        st.error(f"Error updating employee {details.get('employee_name')}: {e}")
         return False
     
     
 def get_employee_full_year_attendance(conn, employee_id, year):
-    """Get full year attendance data for all months"""
+    """Get full year attendance data for all months with calculated flags"""
     try:
         with conn.session as s:
             result = s.execute(text("""
-                SELECT attendance_date, check_in_time, check_out_time, status, notes
-                FROM attendance
-                WHERE employee_id = :emp_id AND YEAR(attendance_date) = :year
-                ORDER BY attendance_date
+                SELECT 
+                    a.attendance_date, 
+                    a.check_in_time, 
+                    a.check_out_time, 
+                    a.status, 
+                    a.notes,
+                    CASE 
+                        WHEN a.check_in_time IS NOT NULL 
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                        THEN 1 ELSE 0 
+                    END as is_late,
+                    CASE 
+                        WHEN a.check_out_time IS NOT NULL 
+                        AND a.check_out_time < s.shift_end_time 
+                        THEN 1 ELSE 0 
+                    END as is_early,
+                    CASE 
+                        WHEN a.check_out_time IS NOT NULL 
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                        THEN 1 ELSE 0 
+                    END as is_overtime,
+                    CASE
+                        WHEN a.check_in_time IS NOT NULL
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                        THEN 1 ELSE 0
+                    END as is_early_arrival
+                FROM attendance a
+                JOIN employee_shifts s ON a.employee_id = s.employee_id
+                WHERE a.employee_id = :emp_id AND YEAR(a.attendance_date) = :year
+                AND a.attendance_date >= s.effective_from 
+                AND (s.effective_to IS NULL OR a.attendance_date <= s.effective_to)
+                ORDER BY a.attendance_date
             """), {"emp_id": employee_id, "year": year})
             return result.fetchall()
     except Exception as e:
@@ -362,49 +483,50 @@ def get_employee_full_year_attendance(conn, employee_id, year):
     
 
 def get_employee_monthly_attendance(conn, employee_id, year, month):
-    """Get monthly attendance for an employee, including exception flags"""
+    """Get monthly attendance for an employee, including exception flags based on their shift"""
     try:
         with conn.session as s:
             result = s.execute(text("""
                 SELECT 
-                    attendance_date, 
-                    check_in_time, 
-                    check_out_time, 
-                    status, 
-                    notes,
+                    a.attendance_date, 
+                    a.check_in_time, 
+                    a.check_out_time, 
+                    a.status, 
+                    a.notes,
                     CASE 
-                        WHEN check_in_time IS NOT NULL 
-                        AND check_in_time > :late_threshold 
+                        WHEN a.check_in_time IS NOT NULL 
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
                         THEN 1 ELSE 0 
                     END as is_late,
                     CASE 
-                        WHEN check_out_time IS NOT NULL 
-                        AND check_out_time < :scheduled_out 
+                        WHEN a.check_out_time IS NOT NULL 
+                        AND a.check_out_time < s.shift_end_time 
                         THEN 1 ELSE 0 
                     END as is_early,
                     CASE 
-                        WHEN check_out_time IS NOT NULL 
-                        AND check_out_time > :overtime_threshold 
+                        WHEN a.check_out_time IS NOT NULL 
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
                         THEN 1 ELSE 0 
                     END as is_overtime,
                     CASE
-                        WHEN check_in_time IS NOT NULL
-                        AND check_in_time < :early_arrival_threshold
+                        WHEN a.check_in_time IS NOT NULL
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
                         THEN 1 ELSE 0
-                    END as is_early_arrival
-                FROM attendance
-                WHERE employee_id = :emp_id 
-                AND YEAR(attendance_date) = :year 
-                AND MONTH(attendance_date) = :month
-                ORDER BY attendance_date
+                    END as is_early_arrival,
+                    s.shift_start_time,
+                    s.shift_end_time
+                FROM attendance a
+                JOIN employee_shifts s ON a.employee_id = s.employee_id
+                WHERE a.employee_id = :emp_id 
+                AND YEAR(a.attendance_date) = :year 
+                AND MONTH(a.attendance_date) = :month
+                AND a.attendance_date >= s.effective_from 
+                AND (s.effective_to IS NULL OR a.attendance_date <= s.effective_to)
+                ORDER BY a.attendance_date
             """), {
                 "emp_id": employee_id, 
                 "year": year, 
-                "month": month,
-                "late_threshold": LATE_THRESHOLD,
-                "scheduled_out": SCHEDULED_OUT,
-                "overtime_threshold": OVERTIME_THRESHOLD,
-                "early_arrival_threshold": EARLY_ARRIVAL_THRESHOLD
+                "month": month
             })
             return result.fetchall()
     except Exception as e:
@@ -529,30 +651,49 @@ def get_year_working_days(conn, year):
 
 # Updated function for Team Insights
 def get_all_employees_attendance(conn, year, month=None):
-    """Fetch attendance data for all active employees"""
+    """Fetch attendance data for all active employees with calculated flags"""
     try:
         with conn.session as s:
+            query = """
+                SELECT e.employee_id, e.employee_name, e.designation,
+                       a.attendance_date, a.check_in_time, a.check_out_time, a.status,
+                       CASE 
+                           WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
+                           AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                           THEN 1 ELSE 0 
+                       END as is_late,
+                       CASE 
+                           WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
+                           AND a.check_out_time < s.shift_end_time 
+                           THEN 1 ELSE 0 
+                       END as is_early,
+                       CASE 
+                           WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
+                           AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                           THEN 1 ELSE 0 
+                       END as is_overtime,
+                       CASE
+                           WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
+                           AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                           THEN 1 ELSE 0
+                       END as is_early_arrival
+                FROM employees e
+                LEFT JOIN attendance a ON e.employee_id = a.employee_id
+                LEFT JOIN employee_shifts s ON e.employee_id = s.employee_id 
+                    AND a.attendance_date >= s.effective_from 
+                    AND (s.effective_to IS NULL OR a.attendance_date <= s.effective_to)
+                WHERE e.employment_status = 'Active'
+                AND (a.attendance_date IS NULL OR 
+                     (YEAR(a.attendance_date) = :year {month_clause}))
+                ORDER BY e.employee_id, a.attendance_date
+            """
+            
             if month:
-                result = s.execute(text("""
-                    SELECT e.employee_id, e.employee_name, e.designation,
-                           a.attendance_date, a.check_in_time, a.check_out_time, a.status
-                    FROM employees e
-                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
-                    WHERE e.employment_status = 'Active'
-                    AND (a.attendance_date IS NULL OR 
-                         (YEAR(a.attendance_date) = :year AND MONTH(a.attendance_date) = :month))
-                    ORDER BY e.employee_id, a.attendance_date
-                """), {"year": year, "month": month})
+                result = s.execute(text(query.format(month_clause="AND MONTH(a.attendance_date) = :month")), 
+                                 {"year": year, "month": month})
             else:
-                result = s.execute(text("""
-                    SELECT e.employee_id, e.employee_name, e.designation,
-                           a.attendance_date, a.check_in_time, a.check_out_time, a.status
-                    FROM employees e
-                    LEFT JOIN attendance a ON e.employee_id = a.employee_id
-                    WHERE e.employment_status = 'Active'
-                    AND (a.attendance_date IS NULL OR YEAR(a.attendance_date) = :year)
-                    ORDER BY e.employee_id, a.attendance_date
-                """), {"year": year})
+                result = s.execute(text(query.format(month_clause="")), 
+                                 {"year": year})
             rows = result.fetchall()
             return rows
     except Exception as e:
@@ -624,36 +765,37 @@ def get_daily_attendance(conn, attendance_date):
                     COALESCE(a.status, 'Absent') as status,
                     COALESCE(a.notes, '') as notes,
                     CASE 
-                        WHEN a.check_in_time IS NOT NULL 
-                        AND a.check_in_time > :late_threshold 
+                        WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
                         THEN 1 ELSE 0 
                     END as is_late,
                     CASE 
-                        WHEN a.check_out_time IS NOT NULL 
-                        AND a.check_out_time < :scheduled_out 
+                        WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
+                        AND a.check_out_time < s.shift_end_time 
                         THEN 1 ELSE 0 
                     END as is_early,
                     CASE 
-                        WHEN a.check_out_time IS NOT NULL 
-                        AND a.check_out_time > :overtime_threshold 
+                        WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
                         THEN 1 ELSE 0 
                     END as is_overtime,
                     CASE
-                        WHEN a.check_in_time IS NOT NULL
-                        AND a.check_in_time < :early_arrival_threshold
+                        WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
                         THEN 1 ELSE 0
-                    END as is_early_arrival
+                    END as is_early_arrival,
+                    s.shift_start_time,
+                    s.shift_end_time
                 FROM employees e
                 LEFT JOIN attendance a ON e.employee_id = a.employee_id 
                     AND a.attendance_date = :att_date
+                LEFT JOIN employee_shifts s ON e.employee_id = s.employee_id 
+                    AND :att_date >= s.effective_from 
+                    AND (s.effective_to IS NULL OR :att_date <= s.effective_to)
                 WHERE e.employment_status = 'Active'
                 ORDER BY e.employee_name
             """), {
-                "att_date": attendance_date,
-                "late_threshold": LATE_THRESHOLD,
-                "scheduled_out": SCHEDULED_OUT,
-                "overtime_threshold": OVERTIME_THRESHOLD,
-                "early_arrival_threshold": EARLY_ARRIVAL_THRESHOLD
+                "att_date": attendance_date
             })
             return result.fetchall()
     except Exception as e:
@@ -980,6 +1122,15 @@ def render_daily_report_table(df_display):
         .daily-report-table th:first-child { border-top-left-radius: 6px; } /* Smaller radius */
         .daily-report-table th:last-child { border-top-right-radius: 6px; }
 
+        /* Reduce width of Check In (4th) and Check Out (5th) columns */
+        .daily-report-table th:nth-child(4),
+        .daily-report-table td:nth-child(4),
+        .daily-report-table th:nth-child(5),
+        .daily-report-table td:nth-child(5) {
+            width: 160px;
+            max-width: 160px;
+        }
+
         /* --- 🖌️ Modern Table Body --- */
         .daily-report-table td {
             background-color: #ffffff;
@@ -1087,7 +1238,7 @@ def render_daily_report_table(df_display):
     table_html = '<div style="overflow-x: auto;"><table class="daily-report-table"><thead><tr>'
     
     # Table Headers (Updated)
-    headers = ['Designation','Employee Name',  'Check In', 'Check Out', 'Status', 'Notes']
+    headers = ['Designation', 'Shift', 'Employee Name',  'Check In', 'Check Out', 'Status', 'Notes']
     for header in headers:
         table_html += f'<th>{header}</th>'
     table_html += '</tr></thead><tbody>'
@@ -1099,7 +1250,27 @@ def render_daily_report_table(df_display):
         # Designation
         table_html += f'<td>{_get_val(row, "designation")}</td>'
         
-        # Employee Name
+
+        # --- 🆕 Shift Column ---
+        s_start = _get_val(row, "Shift Start", None)
+        s_end = _get_val(row, "Shift End", None)
+        
+        def _fmt_s(t):
+             if not t or t == "-": return ""
+             try:
+                 if isinstance(t, str): return t
+                 if isinstance(t, timedelta):
+                     seconds = t.total_seconds()
+                     hours = int(seconds // 3600)
+                     minutes = int((seconds % 3600) // 60)
+                     return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p")
+                 return t.strftime("%I:%M %p")
+             except: return ""
+
+        shift_str = f"{_fmt_s(s_start)} - {_fmt_s(s_end)}" if s_start and s_end else "-"
+        table_html += f'<td style="white-space:nowrap; font-size:0.7rem; color:#666;">{shift_str}</td>'
+
+                # Employee Name
         table_html += f'<td>{_get_val(row, "Employee Name")}</td>'
         
         # --- 🆕 MERGED Check In Column ---
@@ -1169,6 +1340,8 @@ def render_day_card(day_date, attendance_dict, is_current_month, holidays=None):
     if day_date.day in attendance_dict:
         data = attendance_dict[day_date.day]
         status = data['status']
+        shift_start = data.get('shift_start') or dt_time(9, 30)
+        shift_end = data.get('shift_end') or dt_time(18, 0)
         
         if status == 'Holiday': css_class = 'day-card-holiday'
         elif status == 'Leave': css_class = 'day-card-leave'
@@ -1205,16 +1378,16 @@ def render_day_card(day_date, attendance_dict, is_current_month, holidays=None):
 
             exceptions = []
             if data.get('is_early_arrival'):
-                diff = calculate_time_diff_for_cards(data['check_in'], SCHEDULED_IN, 'early_arrival')
+                diff = calculate_time_diff_for_cards(data['check_in'], shift_start, 'early_arrival')
                 exceptions.append(f'<span class="exception exception-early-in-bg">🌅 Early In {diff}</span>')
             if data.get('is_late'):
-                diff = calculate_time_diff_for_cards(data['check_in'], SCHEDULED_IN, 'late')
+                diff = calculate_time_diff_for_cards(data['check_in'], shift_start, 'late')
                 exceptions.append(f'<span class="exception exception-late-in-bg">⏰ Late In {diff}</span>')
             if data.get('is_early'):
-                diff = calculate_time_diff_for_cards(data['check_out'], SCHEDULED_OUT, 'early')
+                diff = calculate_time_diff_for_cards(data['check_out'], shift_end, 'early')
                 exceptions.append(f'<span class="exception exception-early-out-bg">🏃 Early Out {diff}</span>')
             if data.get('is_overtime'):
-                diff = calculate_time_diff_for_cards(data['check_out'], SCHEDULED_OUT, 'overtime')
+                diff = calculate_time_diff_for_cards(data['check_out'], shift_end, 'overtime')
                 exceptions.append(f'<span class="exception exception-overtime-bg">🌙 Overtime +{diff}</span>')
 
             if exceptions:
@@ -1244,14 +1417,14 @@ def render_day_card(day_date, attendance_dict, is_current_month, holidays=None):
     st.markdown(card_html, unsafe_allow_html=True)
 
 
-def create_modern_calendar(year, month, attendance_data,selected_emp):
+def create_modern_calendar(year, month, attendance_data,selected_emp,shift):
     """Create a modern calendar view using Streamlit columns"""
     inject_custom_css()
     
     # Create attendance dictionary
     attendance_dict = {}
     for row in attendance_data:
-        att_date, check_in, check_out, status, notes, is_late, is_early, is_overtime, is_early_arrival = row
+        att_date, check_in, check_out, status, notes, is_late, is_early, is_overtime, is_early_arrival, shift_start, shift_end = row
         
         # Convert timedelta to time if needed
         if check_in and isinstance(check_in, timedelta):
@@ -1265,6 +1438,19 @@ def create_modern_calendar(year, month, attendance_data,selected_emp):
             hours = total_seconds // 3600
             minutes = (total_seconds % 3600) // 60
             check_out = dt_time(hours, minutes)
+            
+        # Handle shift times if they come as timedelta
+        if shift_start and isinstance(shift_start, timedelta):
+             total_seconds = int(shift_start.total_seconds())
+             hours = total_seconds // 3600
+             minutes = (total_seconds % 3600) // 60
+             shift_start = dt_time(hours, minutes)
+             
+        if shift_end and isinstance(shift_end, timedelta):
+             total_seconds = int(shift_end.total_seconds())
+             hours = total_seconds // 3600
+             minutes = (total_seconds % 3600) // 60
+             shift_end = dt_time(hours, minutes)
         
         attendance_dict[att_date.day] = {
             'check_in': check_in,
@@ -1274,7 +1460,9 @@ def create_modern_calendar(year, month, attendance_data,selected_emp):
             'is_late': bool(is_late),
             'is_early': bool(is_early),
             'is_overtime': bool(is_overtime),
-            'is_early_arrival': bool(is_early_arrival)
+            'is_early_arrival': bool(is_early_arrival),
+            'shift_start': shift_start,
+            'shift_end': shift_end
         }
 
     selected_emp = re.split(r'\s*\(', selected_emp)[0].strip()
@@ -1285,7 +1473,7 @@ def create_modern_calendar(year, month, attendance_data,selected_emp):
                     color: white; padding: 0.3rem; border-radius: 12px; margin-bottom: 1.2rem; 
                     text-align: center; font-weight: 700; font-size: 1.5rem;
                     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);">
-            📅 {calendar.month_name[month]} {year} ({selected_emp})
+            📅 {calendar.month_name[month]} {year} ({selected_emp}) | Shift: {shift}
         </div>
     """, unsafe_allow_html=True)
     
@@ -1524,7 +1712,7 @@ with tab1:
                     success_count = 0
                     ist_time = get_ist_time()
                     for emp in employees:
-                        emp_id, emp_name, dept = emp
+                        emp_id, emp_name, *rest = emp
                         # Skip if already marked as Holiday with the same name
                         if emp_id in existing_attendance and existing_attendance[emp_id][2] == "Holiday" and existing_attendance[emp_id][3] == holiday_name:
                             continue
@@ -1630,8 +1818,20 @@ with tab1:
         for col, emp_list in employee_groups:
             with col:
                 for emp in emp_list:
-                    emp_id, emp_name, dept = emp
-                    emp_display = f"{emp_name}"
+                    emp_id, emp_name, _, shift_start, shift_end, _ = emp
+                    
+                    # Format shift times
+                    def fmt_time(t):
+                        if not t: return "?"
+                        if isinstance(t, timedelta):
+                            seconds = t.total_seconds()
+                            hours = int(seconds // 3600)
+                            minutes = int((seconds % 3600) // 60)
+                            return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p").lstrip("0")
+                        return t.strftime("%I:%M %p").lstrip("0")
+
+                    shift_display = f"({fmt_time(shift_start)} - {fmt_time(shift_end)})"
+                    emp_display = f"{emp_name} <span style='font-size:0.6em; color:gray'>{shift_display}</span>"
                     
                     # Load existing or default values
                     existing = existing_attendance.get(emp_id, (None, None, None, ""))
@@ -2076,9 +2276,42 @@ with tab2:
         if not employees:
             st.warning("No employees found.")
             st.stop()
-        employee_options = {f"{emp[1]} ({emp[2]})": emp[0] for emp in employees}
+            
+        def fmt_s(t):
+             if not t: return "?"
+             if isinstance(t, timedelta):
+                 seconds = t.total_seconds()
+                 hours = int(seconds // 3600)
+                 minutes = int((seconds % 3600) // 60)
+                 return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p")
+             return t.strftime("%I:%M %p")
+             
+        employee_options = {f"{emp[1]} ({emp[2]}) [{fmt_s(emp[3])}-{fmt_s(emp[4])}]": emp[0] for emp in employees}
         selected_emp = st.selectbox("Select Employee", list(employee_options.keys()), key="ind_emp")
         selected_emp_id = employee_options[selected_emp]
+        
+        # Find selected employee's joining date
+        joining_date = None
+        for emp in employees:
+            if emp[0] == selected_emp_id:
+                joining_date = emp[5]
+                break
+        
+        if joining_date:
+            from dateutil.relativedelta import relativedelta
+            
+            # Ensure joining_date is a date object
+            if isinstance(joining_date, str):
+                joining_date = datetime.strptime(joining_date, "%Y-%m-%d").date()
+            elif isinstance(joining_date, datetime):
+                joining_date = joining_date.date()
+                
+            tenure = relativedelta(date.today(), joining_date)
+            tenure_str = f"{tenure.years}y {tenure.months}m"
+            
+            st.caption(f"📅 **Joined:** {joining_date.strftime('%d %b, %Y')} • **Tenure:** {tenure_str}")
+        else:
+            st.caption("📅 **Joined:** N/A")
 
     # Fetch available years for the selected employee
     available_years = get_employee_available_years(conn, selected_emp_id)
@@ -2133,7 +2366,27 @@ with tab2:
                 # Create DataFrame
                 df = pd.DataFrame(attendance_data,
                                 columns=['Date', 'Check In', 'Check Out', 'Status', 'Notes',
-                                         'Is Late', 'Is Early', 'Is Overtime', 'Is Early Arrival'])
+                                         'Is Late', 'Is Early', 'Is Overtime', 'Is Early Arrival', 'Shift Start', 'Shift End'])
+
+                # --- 🆕 ADDED SHIFT DISPLAY ---
+                # Get the shift from the first record (approximation for monthly view, though shifts can change mid-month)
+                # Ideally, we show it per day, but for a general monthly overview, showing the most recent or dominant shift is helpful.
+                # Let's check the most recent record's shift
+                current_shift_start = df.iloc[-1]['Shift Start']
+                current_shift_end = df.iloc[-1]['Shift End']
+                
+                def fmt_time_card(t):
+                     if not t: return "?"
+                     if isinstance(t, timedelta):
+                         seconds = t.total_seconds()
+                         hours = int(seconds // 3600)
+                         minutes = int((seconds % 3600) // 60)
+                         return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p")
+                     return t.strftime("%I:%M %p")
+                     
+                shift_str = f"{fmt_time_card(current_shift_start)} - {fmt_time_card(current_shift_end)}"
+                
+                # -----------------------------
                 
                 # Calculate statistics
                 present_days = len([row for row in attendance_data if row[3] == 'Present'])
@@ -2318,6 +2571,7 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
                 
+                st.write("")
 
                 with st.expander("View Analytics"):
 
@@ -2410,7 +2664,7 @@ with tab2:
                         st.plotly_chart(fig, use_container_width=True)
                     
                     
-                create_modern_calendar(selected_year, selected_month, attendance_data, selected_emp)
+                create_modern_calendar(selected_year, selected_month, attendance_data, selected_emp, shift_str)
                 
                 st.markdown("---")
                 
@@ -2450,7 +2704,7 @@ with tab2:
                 # Process all data in one loop
                 for row in year_data:
                     total += 1
-                    att_date, check_in, check_out, status, notes = row
+                    att_date, check_in, check_out, status, notes, is_late, is_early, is_overtime, is_early_arrival = row
                     
                     # Handle timedelta (no conversion to dt_time needed for averages and graph)
                     if check_in and isinstance(check_in, timedelta):
@@ -2477,25 +2731,16 @@ with tab2:
                     elif status == 'Leave': leave += 1
                     elif status == 'Holiday': holiday += 1
                     
-                    # Calculate and count exceptions
-                    is_late = False
-                    is_early = False
-                    is_overtime = False
-                    is_early_arrival = False
+                    # Convert flags
+                    is_late = bool(is_late)
+                    is_early = bool(is_early)
+                    is_overtime = bool(is_overtime)
+                    is_early_arrival = bool(is_early_arrival)
                     
-                    if status in ["Present", "Half Day"]:
-                        if check_in and check_in < EARLY_ARRIVAL_THRESHOLD:
-                            is_early_arrival = True
-                            early_arrivals += 1
-                        elif check_in and check_in > LATE_THRESHOLD:
-                            is_late = True
-                            late_arrivals += 1
-                        if check_out and check_out < SCHEDULED_OUT:
-                            is_early = True
-                            early_exits += 1
-                        if check_out and check_out > OVERTIME_THRESHOLD:
-                            is_overtime = True
-                            overtime_days += 1
+                    if is_late: late_arrivals += 1
+                    if is_early: early_exits += 1
+                    if is_overtime: overtime_days += 1
+                    if is_early_arrival: early_arrivals += 1
                     
                     # Build the dictionary for the calendar
                     date_key = att_date.strftime("%Y-%m-%d")
@@ -2669,6 +2914,8 @@ with tab2:
                     </div>
                     """, unsafe_allow_html=True)
 
+                st.write("")
+
                 with st.expander("View Analytics"):
 
                     col1,col2 = st.columns([0.4,1])
@@ -2782,11 +3029,8 @@ with tab3:
     if daily_data:
         df_daily = pd.DataFrame(daily_data, 
                                columns=['Employee Name', 'designation', 'Check In', 'Check Out', 
-                                        'Status', 'Notes', 'Is Late', 'Is Early', 'Is Overtime', 'Is Early Arrival'])
-        
-        # Standard work times
-        scheduled_in_time = dt_time(9, 30)  # 9:30 AM
-        scheduled_out_time = dt_time(18, 0)  # 6:00 PM
+                                        'Status', 'Notes', 'Is Late', 'Is Early', 'Is Overtime', 'Is Early Arrival',
+                                        'Shift Start', 'Shift End'])
         
         # Function to calculate time difference in minutes
         def calculate_time_diff(time_str, reference_time, diff_type):
@@ -2804,6 +3048,17 @@ with tab3:
                 else:
                     actual_time = time_str
                 
+                # Handle reference_time (might be timedelta or time)
+                if isinstance(reference_time, timedelta):
+                    total_seconds = int(reference_time.total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    reference_time = dt_time(hours, minutes)
+                elif pd.isna(reference_time):
+                     # Fallback if no shift found
+                     if diff_type in ['late', 'early_arrival']: reference_time = dt_time(9, 30)
+                     else: reference_time = dt_time(18, 0)
+
                 # Convert to datetime for calculation
                 ref_datetime = datetime.combine(date.today(), reference_time)
                 actual_datetime = datetime.combine(date.today(), actual_time)
@@ -2869,27 +3124,27 @@ with tab3:
         df_display['Check In'] = df_display['Check In'].apply(format_time_ampm)
         df_display['Check Out'] = df_display['Check Out'].apply(format_time_ampm)
         
-        # Calculate time differences using original time data
+        # Calculate time differences using original time data and dynamic shifts
         df_display['Late Arrival'] = df_daily.apply(
-            lambda row: calculate_time_diff(row['Check In'], scheduled_in_time, 'late') 
+            lambda row: calculate_time_diff(row['Check In'], row['Shift Start'], 'late') 
             if row['Is Late'] == 1 else '', 
             axis=1
         )
 
         df_display['Early Arrival'] = df_daily.apply(
-            lambda row: calculate_time_diff(row['Check In'], scheduled_in_time, 'early_arrival') 
+            lambda row: calculate_time_diff(row['Check In'], row['Shift Start'], 'early_arrival') 
             if row['Is Early Arrival'] == 1 else '', 
             axis=1
         )
         
         df_display['Early Exit'] = df_daily.apply(
-            lambda row: calculate_time_diff(row['Check Out'], scheduled_out_time, 'early') 
+            lambda row: calculate_time_diff(row['Check Out'], row['Shift End'], 'early') 
             if row['Is Early'] == 1 else '', 
             axis=1
         )
         
         df_display['Overtime'] = df_daily.apply(
-            lambda row: calculate_time_diff(row['Check Out'], scheduled_out_time, 'overtime') 
+            lambda row: calculate_time_diff(row['Check Out'], row['Shift End'], 'overtime') 
             if row['Is Overtime'] == 1 else '', 
             axis=1
         )
@@ -2989,140 +3244,87 @@ with tab3:
 with tab4:
     st.markdown("""
         <style>
-    
-        
         /* Summary Stats - Horizontal */
         .stats-container {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 0.8rem;
+            gap: 1rem;
             margin-bottom: 2rem;
         }
         
         .stat-card {
             background: white;
-            padding: 1.25rem;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            border-left: 3px solid;
-            transition: all 0.2s ease;
-            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            border-left: 4px solid;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
-    
         
-        .stat-card.employees { border-left-color: #667eea; }
-        .stat-card.attendance { border-left-color: #51cf66; }
-        .stat-card.ontime { border-left-color: #4dabf7; }
-        .stat-card.late { border-left-color: #ff6b6b; }
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
         
+        .stat-card.primary { border-left-color: #4dabf7; }
+        .stat-card.success { border-left-color: #51cf66; }
+        .stat-card.warning { border-left-color: #fcc419; }
+        .stat-card.danger { border-left-color: #ff6b6b; }
+        .stat-card.info { border-left-color: #339af0; }
+
         .stat-label {
             color: #868e96;
-            font-size: 0.85rem;
-            font-weight: 600;
+            font-size: 0.75rem;
+            font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.25rem;
         }
         
         .stat-value {
-            font-size: 1.8rem;
+            font-size: 1.4rem;
             font-weight: 700;
-            color: #212529;
-            line-height: 1;
+            color: #343a40;
+            line-height: 1.1;
         }
         
         /* Section Headers */
-        .section-header {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
+        .analytics-section-header {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #495057;
             margin: 2rem 0 1rem 0;
-            padding-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
             border-bottom: 2px solid #e9ecef;
-        }
-        
-        .section-icon {
-            font-size: 1.5rem;
-        }
-        
-        .section-title {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: #212529;
-            margin: 0;
-        }
-        
-        .section-subtitle {
-            color: #868e96;
-            font-size: 0.85rem;
-            margin-left: auto;
-        }
-        
-        /* Card Headers */
-        .card-header-box {
-            padding: 1rem 1.25rem;
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-            border-radius: 12px 12px 0 0;
-            margin-bottom: 0.5rem;
+            gap: 0.5rem;
         }
         
-        .card-header-box.late { background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); }
-        .card-header-box.ontime { background: linear-gradient(135deg, #f4fcf7 0%, #d3f9e3 100%); }
-        .card-header-box.score { background: linear-gradient(135deg, #f0f9ff 0%, #d0ebff 100%); }
-        .card-header-box.leave { background: linear-gradient(135deg, #fff9db 0%, #ffec99 100%); }
-        .card-header-box.work { background: linear-gradient(135deg, #f3f0ff 0%, #e5dbff 100%); }
-        .card-header-box.early { background: linear-gradient(135deg, #e6fcf5 0%, #c3fae8 100%); }
-        .card-header-box.overtime { background: linear-gradient(135deg, #fff5f5 0%, #ffe3e3 100%); }
-        .card-header-box.consistent { background: linear-gradient(135deg, #e7f5ff 0%, #d0ebff 100%); }
-        
-        .card-icon {
-            font-size: 1.5rem;
-            line-height: 1;
-        }
-        
-        .card-title-text {
-            font-size: 1.05rem;
-            font-weight: 700;
-            color: #212529;
-            margin: 0;
-            flex: 1;
-        }
-        
-        .card-count {
-            font-size: 0.8rem;
-            color: #868e96;
-            font-weight: 600;
-        }
-        
-        /* Streamlit DataFrame Styling */
-        .stDataFrame {
-            border: 1px solid #e9ecef;
-            border-radius: 0 0 12px 12px;
-            overflow: hidden;
+        /* Chart Container */
+        .chart-container {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            margin-bottom: 1.5rem;
+            border: 1px solid #f1f3f5;
         }
 
-        
-        /* Smooth Animations */
-        @keyframes fadeInUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        /* Custom Table Styling */
+        .stDataFrame {
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            overflow: hidden;
         }
         </style>
     """, unsafe_allow_html=True)
 
     # Filters
-    col1, col2, col3, col4, col5 = st.columns([0.5, 1, 1, 1, 1], gap="small")
+    col1, col2, col3 = st.columns([0.2, 0.4, 0.4], gap="medium")
 
     with col1:
-        view_type = st.segmented_control("View Type", ["Yearly", "Monthly"], key="team_view_type_no", default="Monthly")
+        view_type = st.segmented_control("View Type", ["Yearly", "Monthly"], key="team_view_type_new", default="Monthly")
 
     with col2:
         # Fetch available years
@@ -3137,7 +3339,7 @@ with tab4:
             "Year",
             available_years,
             index=default_year_index,
-            key="team_year"
+            key="team_year_new"
         )
 
     with col3:
@@ -3153,12 +3355,12 @@ with tab4:
                     available_months,
                     index=default_month_index,
                     format_func=lambda x: calendar.month_name[x],
-                    key=f"team_month_for_year_{year}"
+                    key=f"team_month_for_year_new_{year}"
                 )
             else:
                 st.selectbox("Month", [], disabled=True)
         else:  # Yearly or no year selected
-            st.selectbox("Month", [], disabled=True, label_visibility="visible", key= "ehfbwifbwlifb")
+            st.selectbox("Month", [], disabled=True, label_visibility="visible", key= "disabled_month_new")
             
     st.markdown("")
     
@@ -3167,22 +3369,24 @@ with tab4:
     team_data = get_all_employees_attendance(conn, year, month)
     
     if team_data:
-        # Process metrics (same logic)
+        # Process metrics
         employee_metrics = defaultdict(lambda: {
             'name': '', 'designation': '', 'late_arrivals': 0, 'on_time_arrivals': 0,
             'present_days': 0, 'leave_days': 0, 'half_days': 0, 'work_days': 0,
             'early_check_ins': 0, 'overtime_days': 0, 'early_exits': 0, 'max_consecutive_present': 0,
-            'holidays': 0
+            'holidays': 0, 'absent_days': 0
         })
+        
+        daily_counts = defaultdict(lambda: {'Present': 0, 'Late': 0, 'OnTime': 0, 'Leave': 0})
         
         current_employee = None
         current_streak = 0
         last_date = None
         
         for row in team_data:
-            if len(row) < 7:
+            if len(row) < 11:
                 continue
-            emp_id, emp_name, designation, att_date, check_in, check_out, status = row[0], row[1], row[2], row[3], row[4], row[5], row[6]
+            emp_id, emp_name, designation, att_date, check_in, check_out, status, is_late, is_early, is_overtime, is_early_arrival = row
             
             if not att_date:
                 employee_metrics[emp_id]['name'] = emp_name
@@ -3193,49 +3397,43 @@ with tab4:
             metrics['name'] = emp_name
             metrics['designation'] = designation
             
+            # Daily aggregation
+            date_str = att_date.strftime('%Y-%m-%d')
+            
             if status == 'Present':
                 metrics['present_days'] += 1
                 metrics['work_days'] += 1
+                daily_counts[date_str]['Present'] += 1
             elif status == 'Half Day':
                 metrics['half_days'] += 1
                 metrics['work_days'] += 1
+                daily_counts[date_str]['Present'] += 1 # Count half day as present for chart
             elif status == 'Leave':
                 metrics['leave_days'] += 1
+                daily_counts[date_str]['Leave'] += 1
             elif status == 'Holiday':
                 metrics['holidays'] += 1
-            
-            check_in_dt = None
-            if check_in and isinstance(check_in, timedelta):
-                total_seconds = int(check_in.total_seconds())
-                hours, minutes = total_seconds // 3600, (total_seconds % 3600) // 60
-                try:
-                    check_in_dt = dt_time(hours, minutes)
-                except ValueError:
-                    continue
-            
-            check_out_dt = None
-            if check_out and isinstance(check_out, timedelta):
-                total_seconds = int(check_out.total_seconds())
-                hours, minutes = total_seconds // 3600, (total_seconds % 3600) // 60
-                try:
-                    check_out_dt = dt_time(hours, minutes)
-                except ValueError:
-                    continue
+            elif status == 'Absent':
+                metrics['absent_days'] += 1
             
             if status in ['Present', 'Half Day']:
-                if check_in_dt:
-                    if check_in_dt > LATE_THRESHOLD:
-                        metrics['late_arrivals'] += 1
-                    if check_in_dt <= SCHEDULED_IN:
-                        metrics['on_time_arrivals'] += 1
-                    if check_in_dt < EARLY_ARRIVAL_THRESHOLD:
-                        metrics['early_check_ins'] += 1
-                if check_out_dt:
-                    if check_out_dt < SCHEDULED_OUT:
-                        metrics['early_exits'] += 1
-                    if check_out_dt > OVERTIME_THRESHOLD:
-                        metrics['overtime_days'] += 1
+                if is_late:
+                    metrics['late_arrivals'] += 1
+                    daily_counts[date_str]['Late'] += 1
+                else:
+                    metrics['on_time_arrivals'] += 1
+                    daily_counts[date_str]['OnTime'] += 1
+                
+                if is_early_arrival:
+                    metrics['early_check_ins'] += 1
+                
+                if is_early:
+                    metrics['early_exits'] += 1
+                
+                if is_overtime:
+                    metrics['overtime_days'] += 1
             
+            # Streak Logic
             if emp_id != current_employee or not last_date or att_date != last_date + timedelta(days=1):
                 current_streak = 0
             if status == 'Present':
@@ -3247,265 +3445,197 @@ with tab4:
             last_date = att_date
         
         working_days = get_month_working_days(conn, year, month) if month else get_year_working_days(conn, year)
-        leaderboard_data = []
         
+        leaderboard_data = []
         for emp_id, metrics in employee_metrics.items():
             total_work_days = metrics['work_days']
             attendance_score = (metrics['present_days'] / working_days * 100) if working_days > 0 else 0
-            early_on_time_rate = (metrics['on_time_arrivals'] / total_work_days * 100) if total_work_days > 0 else 0
+            punctuality_score = (metrics['on_time_arrivals'] / total_work_days * 100) if total_work_days > 0 else 0
             
+            # Composite Score: 60% Attendance + 40% Punctuality
+            composite_score = (attendance_score * 0.6) + (punctuality_score * 0.4)
+
             leaderboard_data.append({
-                'Employee ID': emp_id, 'Name': metrics['name'], 'Designation': metrics['designation'],
-                'Late Arrivals': metrics['late_arrivals'], 'On-Time Arrivals': metrics['on_time_arrivals'],
-                'Attendance Score (%)': attendance_score, 'Leave Days': metrics['leave_days'],
-                'Work Days (No Leaves)': metrics['work_days'], 'Early Check-Ins': metrics['early_check_ins'],
-                'Overtime Days': metrics['overtime_days'], 'Early/On-Time Rate (%)': early_on_time_rate,
-                'Total Working Days': working_days
+                'Employee ID': emp_id, 
+                'Name': metrics['name'], 
+                'Designation': metrics['designation'],
+                'Composite Score': composite_score,
+                'Attendance Score (%)': attendance_score,
+                'Punctuality Score (%)': punctuality_score,
+                'Late Arrivals': metrics['late_arrivals'], 
+                'Leave Days': metrics['leave_days'],
+                'Overtime Days': metrics['overtime_days'],
+                'Early Check-Ins': metrics['early_check_ins']
             })
         
-        df = pd.DataFrame(leaderboard_data)
-        if df.empty:
+        df_metrics = pd.DataFrame(leaderboard_data)
+        if df_metrics.empty:
             st.info("No attendance data for the selected period.")
             st.stop()
+            
+        # --- TOP LEVEL KPI CARDS ---
+        total_employees = len(employee_metrics)
+        avg_attendance = df_metrics['Attendance Score (%)'].mean()
+        avg_punctuality = df_metrics['Punctuality Score (%)'].mean()
         
-        total_present_days = sum(m['present_days'] for m in employee_metrics.values())
-        total_half_days = sum(m['half_days'] for m in employee_metrics.values())
-        total_late_arrivals = sum(m['late_arrivals'] for m in employee_metrics.values())
-        total_early_exits = sum(m['early_exits'] for m in employee_metrics.values())
-
-        # --- Corrected Team Punctuality Score (Percentage-Based) ---
-        # Numerator: Total days attended by anyone MINUS total infractions
-        total_days_attended_team = total_present_days + total_half_days
-        total_punctual_days_team = total_days_attended_team - total_late_arrivals - total_early_exits
-        # Denominator: Total days attended by anyone
-        team_punctuality_score = (total_punctual_days_team / total_days_attended_team * 100) if total_days_attended_team > 0 else 0
-
-        # --- Corrected Team Attendance Rate ---
-        # Numerator: Total days attended (Half days as 0.5)
-        total_days_attended_weighted = total_present_days + (total_half_days * 0.5)
-        # Denominator: Total possible work days * number of employees
-        total_possible_work_days = working_days * len(employee_metrics) 
-        team_attendance_rate = (total_days_attended_weighted / total_possible_work_days * 100) if total_possible_work_days > 0 else 0
-
-        # Average Check-in/Check-out
+        # Calculate Average Time (using previous logic)
         all_check_ins = []
-        all_check_outs = []
         for row in team_data:
-            if len(row) >= 6:
-                check_in, check_out = row[4], row[5]
+            if len(row) >= 5:
+                check_in = row[4]
                 if check_in and isinstance(check_in, timedelta):
                     all_check_ins.append(check_in)
-                if check_out and isinstance(check_out, timedelta):
-                    all_check_outs.append(check_out)
-
         avg_check_in_str = 'N/A'
         if all_check_ins:
             avg_seconds = sum(t.total_seconds() for t in all_check_ins) / len(all_check_ins)
             avg_check_in_str = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
 
-        avg_check_out_str = 'N/A'
-        if all_check_outs:
-            avg_seconds = sum(t.total_seconds() for t in all_check_outs) / len(all_check_outs)
-            avg_check_out_str = f"{int(avg_seconds // 3600):02d}:{int((avg_seconds % 3600) // 60):02d}"
-
-        if view_type == "Monthly":
-            col1, col2, col3, col4, col5 = st.columns(5)
-
-            with col1:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{len(employee_metrics)}</div>
-                    <div class="stat-label">Employees</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with col2:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{team_attendance_rate:.1f}%</div>
-                    <div class="stat-label">Attendance Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{team_punctuality_score:.1f}%</div>
-                    <div class="stat-label">Punctuality Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col4:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ffc107;">{working_days}</div>
-                    <div class="stat-label">Working Days</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col5:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{avg_check_in_str}</div>
-                    <div class="stat-label">Avg Check-In</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        elif view_type == "Yearly":
-            col1, col2, col3, col4, col5 = st.columns(5)
-
-            with col1:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{len(employee_metrics)}</div>
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+             st.markdown(f"""
+                <div class="stat-card primary">
                     <div class="stat-label">Total Employees</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with col2:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #28a745;">{team_attendance_rate:.1f}%</div>
-                    <div class="stat-label">Attendance Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col3:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #6f42c1;">{team_punctuality_score:.1f}</div>
-                    <div class="stat-label">Punctuality Rate</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col4:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #ffc107;">{working_days}</div>
-                    <div class="stat-label">Working Days</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with col5:
-                st.markdown(f"""
-                <div class="stat-card">
-                    <div class="stat-value" style="color: #3498db;">{avg_check_in_str}</div>
-                    <div class="stat-label">Avg Check-In</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        
-        # Helper function to display leaderboard with Streamlit dataframe
-        def display_leaderboard(title, icon, header_class, data_df, columns_to_show, limit=10):
-            st.markdown(f"""
-                <div class="card-header-box {header_class}">
-                    <span class="card-icon">{icon}</span>
-                    <span class="card-title-text">{title}</span>
-                    <span class="card-count">Top {limit}</span>
+                    <div class="stat-value">{total_employees}</div>
                 </div>
             """, unsafe_allow_html=True)
+        with col2:
+             st.markdown(f"""
+                <div class="stat-card success">
+                    <div class="stat-label">Avg Attendance</div>
+                    <div class="stat-value">{avg_attendance:.1f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with col3:
+             st.markdown(f"""
+                <div class="stat-card info">
+                    <div class="stat-label">Avg Punctuality</div>
+                    <div class="stat-value">{avg_punctuality:.1f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with col4:
+             st.markdown(f"""
+                <div class="stat-card warning">
+                    <div class="stat-label">Avg Check-In</div>
+                    <div class="stat-value">{avg_check_in_str}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # --- CHARTS SECTION ---
+        st.markdown('<div class="analytics-section-header">📈 Trends & Distribution</div>', unsafe_allow_html=True)
+        
+        c_col1, c_col2 = st.columns([1.5, 1])
+        
+        with c_col1:
+            # 1. Daily Attendance Trend (Line/Bar Combo)
+            if daily_counts:
+                dates = sorted(list(daily_counts.keys()))
+                trend_data = []
+                for d in dates:
+                    trend_data.append({
+                        'Date': d,
+                        'On Time': daily_counts[d]['OnTime'],
+                        'Late': daily_counts[d]['Late'],
+                        'Leave': daily_counts[d]['Leave']
+                    })
+                df_trend = pd.DataFrame(trend_data)
+                
+                if not df_trend.empty:
+                    fig_trend = px.bar(
+                        df_trend, x='Date', y=['On Time', 'Late', 'Leave'],
+                        title='Daily Attendance Breakdown',
+                        labels={'value': 'Count', 'variable': 'Status'},
+                        color_discrete_map={'On Time': '#51cf66', 'Late': '#ff6b6b', 'Leave': '#ced4da'}
+                    )
+                    fig_trend.update_layout(barmode='stack', xaxis_title=None, legend_title=None, height=350)
+                    st.plotly_chart(fig_trend, use_container_width=True)
+            else:
+                 st.info("No trend data available.")
+
+        with c_col2:
+            # 2. Overall Status Distribution (Pie Chart)
+            total_present = sum(m['present_days'] for m in employee_metrics.values())
+            total_late = sum(m['late_arrivals'] for m in employee_metrics.values())
+            # "On Time" is technically part of "Present", so let's split Present into "On Time" and "Late" for the pie
+            total_on_time = total_present - total_late
+            total_leave = sum(m['leave_days'] for m in employee_metrics.values())
             
-            # Prepare display dataframe
-            display_df = data_df.head(limit)[columns_to_show].copy()
-            display_df.insert(0, 'Rank', range(1, len(display_df) + 1))
+            pie_data = pd.DataFrame({
+                'Status': ['On Time', 'Late', 'Leave'],
+                'Count': [total_on_time, total_late, total_leave]
+            })
             
-            # Format percentage columns
-            for col in display_df.columns:
-                if '(%)' in col:
-                    display_df[col] = display_df[col].apply(lambda x: f"{x:.1f}%")
+            fig_pie = px.pie(
+                pie_data, values='Count', names='Status',
+                title='Overall Attendance Distribution',
+                hole=0.4,
+                color='Status',
+                color_discrete_map={'On Time': '#51cf66', 'Late': '#ff6b6b', 'Leave': '#ced4da'}
+            )
+            fig_pie.update_layout(height=350)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        # --- RANKINGS SECTION ---
+        st.markdown('<div class="analytics-section-header">🏆 Employee Rankings</div>', unsafe_allow_html=True)
+        
+        r_col1, r_col2 = st.columns(2)
+        
+        with r_col1:
+            st.markdown("##### 🌟 Top Performers")
+            st.caption("Based on Composite Score (Attendance + Punctuality)")
+            
+            # Top 5 by Composite Score
+            top_performers = df_metrics.nlargest(5, 'Composite Score')[['Name', 'Designation', 'Attendance Score (%)', 'Punctuality Score (%)']]
+            
+            # Formatting
+            top_performers['Attendance Score (%)'] = top_performers['Attendance Score (%)'].apply(lambda x: f"{x:.1f}%")
+            top_performers['Punctuality Score (%)'] = top_performers['Punctuality Score (%)'].apply(lambda x: f"{x:.1f}%")
             
             st.dataframe(
-                display_df,
-                width='stretch',
-                hide_index=True,
-                height=400
+                top_performers, 
+                hide_index=True, 
+                use_container_width=True,
+                height=250
             )
-        
-        # Punctuality Section
-        st.markdown("""
-            <div class="section-header">
-                <span class="section-icon">⏰</span>
-                <h2 class="section-title">Punctuality Metrics</h2>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            display_leaderboard(
-                "Most On-Time Arrivals", "🟢", "ontime",
-                df.nlargest(10, 'On-Time Arrivals'),
-                ['Name', 'Designation', 'On-Time Arrivals', 'Total Working Days']
+
+        with r_col2:
+            st.markdown("##### 🚧 Needs Attention")
+            st.caption("Employees with high Late Arrivals or Absences")
+            
+            # Sort by Late Arrivals descending
+            needs_attention = df_metrics.nlargest(5, 'Late Arrivals')[['Name', 'Late Arrivals', 'Leave Days', 'Attendance Score (%)']]
+            
+            needs_attention['Attendance Score (%)'] = needs_attention['Attendance Score (%)'].apply(lambda x: f"{x:.1f}%")
+            
+            st.dataframe(
+                needs_attention, 
+                hide_index=True, 
+                use_container_width=True,
+                 height=250
             )
-        with col2:
-            display_leaderboard(
-                "Most Late Arrivals", "🔴", "late",
-                df.nlargest(10, 'Late Arrivals'),
-                ['Name', 'Designation', 'Late Arrivals', 'Total Working Days']
-            )
+
+        # --- ADDITIONAL INSIGHTS ---
+        st.markdown('<div class="analytics-section-header">💡 Detailed Insights</div>', unsafe_allow_html=True)
         
-        # Performance Section
-        st.markdown("""
-            <div class="section-header">
-                <span class="section-icon">📊</span>
-                <h2 class="section-title">Performance & Attendance</h2>
-                <span class="section-subtitle">Overall attendance quality</span>
-            </div>
-        """, unsafe_allow_html=True)
+        i_col1, i_col2, i_col3 = st.columns(3)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            display_leaderboard(
-                "Best Attendance Score", "📈", "score",
-                df.nlargest(10, 'Attendance Score (%)'),
-                ['Name', 'Designation', 'Attendance Score (%)', 'Total Working Days']
-            )
-        with col2:
-            display_leaderboard(
-                "Most Consistent Early/On-Time", "⭐", "consistent",
-                df.nlargest(10, 'Early/On-Time Rate (%)'),
-                ['Name', 'Designation', 'Early/On-Time Rate (%)', 'Total Working Days']
-            )
-        
-        # Dedication Section
-        st.markdown("""
-            <div class="section-header">
-                <span class="section-icon">💼</span>
-                <h2 class="section-title">Work Dedication</h2>
-                <span class="section-subtitle">Extra effort and commitment</span>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            display_leaderboard(
-                "Most Work Days", "💪", "work",
-                df.nlargest(10, 'Work Days (No Leaves)'),
-                ['Name', 'Designation', 'Work Days (No Leaves)', 'Total Working Days']
-            )
-        with col2:
-            display_leaderboard(
-                "Most Early Check-Ins", "🌅", "early",
-                df.nlargest(10, 'Early Check-Ins'),
-                ['Name', 'Designation', 'Early Check-Ins', 'Total Working Days']
-            )
-        
-        # Additional Metrics
-        st.markdown("""
-            <div class="section-header">
-                <span class="section-icon">📋</span>
-                <h2 class="section-title">Additional Insights</h2>
-                <span class="section-subtitle">Leave and overtime patterns</span>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            display_leaderboard(
-                "Most Leave Days", "🏖️", "leave",
-                df.nlargest(10, 'Leave Days'),
-                ['Name', 'Designation', 'Leave Days', 'Total Working Days']
-            )
-        with col2:
-            display_leaderboard(
-                "Most Overtime Days", "🌙", "overtime",
-                df.nlargest(10, 'Overtime Days'),
-                ['Name', 'Designation', 'Overtime Days', 'Total Working Days']
-            )
-        
+        with i_col1:
+             st.markdown("**Early Birds 🌅**")
+             st.caption("Most Early Check-Ins")
+             early_birds = df_metrics.nlargest(5, 'Early Check-Ins')[['Name', 'Early Check-Ins']]
+             st.table(early_birds.assign().set_index('Name')) # Simple table for cleaner look
+             
+        with i_col2:
+             st.markdown("**Overtime Heroes 🌙**")
+             st.caption("Most Overtime Days")
+             overtime_heroes = df_metrics.nlargest(5, 'Overtime Days')[['Name', 'Overtime Days']]
+             st.table(overtime_heroes.assign().set_index('Name'))
+
+        with i_col3:
+             st.markdown("**Most Leaves 🏖️**")
+             st.caption("Highest Leave Days")
+             most_leaves = df_metrics.nlargest(5, 'Leave Days')[['Name', 'Leave Days']]
+             st.table(most_leaves.assign().set_index('Name'))
+
     else:
         st.info("No attendance records found for the selected period.")
 
@@ -3523,12 +3653,80 @@ with tab5:
     col1, col2 = st.columns([2, 1])
 
     with col2:
+
+        st.space(size=105)
+
+        st.markdown("##### Manage Shift")
+        shift_employees = get_all_employees(conn)
+        if shift_employees:
+            shift_emp_options = {f"{emp[1]} ({emp[2]})": emp[0] for emp in shift_employees}
+            selected_shift_emp_name = st.selectbox("Select Employee for Shift", list(shift_emp_options.keys()), key="shift_emp_select", label_visibility="collapsed")
+            selected_shift_emp_id = shift_emp_options[selected_shift_emp_name]
+            
+            # Fetch current shift history
+            shift_history = get_employee_shift_history(conn, selected_shift_emp_id)
+            
+            current_shift_text = "No active shift found."
+            if shift_history:
+                # Assuming ordered by effective_from DESC, first one is latest
+                latest = shift_history[0]
+                # Check if it's currently active (effective_to is None or future)
+                if latest[3] is None or latest[3] >= date.today():
+                     current_shift_text = f"{latest[0]} - {latest[1]} (Since {latest[2]})"
+            
+            st.info(f"**Current Shift:** {current_shift_text}")
+            
+            with st.form("add_shift_form", border=True):
+                s_col1, s_col2 = st.columns(2)
+                with s_col1:
+                    new_start_time = st.time_input("Start Time", value=dt_time(9, 30))
+                with s_col2:
+                    new_end_time = st.time_input("End Time", value=dt_time(18, 0))
+                
+                new_effective_date = st.date_input("Effective From", value=date.today(), min_value=date(2000, 1, 1))
+                
+                shift_submitted = st.form_submit_button("📅 Update Shift", width='stretch', type="primary")
+                
+                if shift_submitted:
+                    if add_shift(conn, selected_shift_emp_id, new_start_time, new_end_time, new_effective_date):
+                        st.success("Shift updated successfully!")
+                        st.rerun()
+            
+            with st.expander("📜 Shift History"):
+                if shift_history:
+                    # Convert to dataframe for nicer display
+                    hist_df = pd.DataFrame(shift_history, columns=['Employee Name', 'Start Time', 'End Time', 'Effective From', 'Effective To'])
+                    
+                    # Format times
+                    def fmt_hist_time(t):
+                        if not t: return "-"
+                        if isinstance(t, timedelta):
+                            seconds = t.total_seconds()
+                            hours = int(seconds // 3600)
+                            minutes = int((seconds % 3600) // 60)
+                            return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p")
+                        return t.strftime("%I:%M %p")
+                        
+                    hist_df['Start Time'] = hist_df['Start Time'].apply(fmt_hist_time)
+                    hist_df['End Time'] = hist_df['End Time'].apply(fmt_hist_time)
+                    
+                    st.dataframe(hist_df, hide_index=True, use_container_width=True)
+                else:
+                    st.info("No shift history.")
+        else:
+            st.info("Add employees to manage shifts.")
+
+        
+        st.markdown("---")
+
+
         st.markdown("##### Add New Employee")
         with st.form("add_employee_form", border=True):
             emp_code = st.text_input("Employee Code*")
             emp_name = st.text_input("Employee Name*")
             emp_email = st.text_input("Employee Email*")
             emp_dept = st.text_input("Designation")
+            emp_join_date = st.date_input("Joining Date", value=date.today())
             submitted = st.form_submit_button("➕ Add Employee", width='stretch', type="primary")
 
             if submitted:
@@ -3558,18 +3756,39 @@ with tab5:
                                 has_error = True
                             
                             if not has_error:
+                                # Insert Employee
                                 s.execute(text("""
-                                    INSERT INTO employees (employee_code, employee_name, employee_email, designation)
-                                    VALUES (:code, :name, :email, :dept)
+                                    INSERT INTO employees (employee_code, employee_name, employee_email, designation, joining_date)
+                                    VALUES (:code, :name, :email, :dept, :join_date)
                                 """), {
                                     "code": emp_code.strip(),
                                     "name": emp_name.strip(),
                                     "email": emp_email.strip(),
-                                    "dept": emp_dept.strip() if emp_dept else None
+                                    "dept": emp_dept.strip() if emp_dept else None,
+                                    "join_date": emp_join_date
                                 })
+                                
+                                # Get the new employee ID
+                                new_emp_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
                                 s.commit()
+
+                                # Add default shift (9:30 - 18:00) effective from today
+                                try:
+                                    s.execute(text("""
+                                        INSERT INTO employee_shifts (employee_id, shift_start_time, shift_end_time, effective_from)
+                                        VALUES (:emp_id, :start, :end, :eff_from)
+                                    """), {
+                                        "emp_id": new_emp_id,
+                                        "start": dt_time(9, 30),
+                                        "end": dt_time(18, 0),
+                                        "eff_from": date.today()
+                                    })
+                                    s.commit()
+                                except Exception as shift_err:
+                                    st.warning(f"Employee added, but failed to set default shift: {shift_err}")
+
                                 ist_time = get_ist_time()
-                                st.success(f"✅ Employee '{emp_name}' added successfully!")
+                                st.success(f"✅ Employee '{emp_name}' added successfully with default shift!")
                                 # Log the add employee activity
                                 log_activity(
                                     conn_log,
@@ -3588,7 +3807,25 @@ with tab5:
     with col1:
         all_employees = get_all_employees_with_status(conn)
         if all_employees:
-            df = pd.DataFrame(all_employees, columns=['employee_id', 'employee_code', 'employee_name', 'designation', 'employment_status'])
+            df = pd.DataFrame(all_employees, columns=['employee_id', 'employee_code', 'employee_name', 'designation', 'employment_status', 'shift_start', 'shift_end', 'joining_date'])
+            
+            # Deduplicate by employee_id to prevent primary key issues
+            df = df.drop_duplicates(subset=['employee_id'])
+
+            # Create a formatted Shift column
+            def format_shift_col(row):
+                s, e = row['shift_start'], row['shift_end']
+                def ft(t):
+                    if not t: return "?"
+                    if isinstance(t, timedelta):
+                        seconds = t.total_seconds()
+                        hours = int(seconds // 3600)
+                        minutes = int((seconds % 3600) // 60)
+                        return datetime.strptime(f"{hours}:{minutes}", "%H:%M").strftime("%I:%M %p")
+                    return t.strftime("%I:%M %p")
+                return f"{ft(s)} - {ft(e)}"
+
+            df['Shift'] = df.apply(format_shift_col, axis=1)
             
             active_count = (df['employment_status'] == 'Active').sum()
             inactive_count = (df['employment_status'] == 'Inactive').sum()
@@ -3611,9 +3848,13 @@ with tab5:
                     hide_index=True,
                     column_config={
                         "employee_id": None,  # Hide employee_id
+                        "shift_start": None, # Hide raw columns
+                        "shift_end": None,
+                        "Shift": st.column_config.TextColumn("Current Shift", disabled=True),
                         "employee_code": st.column_config.TextColumn("Employee Code", disabled=True),
                         "employee_name": "Name",
                         "designation": "Designation",
+                        "joining_date": st.column_config.DateColumn("Joining Date", format="DD/MM/YYYY"),
                         "employment_status": st.column_config.SelectboxColumn(
                             "Status",
                             options=["Active", "Inactive"],
@@ -3627,35 +3868,67 @@ with tab5:
                     # Compare original df with edited df to find changes
                     original_df = df.set_index('employee_id')
                     edited_df_indexed = edited_df.set_index('employee_id')
-                    # Find rows where any column has changed
-                    changed_rows_mask = (original_df != edited_df_indexed).any(axis=1)
-                    if not changed_rows_mask.any():
-                        st.info("No changes to save.")
-                    else:
-                        update_count = 0
-                        ist_time = get_ist_time()
-                        for emp_id in original_df[changed_rows_mask].index:
-                            details = edited_df_indexed.loc[emp_id].to_dict()
-                            original_details = original_df.loc[emp_id].to_dict()
+                    
+                    # Helper to normalize values for comparison
+                    def normalize_val(val):
+                        if pd.isna(val) or val == "": return None
+                        if isinstance(val, (pd.Timestamp, datetime)): return val.date()
+                        if isinstance(val, date): return val
+                        if isinstance(val, str):
+                            try:
+                                return pd.to_datetime(val).date()
+                            except:
+                                return val
+                        if isinstance(val, list): return None # specific fix for list error
+                        return val
+
+                    update_count = 0
+                    ist_time = get_ist_time()
+                    
+                    # Iterate through index to compare
+                    for emp_id in original_df.index:
+                        if emp_id not in edited_df_indexed.index: continue
+                        
+                        original_row = original_df.loc[emp_id]
+                        edited_row = edited_df_indexed.loc[emp_id]
+                        
+                        changes = {}
+                        for col in ['employee_name', 'designation', 'employment_status', 'joining_date']:
+                            orig_val = normalize_val(original_row.get(col))
+                            edit_val = normalize_val(edited_row.get(col))
+                            
+                            # Debugging joining_date specifically
+                            if col == 'joining_date':
+                                print(f"DEBUG: Emp {emp_id} - joining_date: Orig={orig_val} ({type(orig_val)}), Edit={edit_val} ({type(edit_val)})")
+
+                            if orig_val != edit_val:
+                                changes[col] = edit_val
+                        
+                        if changes:
+                            # Construct full details dict for update, merging original with changes
+                            details = edited_row.to_dict()
+                            # Ensure we send the normalized date
+                            details['joining_date'] = normalize_val(details.get('joining_date'))
+                            
                             if update_employee(conn, emp_id, details):
                                 update_count += 1
-                                # Identify changed fields
-                                changed_fields = []
-                                for field in ['employee_name', 'designation', 'employment_status']:
-                                    if details[field] != original_details[field]:
-                                        changed_fields.append(f"{field}: {original_details[field]} -> {details[field]}")
-                                # Log the update activity
+                                change_desc = ", ".join([f"{k}: {v}" for k, v in changes.items()])
                                 log_activity(
                                     conn_log,
                                     st.session_state.user_id,
                                     st.session_state.username,
                                     st.session_state.session_id,
                                     "UPDATE_EMPLOYEE",
-                                    f"Updated employee {details['employee_name']} (ID: {emp_id}) - {', '.join(changed_fields)}"
+                                    f"Updated employee {details['employee_name']} (ID: {emp_id}) - {change_desc}"
                                 )
-                        if update_count > 0:
-                            st.success(f"Successfully updated {update_count} employee(s).")
-                            st.rerun()
+                                # Provide immediate feedback for what changed
+                                st.toast(f"Updated {details['employee_name']}: {change_desc}", icon="✅")
+
+                    if update_count > 0:
+                        st.success(f"Successfully updated {update_count} employee(s).")
+                        st.rerun()
+                    else:
+                        st.info("No changes to save.")
             else:
                 def style_status(row):
                     if row.employment_status == 'Active':
@@ -3664,7 +3937,7 @@ with tab5:
                         return ['background-color: #f8d7da; color: #721c24;'] * len(row)
                     return [''] * len(row)
 
-                df_display = df[['employee_code', 'employee_name', 'designation', 'employment_status']]
+                df_display = df[['employee_code', 'employee_name', 'designation', 'employment_status', 'Shift', 'joining_date']]
                 st.dataframe(
                     df_display.style.apply(style_status, axis=1),
                     width='stretch',
@@ -3673,7 +3946,9 @@ with tab5:
                         "employee_code": "Employee Code",
                         "employee_name": "Name",
                         "designation": "Designation",
-                        "employment_status": "Status"
+                        "employment_status": "Status",
+                        "Shift": "Current Shift",
+                        "joining_date": st.column_config.DateColumn("Joining Date", format="DD/MM/YYYY")
                     },
                     height=1000
                 )

@@ -91,9 +91,9 @@ if user_app in ["main", "operations", "sales"] and click_id and click_id not in 
 
 total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
 
-if user_app == "tasks":
+if user_app == "tasks" and total_unread > 0:
     if "unread_toast_shown" not in st.session_state:
-        st.toast(f"You have {total_unread} unread messages!", icon="💬")
+        st.toast(f"You have {total_unread} unread messages!", icon="💬", duration="infinite")
         st.session_state.unread_toast_shown = True
 
 

@@ -373,7 +373,7 @@ def update_button_counts(conn):
         if "messages" in BUTTON_CONFIG and total_unread > 0:
             BUTTON_CONFIG["messages"]["label"] += f" 🔴 ({total_unread})"
             if "unread_toast_shown" not in st.session_state:
-                st.toast(f"You have {total_unread} unread messages!", icon="💬")
+                st.toast(f"You have {total_unread} unread messages!", icon="💬", duration="infinite")
                 st.session_state.unread_toast_shown = True
 
     except Exception:
@@ -1965,6 +1965,8 @@ def settings_dialog(conn):
                 col1, _ = st.columns(2)
                 with col1:
                     export_data()
+
+###################################################################################################################################
 ##################################--------------- Edit Auhtor Details ----------------------------##################################
 ###################################################################################################################################
 
@@ -2608,32 +2610,65 @@ def add_book_dialog(conn):
                         )
 
                         if selected_author != "Add New Author" and selected_author and not disabled:
+                            # --- Existing Author: Read-Only View ---
                             selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
                             selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
+                            
                             if selected_author_details:
+                                # Update session state with existing details
                                 st.session_state.authors[i]["name"] = selected_author_details.name
                                 st.session_state.authors[i]["email"] = selected_author_details.email
                                 st.session_state.authors[i]["phone"] = selected_author_details.phone
                                 st.session_state.authors[i]["author_id"] = selected_author_details.author_id
-                        elif selected_author == "Add New Author" and not disabled:
-                            st.session_state.authors[i]["author_id"] = None
 
-                        col1, col2 = st.columns(2)
-                        st.session_state.authors[i]["name"] = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=f"name_{i}", placeholder="Enter Author name..", disabled=disabled)
+                                # Display Read-Only Details
+                                st.markdown(f"""
+                                    <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                        <strong>👤 Name:</strong> {selected_author_details.name}<br>
+                                        <strong>📧 Email:</strong> {selected_author_details.email}<br>
+                                        <strong>📱 Phone:</strong> {selected_author_details.phone}
+                                    </div>
+                                """, unsafe_allow_html=True)
+                        
+                        elif selected_author == "Add New Author" and not disabled:
+                            # --- New Author: Editable Fields ---
+                            st.session_state.authors[i]["author_id"] = None
+                            
+                            col1, col2 = st.columns(2)
+                            st.session_state.authors[i]["name"] = col1.text_input(f"Author Name {i+1}", st.session_state.authors[i]["name"], key=f"name_{i}", placeholder="Enter Author name..", disabled=disabled)
+                            # Placeholder for alignment if needed, or just let 'Position' take the next slot below or beside if layout allows.
+                            # In original code, Position was col2. Let's keep Position editable for everyone.
+
+                        # --- Common Editable Fields (Position, Agent, Consultant) ---
+                        
+                        # Calculate available positions for both cases
                         available_positions = ["1st", "2nd", "3rd", "4th"]
                         taken_positions = [a["author_position"] for a in st.session_state.authors if a != st.session_state.authors[i]]
                         available_positions = [p for p in available_positions if p not in taken_positions or p == st.session_state.authors[i]["author_position"]]
-                        st.session_state.authors[i]["author_position"] = col2.selectbox(
-                            f"Position {i+1}",
-                            available_positions,
-                            index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
-                            key=f"author_position_{i}",
-                            disabled=disabled
-                        )
-                        
-                        col3, col4 = st.columns(2)
-                        st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..", disabled=disabled)
-                        st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
+
+                        if selected_author != "Add New Author" and not disabled:
+                             # For existing authors, we need a place for Position.
+                             st.session_state.authors[i]["author_position"] = st.selectbox(
+                                f"Position {i+1}",
+                                available_positions,
+                                index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
+                                key=f"author_position_{i}",
+                                disabled=disabled
+                            )
+                        elif selected_author == "Add New Author" and not disabled:
+                             # For new authors, Position was in col2 next to Name.
+                             st.session_state.authors[i]["author_position"] = col2.selectbox(
+                                f"Position {i+1}",
+                                available_positions,
+                                index=available_positions.index(st.session_state.authors[i]["author_position"]) if st.session_state.authors[i]["author_position"] in available_positions else 0,
+                                key=f"author_position_{i}",
+                                disabled=disabled
+                            )
+
+                        if selected_author == "Add New Author" and not disabled:
+                            col3, col4 = st.columns(2)
+                            st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..", disabled=disabled)
+                            st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
                         
                         col5, col6 = st.columns(2)
 
@@ -4353,6 +4388,7 @@ MAX_CHAPTERS = 30
 MAX_EDITORS_PER_CHAPTER = 2
 
 # Updated dialog for editing author details with improved UI
+# Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large', on_dismiss = 'rerun')
 def edit_author_dialog(book_id, conn):
     # Fetch book details for title, is_single_author, num_copies, and print_status
@@ -4543,41 +4579,71 @@ def edit_author_dialog(book_id, conn):
                     )
 
                     if selected_author != "Add New Author" and selected_author and not disabled:
+                        # --- Existing Author: Read-Only View ---
                         selected_author_id = int(selected_author.split('(ID: ')[1][:-1])
                         selected_author_details = next((a for a in all_authors if a.author_id == selected_author_id), None)
                         if selected_author_details:
+                            # Update session state
                             st.session_state.new_authors[i].update({
                                 "name": selected_author_details.name,
                                 "email": selected_author_details.email,
                                 "phone": selected_author_details.phone,
                                 "author_id": selected_author_details.author_id
                             })
-                    elif selected_author == "Add New Author" and not disabled:
-                        st.session_state.new_authors[i]["author_id"] = None
+                            
+                            # Display Read-Only Details
+                            st.markdown(f"""
+                                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                    <strong>👤 Name:</strong> {selected_author_details.name}<br>
+                                    <strong>📧 Email:</strong> {selected_author_details.email}<br>
+                                    <strong>📱 Phone:</strong> {selected_author_details.phone}
+                                </div>
+                            """, unsafe_allow_html=True)
 
-                    col1, col2 = st.columns(2)
-                    st.session_state.new_authors[i]["name"] = col1.text_input(
-                        f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
-                        disabled=disabled
-                    )
+                    elif selected_author == "Add New Author" and not disabled:
+                        # --- New Author: Editable Fields ---
+                        st.session_state.new_authors[i]["author_id"] = None
+                        
+                        col1, col2 = st.columns(2)
+                        st.session_state.new_authors[i]["name"] = col1.text_input(
+                            f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
+                            disabled=disabled
+                        )
+                        # Position handled below in shared block if new, or adjusted if needed.
+                        # Original code had Position in col2.
+
+                    # --- Common Editable Fields (Position) ---
                     available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
                                         (existing_positions + [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]])]
-                    st.session_state.new_authors[i]["author_position"] = col2.selectbox(
-                        f"Position {i+1}",
-                        available_positions,
-                        key=f"new_author_position_{i}",
-                        disabled=disabled or not available_positions
-                    ) if available_positions else st.error("❌ No available positions left.")
+                    
+                    if selected_author != "Add New Author" and not disabled:
+                        # For existing authors, we need a place for Position.
+                        st.session_state.new_authors[i]["author_position"] = st.selectbox(
+                            f"Position {i+1}",
+                            available_positions,
+                            key=f"new_author_position_{i}",
+                            disabled=disabled or not available_positions
+                        ) if available_positions else st.error("❌ No available positions left.")
+                    
+                    elif selected_author == "Add New Author" and not disabled:
+                        # For new authors, Position logic from before (likely col2)
+                        st.session_state.new_authors[i]["author_position"] = col2.selectbox(
+                            f"Position {i+1}",
+                            available_positions,
+                            key=f"new_author_position_{i}",
+                            disabled=disabled or not available_positions
+                        ) if available_positions else st.error("❌ No available positions left.")
 
-                    col3, col4 = st.columns(2)
-                    st.session_state.new_authors[i]["phone"] = col3.text_input(
-                        f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
-                        disabled=disabled
-                    )
-                    st.session_state.new_authors[i]["email"] = col4.text_input(
-                        f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
-                        disabled=disabled
-                    )
+                    if selected_author == "Add New Author" and not disabled:
+                        col3, col4 = st.columns(2)
+                        st.session_state.new_authors[i]["phone"] = col3.text_input(
+                            f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
+                            disabled=disabled
+                        )
+                        st.session_state.new_authors[i]["email"] = col4.text_input(
+                            f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
+                            disabled=disabled
+                        )
 
                     col5, col6 = st.columns(2)
                     selected_agent = col5.selectbox(
@@ -5204,6 +5270,16 @@ def edit_author_dialog(book_id, conn):
                                                 "phone": selected_editor_details.phone,
                                                 "author_id": selected_editor_id
                                             })
+                                            
+                                            # Display Read-Only Details
+                                            st.markdown(f"""
+                                                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                                    <strong>👤 Name:</strong> {selected_editor_details.name}<br>
+                                                    <strong>📧 Email:</strong> {selected_editor_details.email}<br>
+                                                    <strong>📱 Phone:</strong> {selected_editor_details.phone}
+                                                </div>
+                                            """, unsafe_allow_html=True)
+                                            
                                     elif selected_editor == "Select Existing Editor":
                                         editor["author_id"] = None
                                         editor.update({
@@ -5214,33 +5290,44 @@ def edit_author_dialog(book_id, conn):
                                             "publishing_consultant": ""
                                         })
 
-                                    col1, col2 = st.columns(2)
-                                    editor["name"] = col1.text_input(
-                                        "Name",
-                                        value=editor["name"],
-                                        key=f"edit_chapter_{chapter_id}_editor_name_{j}"
-                                    )
                                     available_positions = ["1st", "2nd", "3rd", "4th"]
                                     current_positions = [e["author_position"] for k, e in enumerate(edit_data["editors"]) if k != j and e["author_position"]]
                                     available_positions = [p for p in available_positions if p not in current_positions]
-                                    editor["author_position"] = col2.selectbox(
-                                        "Position",
-                                        available_positions,
-                                        index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
-                                        key=f"edit_chapter_{chapter_id}_editor_position_{j}"
-                                    )
 
-                                    col3, col4 = st.columns(2)
-                                    editor["email"] = col3.text_input(
-                                        "Email",
-                                        value=editor["email"],
-                                        key=f"edit_chapter_{chapter_id}_editor_email_{j}"
-                                    )
-                                    editor["phone"] = col4.text_input(
-                                        "Phone",
-                                        value=editor["phone"],
-                                        key=f"edit_chapter_{chapter_id}_editor_phone_{j}"
-                                    )
+                                    if editor["author_id"]:
+                                         # Read-Only Mode (Display Position Only)
+                                         editor["author_position"] = st.selectbox(
+                                            "Position",
+                                            available_positions,
+                                            index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                                            key=f"edit_chapter_{chapter_id}_editor_position_{j}"
+                                        )
+                                    else:
+                                        # Editable Mode
+                                        col1, col2 = st.columns(2)
+                                        editor["name"] = col1.text_input(
+                                            "Name",
+                                            value=editor["name"],
+                                            key=f"edit_chapter_{chapter_id}_editor_name_{j}"
+                                        )
+                                        editor["author_position"] = col2.selectbox(
+                                            "Position",
+                                            available_positions,
+                                            index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                                            key=f"edit_chapter_{chapter_id}_editor_position_{j}"
+                                        )
+
+                                        col3, col4 = st.columns(2)
+                                        editor["email"] = col3.text_input(
+                                            "Email",
+                                            value=editor["email"],
+                                            key=f"edit_chapter_{chapter_id}_editor_email_{j}"
+                                        )
+                                        editor["phone"] = col4.text_input(
+                                            "Phone",
+                                            value=editor["phone"],
+                                            key=f"edit_chapter_{chapter_id}_editor_phone_{j}"
+                                        )
 
                                     col5, col6 = st.columns(2)
                                     unique_agents, unique_consultants = get_unique_agents_and_consultants(conn)
@@ -5499,6 +5586,16 @@ def edit_author_dialog(book_id, conn):
                                         "corresponding_agent": "",
                                         "publishing_consultant": ""
                                     })
+                                    
+                                    # Display Read-Only Details
+                                    st.markdown(f"""
+                                        <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                            <strong>👤 Name:</strong> {selected_editor_details.name}<br>
+                                            <strong>📧 Email:</strong> {selected_editor_details.email}<br>
+                                            <strong>📱 Phone:</strong> {selected_editor_details.phone}
+                                        </div>
+                                    """, unsafe_allow_html=True)
+                                    
                             elif selected_editor == "Add New Editor":
                                 editor["author_id"] = None
                                 editor.update({
@@ -5509,33 +5606,44 @@ def edit_author_dialog(book_id, conn):
                                     "publishing_consultant": editor.get("publishing_consultant", "")
                                 })
 
-                            col1, col2 = st.columns(2)
-                            editor["name"] = col1.text_input(
-                                "Name",
-                                editor["name"],
-                                key=f"new_chapter_editor_name_{j}"
-                            )
                             available_positions = ["1st", "2nd", "3rd", "4th"]
                             current_positions = [e["author_position"] for k, e in enumerate(chapter["editors"]) if k != j and e["author_position"]]
                             available_positions = [p for p in available_positions if p not in current_positions]
-                            editor["author_position"] = col2.selectbox(
-                                "Position",
-                                available_positions,
-                                index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
-                                key=f"new_chapter_editor_position_{j}"
-                            )
 
-                            col3, col4 = st.columns(2)
-                            editor["email"] = col3.text_input(
-                                "Email",
-                                editor["email"],
-                                key=f"new_chapter_editor_email_{j}"
-                            )
-                            editor["phone"] = col4.text_input(
-                                "Phone",
-                                editor["phone"],
-                                key=f"new_chapter_editor_phone_{j}"
-                            )
+                            if editor["author_id"]:
+                                # Read-Only Mode
+                                editor["author_position"] = st.selectbox(
+                                    "Position",
+                                    available_positions,
+                                    index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                                    key=f"new_chapter_editor_position_{j}"
+                                )
+                            else:
+                                # Editable Mode
+                                col1, col2 = st.columns(2)
+                                editor["name"] = col1.text_input(
+                                    "Name",
+                                    editor["name"],
+                                    key=f"new_chapter_editor_name_{j}"
+                                )
+                                editor["author_position"] = col2.selectbox(
+                                    "Position",
+                                    available_positions,
+                                    index=available_positions.index(editor["author_position"]) if editor["author_position"] in available_positions else 0,
+                                    key=f"new_chapter_editor_position_{j}"
+                                )
+
+                                col3, col4 = st.columns(2)
+                                editor["email"] = col3.text_input(
+                                    "Email",
+                                    editor["email"],
+                                    key=f"new_chapter_editor_email_{j}"
+                                )
+                                editor["phone"] = col4.text_input(
+                                    "Phone",
+                                    editor["phone"],
+                                    key=f"new_chapter_editor_phone_{j}"
+                                )
 
                             col5, col6 = st.columns(2)
                             agent_index = 0
@@ -5847,32 +5955,54 @@ def edit_author_dialog(book_id, conn):
                                         "phone": selected_author_details.phone,
                                         "author_id": selected_author_details.author_id
                                     })
+                                    
+                                    # Display Read-Only Details
+                                    st.markdown(f"""
+                                        <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                            <strong>👤 Name:</strong> {selected_author_details.name}<br>
+                                            <strong>📧 Email:</strong> {selected_author_details.email}<br>
+                                            <strong>📱 Phone:</strong> {selected_author_details.phone}
+                                        </div>
+                                    """, unsafe_allow_html=True)
+
                             elif selected_author == "Add New Author" and not disabled:
                                 st.session_state.new_authors[i]["author_id"] = None
+                                
+                                col1, col2 = st.columns(2)
+                                st.session_state.new_authors[i]["name"] = col1.text_input(
+                                    f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
+                                    disabled=disabled
+                                )
 
-                            col1, col2 = st.columns(2)
-                            st.session_state.new_authors[i]["name"] = col1.text_input(
-                                f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
-                                disabled=disabled
-                            )
                             available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
                                                 (existing_positions + [a["author_position"] for j, a in enumerate(st.session_state.new_authors) if j != i and a["author_position"]])]
-                            st.session_state.new_authors[i]["author_position"] = col2.selectbox(
-                                f"Position {i+1}",
-                                available_positions,
-                                key=f"new_author_position_{i}",
-                                disabled=disabled or not available_positions
-                            ) if available_positions else st.error("❌ No available positions left.")
+                            
+                            if selected_author != "Add New Author" and not disabled:
+                                st.session_state.new_authors[i]["author_position"] = st.selectbox(
+                                    f"Position {i+1}",
+                                    available_positions,
+                                    key=f"new_author_position_{i}",
+                                    disabled=disabled or not available_positions
+                                ) if available_positions else st.error("❌ No available positions left.")
+                            
+                            elif selected_author == "Add New Author" and not disabled:
+                                st.session_state.new_authors[i]["author_position"] = col2.selectbox(
+                                    f"Position {i+1}",
+                                    available_positions,
+                                    key=f"new_author_position_{i}",
+                                    disabled=disabled or not available_positions
+                                ) if available_positions else st.error("❌ No available positions left.")
 
-                            col3, col4 = st.columns(2)
-                            st.session_state.new_authors[i]["phone"] = col3.text_input(
-                                f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
-                                disabled=disabled
-                            )
-                            st.session_state.new_authors[i]["email"] = col4.text_input(
-                                f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
-                                disabled=disabled
-                            )
+                            if selected_author == "Add New Author" and not disabled:
+                                col3, col4 = st.columns(2)
+                                st.session_state.new_authors[i]["phone"] = col3.text_input(
+                                    f"Phone {i+1}", st.session_state.new_authors[i]["phone"], key=f"new_phone_{i}",
+                                    disabled=disabled
+                                )
+                                st.session_state.new_authors[i]["email"] = col4.text_input(
+                                    f"Email {i+1}", st.session_state.new_authors[i]["email"], key=f"new_email_{i}",
+                                    disabled=disabled
+                                )
 
                             col5, col6 = st.columns(2)
                             selected_agent = col5.selectbox(
@@ -6263,6 +6393,17 @@ def edit_operation_dialog(book_id, conn):
         with st.container(border=True):
             if is_publish_only or is_thesis_to_book:
                 st.warning("Writing section is disabled (Publish Only / Thesis to Book).")
+
+            # Download link if exists
+            if not (is_publish_only or is_thesis_to_book) and current_syllabus_path and os.path.exists(current_syllabus_path):
+                with open(current_syllabus_path, "rb") as f:
+                    st.download_button(
+                        label="Download Current Syllabus",
+                        data=f,
+                        file_name=os.path.basename(current_syllabus_path),
+                        key=f"download_syllabus_{book_id}",
+                        use_container_width=True
+                    )
             
             with st.form(key=f"writing_form_{book_id}", border=False):
                 # Worker selection
@@ -6328,16 +6469,9 @@ def edit_operation_dialog(book_id, conn):
                         if syllabus_file and current_syllabus_path:
                             st.caption("⚠️ Will replace existing syllabus.")
                         
-                        # Download link if exists
-                        if current_syllabus_path and os.path.exists(current_syllabus_path):
-                            with open(current_syllabus_path, "rb") as f:
-                                st.download_button(
-                                    label="Download Current Syllabus",
-                                    data=f,
-                                    file_name=os.path.basename(current_syllabus_path),
-                                    key=f"download_syllabus_{book_id}",
-                                    use_container_width=True
-                                )
+
+                        # Download link moved outside form
+
                 
 
                 st.write("") # Spacer
@@ -6921,119 +7055,146 @@ def edit_inventory_delivery_dialog(book_id, conn):
                     if selected_print_id:
                         edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
                         
-                        with st.container():
-                            # Compact layout: Use a single row with 5 columns
-                            col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
-                            with col1:
-                                edit_num_copies = st.number_input(
-                                    "Copies",
-                                    min_value=0,
-                                    step=1,
-                                    value=int(edit_row['copies_planned']),
-                                    key=f"edit_num_copies_{book_id}_{selected_print_id}",
-                                    label_visibility="visible"
-                                )
-                            with col3:
-                                edit_print_color = st.selectbox(
-                                    "Color",
-                                    options=["Black & White", "Full Color"],
-                                    index=["Black & White", "Full Color"].index(edit_row['print_color']),
-                                    key=f"edit_print_color_{book_id}_{selected_print_id}",
-                                    label_visibility="visible"
-                                )
-                            with col4:
-                                edit_binding = st.selectbox(
-                                    "Binding",
-                                    options=["Paperback", "Hardcover"],
-                                    index=["Paperback", "Hardcover"].index(edit_row['binding']),
-                                    key=f"edit_binding_{book_id}_{selected_print_id}",
-                                    label_visibility="visible"
-                                )
-                            with col5:
-                                edit_book_size = st.selectbox(
-                                    "Size",
-                                    options=["6x9", "8.5x11"],
-                                    index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
-                                    key=f"edit_book_size_{book_id}_{selected_print_id}",
-                                    label_visibility="visible"
-                                )
+                        # Only allow editing if status is 'Pending'
+                        if edit_row['status'] == 'Pending':
+                            with st.container():
+                                # Compact layout: Use a single row with 5 columns
+                                col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
+                                with col1:
+                                    edit_num_copies = st.number_input(
+                                        "Copies",
+                                        min_value=0,
+                                        step=1,
+                                        value=int(edit_row['copies_planned']),
+                                        key=f"edit_num_copies_{book_id}_{selected_print_id}",
+                                        label_visibility="visible"
+                                    )
+                                with col3:
+                                    edit_print_color = st.selectbox(
+                                        "Color",
+                                        options=["Black & White", "Full Color"],
+                                        index=["Black & White", "Full Color"].index(edit_row['print_color']),
+                                        key=f"edit_print_color_{book_id}_{selected_print_id}",
+                                        label_visibility="visible"
+                                    )
+                                with col4:
+                                    edit_binding = st.selectbox(
+                                        "Binding",
+                                        options=["Paperback", "Hardcover"],
+                                        index=["Paperback", "Hardcover"].index(edit_row['binding']),
+                                        key=f"edit_binding_{book_id}_{selected_print_id}",
+                                        label_visibility="visible"
+                                    )
+                                with col5:
+                                    edit_book_size = st.selectbox(
+                                        "Size",
+                                        options=["6x9", "8.5x11"],
+                                        index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
+                                        key=f"edit_book_size_{book_id}_{selected_print_id}",
+                                        label_visibility="visible"
+                                    )
 
-                            # Conditional input for color pages
-                            edit_color_pages = None
-                            if edit_print_color == "Full Color":
-                                edit_color_pages = st.number_input(
-                                    "Number of Color Pages",
-                                    min_value=0,
-                                    step=1,
-                                    value=int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0,
-                                    key=f"edit_color_pages_{book_id}_{selected_print_id}",
-                                    label_visibility="visible"
-                                )
+                                # Conditional input for color pages
+                                edit_color_pages = None
+                                if edit_print_color == "Full Color":
+                                    edit_color_pages = st.number_input(
+                                        "Number of Color Pages",
+                                        min_value=0,
+                                        step=1,
+                                        value=int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0,
+                                        key=f"edit_color_pages_{book_id}_{selected_print_id}",
+                                        label_visibility="visible"
+                                    )
 
-                            save_edit = st.button("💾 Save Edited Print Edition", width="stretch", key=f"save_edit_print_{book_id}_{selected_print_id}")
+                                save_edit = st.button("💾 Save Edited Print Edition", width="stretch", key=f"save_edit_print_{book_id}_{selected_print_id}")
 
-                            if save_edit:
-                                with st.spinner("Saving edited print edition..."):
-                                    import time
-                                    time.sleep(1)
-                                    try:
-                                        if edit_num_copies <= 0:
-                                            st.error("Copies must be greater than 0.")
-                                            return
-                                        if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
-                                            st.error("Number of Color Pages must be greater than 0 for Full Color.")
-                                            return
+                                if save_edit:
+                                    with st.spinner("Saving edited print edition..."):
+                                        import time
+                                        time.sleep(1)
+                                        try:
+                                            if edit_num_copies <= 0:
+                                                st.error("Copies must be greater than 0.")
+                                                return
+                                            if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
+                                                st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                                                return
 
-                                        # Track changes for logging
-                                        changes = []
-                                        if edit_num_copies != int(edit_row['copies_planned']):
-                                            changes.append(f"Copies Planned changed from '{int(edit_row['copies_planned'])}' to '{edit_num_copies}'")
-                                        if edit_print_color != edit_row['print_color']:
-                                            changes.append(f"Print Color changed from '{edit_row['print_color']}' to '{edit_print_color}'")
-                                        if edit_binding != edit_row['binding']:
-                                            changes.append(f"Binding changed from '{edit_row['binding']}' to '{edit_binding}'")
-                                        if edit_book_size != edit_row['book_size']:
-                                            changes.append(f"Book Size changed from '{edit_row['book_size']}' to '{edit_book_size}'")
-                                        if edit_print_color == "Full Color" and edit_color_pages != (int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0):
-                                            changes.append(f"Color Pages changed from '{int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 'None'}' to '{edit_color_pages}'")
+                                            # Track changes for logging
+                                            changes = []
+                                            if edit_num_copies != int(edit_row['copies_planned']):
+                                                changes.append(f"Copies Planned changed from '{int(edit_row['copies_planned'])}' to '{edit_num_copies}'")
+                                            if edit_print_color != edit_row['print_color']:
+                                                changes.append(f"Print Color changed from '{edit_row['print_color']}' to '{edit_print_color}'")
+                                            if edit_binding != edit_row['binding']:
+                                                changes.append(f"Binding changed from '{edit_row['binding']}' to '{edit_binding}'")
+                                            if edit_book_size != edit_row['book_size']:
+                                                changes.append(f"Book Size changed from '{edit_row['book_size']}' to '{edit_book_size}'")
+                                            if edit_print_color == "Full Color" and edit_color_pages != (int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0):
+                                                changes.append(f"Color Pages changed from '{int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 'None'}' to '{edit_color_pages}'")
 
-                                        with conn.session as session:
-                                            session.execute(
-                                                text("""
-                                                    UPDATE PrintEditions 
-                                                    SET copies_planned = :copies_planned,
-                                                        print_color = :print_color, 
-                                                        binding = :binding, 
-                                                        book_size = :book_size,
-                                                        color_pages = :color_pages
-                                                    WHERE print_id = :print_id
-                                                """),
-                                                {
-                                                    "print_id": selected_print_id,
-                                                    "copies_planned": edit_num_copies,
-                                                    "print_color": edit_print_color,
-                                                    "binding": edit_binding,
-                                                    "book_size": edit_book_size,
-                                                    "color_pages": edit_color_pages if edit_print_color == "Full Color" else None
-                                                }
-                                            )
-                                            session.commit()
-                                        # Log edit action
-                                        if changes:
-                                            log_activity(
-                                                conn,
-                                                st.session_state.user_id,
-                                                st.session_state.username,
-                                                st.session_state.session_id,
-                                                "edited print edition",
-                                                f"Book ID: {book_id}, Print ID: {selected_print_id}, Edition Number: {edit_row['edition_number']}, {', '.join(changes)}"
-                                            )
-                                        st.success("✔️ Updated Print Edition")
-                                        st.toast("Updated Print Edition", icon="✔️", duration="long")
-                                        st.cache_data.clear()
-                                    except Exception as e:
-                                        st.error(f"❌ Error saving print edition: {str(e)}")
-                                        st.toast(f"Error saving print edition: {str(e)}", duration="long")
+                                            with conn.session as session:
+                                                session.execute(
+                                                    text("""
+                                                        UPDATE PrintEditions 
+                                                        SET copies_planned = :copies_planned,
+                                                            print_color = :print_color, 
+                                                            binding = :binding, 
+                                                            book_size = :book_size,
+                                                            color_pages = :color_pages
+                                                        WHERE print_id = :print_id
+                                                    """),
+                                                    {
+                                                        "print_id": selected_print_id,
+                                                        "copies_planned": edit_num_copies,
+                                                        "print_color": edit_print_color,
+                                                        "binding": edit_binding,
+                                                        "book_size": edit_book_size,
+                                                        "color_pages": edit_color_pages if edit_print_color == "Full Color" else None
+                                                    }
+                                                )
+                                                session.commit()
+                                            # Log edit action
+                                            if changes:
+                                                log_activity(
+                                                    conn,
+                                                    st.session_state.user_id,
+                                                    st.session_state.username,
+                                                    st.session_state.session_id,
+                                                    "edited print edition",
+                                                    f"Book ID: {book_id}, Print ID: {selected_print_id}, Edition Number: {edit_row['edition_number']}, {', '.join(changes)}"
+                                                )
+                                            st.success("✔️ Updated Print Edition")
+                                            st.toast("Updated Print Edition", icon="✔️", duration="long")
+                                            st.cache_data.clear()
+                                        except Exception as e:
+                                            st.error(f"❌ Error saving print edition: {str(e)}")
+                                            st.toast(f"Error saving print edition: {str(e)}", duration="long")
+
+                                # Delete Option
+                                if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
+                                    with st.spinner("Deleting print edition..."):
+                                        import time
+                                        time.sleep(3)
+                                        try:
+                                            with conn.session as session:
+                                                session.execute(
+                                                    text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
+                                                    {"print_id": selected_print_id}
+                                                )
+                                                session.commit()
+                                            st.success("Print edition deleted successfully!")
+                                            st.toast("Print edition deleted!", icon="🗑️")
+                                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
+                                            st.cache_data.clear()
+                                        except Exception as e:
+                                            st.error(f"Error deleting print edition: {e}")
+                                            with conn.session as session:
+                                                session.rollback()
+                        
+                        else:
+                            st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
+                            st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
 
         with print_col2:
 

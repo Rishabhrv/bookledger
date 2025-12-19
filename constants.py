@@ -287,7 +287,7 @@ def get_total_unread_count(ict_conn, user_id):
             JOIN conversations c ON m.conversation_id = c.id
             WHERE m.sender_id != {user_id} 
             AND m.seen = 0
-            AND (c.user1id = {user_id} OR c.user2id = {user_id})
+            AND (c.user1_id = {user_id} OR c.user2_id = {user_id})
         """
         private_res = ict_conn.query(private_query, ttl=0, show_spinner = False)
         private_count = private_res.iloc[0]["count"] if not private_res.empty else 0
@@ -296,12 +296,12 @@ def get_total_unread_count(ict_conn, user_id):
         group_query = f"""
             SELECT COUNT(*) AS count
             FROM group_messages gm
-            JOIN groupmembers gu ON gm.groupid = gu.group_id
+            JOIN group_members gu ON gm.group_id = gu.group_id
             WHERE gu.user_id = {user_id}
             AND gm.sender_id != {user_id}
             AND gm.id NOT IN (
                 SELECT message_id 
-                FROM groupmessageseen 
+                FROM group_message_seen 
                 WHERE user_id = {user_id}
             )
         """

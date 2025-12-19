@@ -75,9 +75,11 @@ if "activity_logged" not in st.session_state:
 
 
 total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
-if "unread_toast_shown" not in st.session_state:
-    st.toast(f"You have {total_unread} unread messages!", icon="💬")
-    st.session_state.unread_toast_shown = True
+
+if total_unread > 0:
+    if "unread_toast_shown" not in st.session_state:
+        st.toast(f"You have {total_unread} unread messages!", icon="💬" , duration="infinite")
+        st.session_state.unread_toast_shown = True
 
 # Custom CSS for modern table styling and pagination controls
 st.markdown("""

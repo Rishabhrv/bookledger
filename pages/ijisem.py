@@ -123,11 +123,11 @@ if user_app == 'main':
         except Exception as e:
             st.error(f"Error logging navigation: {str(e)}")
 
+total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
 
-if user_app == 'ijisem':
-    total_unread = get_total_unread_count(ict_conn, st.session_state.user_id)
+if user_app == 'ijisem' and total_unread > 0:
     if "unread_toast_shown" not in st.session_state:
-        st.toast(f"You have {total_unread} unread messages!", icon="💬")
+        st.toast(f"You have {total_unread} unread messages!", icon="💬", duration="infinite")
         st.session_state.unread_toast_shown = True
 
 
