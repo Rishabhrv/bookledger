@@ -802,7 +802,7 @@ def get_daily_attendance(conn, attendance_date):
         st.error(f"Error fetching daily attendance: {e}")
         return []
 
-def determine_day_status(status, check_in_time, check_out_time):
+def determine_day_status(status, check_in_time, check_out_time, is_late=False, is_early_out=False, is_overtime=False, is_early_arrival=False):
     """Determine the visual status of a day based on attendance data"""
     if status == 'Holiday':
         return 'status-holiday', '🏖️ Holiday'
@@ -813,26 +813,6 @@ def determine_day_status(status, check_in_time, check_out_time):
     elif status == 'Absent':
         return 'status-absent', '❌ Absent'
     elif status == 'Present':
-        # Convert timedelta to time if needed
-        if check_in_time:
-            if isinstance(check_in_time, timedelta):
-                total_seconds = int(check_in_time.total_seconds())
-                hours = total_seconds // 3600
-                minutes = (total_seconds % 3600) // 60
-                check_in_time = dt_time(hours, minutes)
-        
-        if check_out_time:
-            if isinstance(check_out_time, timedelta):
-                total_seconds = int(check_out_time.total_seconds())
-                hours = total_seconds // 3600
-                minutes = (total_seconds % 3600) // 60
-                check_out_time = dt_time(hours, minutes)
-        
-        is_early_arrival = check_in_time and check_in_time < EARLY_ARRIVAL_THRESHOLD
-        is_late = check_in_time and check_in_time > LATE_THRESHOLD
-        is_early_out = check_out_time and check_out_time < SCHEDULED_OUT
-        is_overtime = check_out_time and check_out_time > OVERTIME_THRESHOLD
-        
         if is_early_arrival:
             return 'status-early-arrival', '🌅 Early Arrival'
         elif is_late and is_early_out:
@@ -1546,7 +1526,11 @@ def render_mini_day_card(day_date, attendance_dict, is_current_month):
         status_class, _ = determine_day_status(
             data['status'], 
             data['check_in'], 
-            data['check_out']
+            data['check_out'],
+            is_late=data.get('is_late', False),
+            is_early_out=data.get('is_early', False),
+            is_overtime=data.get('is_overtime', False),
+            is_early_arrival=data.get('is_early_arrival', False)
         )
         css_class = status_class
     else:
@@ -1822,7 +1806,7 @@ with tab1:
                     
                     # Format shift times
                     def fmt_time(t):
-                        if not t: return "?"
+                        if pd.isna(t): return "?"
                         if isinstance(t, timedelta):
                             seconds = t.total_seconds()
                             hours = int(seconds // 3600)
@@ -2278,7 +2262,7 @@ with tab2:
             st.stop()
             
         def fmt_s(t):
-             if not t: return "?"
+             if pd.isna(t): return "?"
              if isinstance(t, timedelta):
                  seconds = t.total_seconds()
                  hours = int(seconds // 3600)
@@ -2376,7 +2360,7 @@ with tab2:
                 current_shift_end = df.iloc[-1]['Shift End']
                 
                 def fmt_time_card(t):
-                     if not t: return "?"
+                     if pd.isna(t): return "?"
                      if isinstance(t, timedelta):
                          seconds = t.total_seconds()
                          hours = int(seconds // 3600)
@@ -3699,7 +3683,7 @@ with tab5:
                     
                     # Format times
                     def fmt_hist_time(t):
-                        if not t: return "-"
+                        if pd.isna(t): return "-"
                         if isinstance(t, timedelta):
                             seconds = t.total_seconds()
                             hours = int(seconds // 3600)
@@ -3816,7 +3800,7 @@ with tab5:
             def format_shift_col(row):
                 s, e = row['shift_start'], row['shift_end']
                 def ft(t):
-                    if not t: return "?"
+                    if pd.isna(t): return "?"
                     if isinstance(t, timedelta):
                         seconds = t.total_seconds()
                         hours = int(seconds // 3600)
