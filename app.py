@@ -283,7 +283,6 @@ BUTTON_CONFIG = {
         "page_path": "extra_books",
         "permission": "extra_books",
         "type": "new_tab",
-        "admin_only": True,
     },
     "edit_authors": {
         "label": "Edit Authors",
