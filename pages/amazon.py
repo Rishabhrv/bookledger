@@ -12,6 +12,8 @@ from collections import defaultdict
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import gzip
+import io
 
 # Set page configuration
 st.set_page_config(
@@ -168,6 +170,129 @@ def fetch_order_items_batch(access_token, order_ids, progress_callback=None):
                     all_items.append(item)
     
     return all_items
+
+
+def fetch_active_asins(access_token):
+    """Fetch all active listings using Reports API"""
+    reports_url = f"{ENDPOINT}/reports/2021-06-30/reports"
+    create_payload = {
+        "reportType": "GET_MERCHANT_LISTINGS_ALL_DATA",
+        "marketplaceIds": [MARKETPLACE_ID]
+    }
+    
+    try:
+        response = requests.post(
+            reports_url,
+            json=create_payload,
+            headers={"x-amz-access-token": access_token}
+        )
+        
+        if response.status_code != 202:
+            st.error(f"Error creating report: {response.text}")
+            return None
+            
+        report_id = response.json()['reportId']
+        
+        status_container = st.empty()
+        with st.spinner("Generating Amazon Listings Report... This may take a minute."):
+            while True:
+                status_response = requests.get(
+                    f"{reports_url}/{report_id}",
+                    headers={"x-amz-access-token": access_token}
+                )
+                if status_response.status_code != 200:
+                    st.error(f"Error checking report status: {status_response.text}")
+                    return None
+                    
+                report_status = status_response.json()
+                status = report_status.get('processingStatus')
+                status_container.info(f"⏳ Report Status: {status}...")
+                
+                if status == 'DONE':
+                    document_id = report_status.get('reportDocumentId')
+                    status_container.success("✅ Report Generated!")
+                    time.sleep(1)
+                    status_container.empty()
+                    break
+                elif status in ['CANCELLED', 'FATAL']:
+                    status_container.error(f"❌ Report generation failed: {status}")
+                    return None
+                
+                time.sleep(5) # Amazon suggests polling every 45 seconds, but for active listings 5-10s is usually fine
+        
+        doc_url_res = requests.get(
+            f"{ENDPOINT}/reports/2021-06-30/documents/{document_id}",
+            headers={"x-amz-access-token": access_token}
+        )
+        
+        if doc_url_res.status_code != 200:
+            st.error(f"Error getting document URL: {doc_url_res.text}")
+            return None
+            
+        doc_data = doc_url_res.json()
+        download_url = doc_data['url']
+        compression = doc_data.get('compressionAlgorithm')
+        
+        response = requests.get(download_url)
+        if compression == 'GZIP':
+            report_data = gzip.decompress(response.content).decode('utf-8', errors='ignore')
+        else:
+            report_data = response.content.decode('utf-8', errors='ignore')
+        
+        # Robustly find the header row
+        lines = report_data.split('\n')
+        header_idx = 0
+        found_header = False
+        
+        # Method 1: Search for known column headers
+        for i, line in enumerate(lines[:50]): # Check first 50 lines
+            line_lower = line.lower()
+            if ('sku' in line_lower and 'asin' in line_lower) or \
+               ('seller-sku' in line_lower) or \
+               ('item-name' in line_lower) or \
+               ('listing-id' in line_lower):
+                header_idx = i
+                found_header = True
+                break
+        
+        # Method 2: Fallback to line with most tabs if specific headers not found
+        if not found_header:
+            max_tabs = 0
+            for i, line in enumerate(lines[:50]):
+                tab_count = line.count('\t')
+                if tab_count > max_tabs:
+                    max_tabs = tab_count
+                    header_idx = i
+        
+        try:
+            # Use quoting=3 (QUOTE_NONE) to handle potential unescaped quotes in data
+            df = pd.read_csv(
+                io.StringIO(report_data), 
+                sep='\t', 
+                header=header_idx, 
+                on_bad_lines='skip',
+                quoting=3, # csv.QUOTE_NONE
+                dtype=str
+            )
+            return df
+        except Exception as read_err:
+            # Silent retry with python engine if C engine fails (more robust for malformed lines)
+            try:
+                df = pd.read_csv(
+                    io.StringIO(report_data), 
+                    sep='\t', 
+                    header=header_idx, 
+                    on_bad_lines='skip', 
+                    engine='python',
+                    dtype=str
+                )
+                return df
+            except Exception as final_err:
+                st.error(f"Failed to process listings report: {str(final_err)}")
+                return None
+    except Exception as e:
+        st.error(f"An error occurred while fetching listings: {str(e)}")
+        return None
 
 
 def calculate_metrics(orders, items):
@@ -863,10 +988,11 @@ if 'dashboard_data' in st.session_state and st.session_state.dashboard_data:
     # Export Options
     st.markdown("### 📥 Export Data")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         if st.button("📊 Export Full Report", use_container_width=True):
+            # ... (rest of the code for col1)
             summary = f"""
 AMAZON SELLER DASHBOARD - COMPREHENSIVE REPORT
 {'='*60}
@@ -958,6 +1084,43 @@ AOV Growth: {comparisons['avg_order_value']['growth']:+.2f}%
                 f"orders_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 "text/csv"
             )
+
+    with col4:
+        if st.button("📑 Export Active ASINs", use_container_width=True):
+            access_token = get_lwa_access_token()
+            if access_token:
+                with st.spinner('📥 Fetching active listings...'):
+                    asins_df = fetch_active_asins(access_token)
+                    if asins_df is not None:
+                        # Clean and filter columns as requested
+                        # 1. Clean Title (remove content after first '[')
+                        if 'item-name' in asins_df.columns:
+                            asins_df['item-name'] = asins_df['item-name'].astype(str).apply(
+                                lambda x: x.split('[')[0].strip()
+                            )
+                        
+                        # 2. Select only required columns
+                        target_columns = ['item-name', 'open-date', 'asin1']
+                        existing_columns = [col for col in target_columns if col in asins_df.columns]
+                        
+                        if existing_columns:
+                            asins_df = asins_df[existing_columns]
+                            
+                            # 3. Rename columns for clarity
+                            column_mapping = {
+                                'item-name': 'Product Title',
+                                'open-date': 'Date',
+                                'asin1': 'ASIN'
+                            }
+                            asins_df = asins_df.rename(columns=column_mapping)
+
+                        csv = asins_df.to_csv(index=False)
+                        st.download_button(
+                            "Download ASINs CSV",
+                            csv,
+                            f"active_asins_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            "text/csv"
+                        )
 
 else:
     st.info("👆 Click 'Refresh Data' in the sidebar to load dashboard data")

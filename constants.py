@@ -20,6 +20,7 @@ ACCESS_TO_BUTTON = {
     "Open Author Positions": "open_author_positions",
     "Pending Work": "pending_books",
     "IJISEM": "ijisem",
+    "Academic Guru": "academic_guru",
     "Tasks": "tasks",
     "Details": "details",
     "Message": "messages",
@@ -73,7 +74,14 @@ def connect_ict_db():
         st.error(f"Error connecting to MySQL: {e}")
         st.stop()
 
-
+@st.cache_resource
+def connect_db_ag():
+    try:
+        conn = st.connection('ag', type='sql')
+        return conn
+    except Exception as e:
+        st.error(f"Error connecting to MySQL: {e}")
+        st.stop()
 
 
 def get_page_url(page_path, token):

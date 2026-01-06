@@ -96,6 +96,17 @@ if click_id and click_id not in st.session_state.logged_click_ids:
 
 # --- Attendance Logic Constants (Removed global constants to support dynamic shifts) ---
 
+# Buffer settings (in minutes)
+LATE_BUFFER_MINUTES = 0
+EARLY_ARRIVAL_BUFFER_MINUTES = 8
+OVERTIME_BUFFER_MINUTES = 10
+
+def get_time_buffer_str(minutes):
+    """Convert minutes to 'HH:MM:SS' format for SQL ADDTIME/SUBTIME"""
+    h = int(minutes // 60)
+    m = int(minutes % 60)
+    return f"{h:02d}:{m:02d}:00"
+
 def add_shift(conn, employee_id, start_time, end_time, effective_from):
     """Add a new shift and update previous shift's effective_to"""
     try:
@@ -451,7 +462,7 @@ def get_employee_full_year_attendance(conn, employee_id, year):
                     a.notes,
                     CASE 
                         WHEN a.check_in_time IS NOT NULL 
-                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, :late_buffer) 
                         THEN 1 ELSE 0 
                     END as is_late,
                     CASE 
@@ -461,12 +472,12 @@ def get_employee_full_year_attendance(conn, employee_id, year):
                     END as is_early,
                     CASE 
                         WHEN a.check_out_time IS NOT NULL 
-                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, :ot_buffer) 
                         THEN 1 ELSE 0 
                     END as is_overtime,
                     CASE
                         WHEN a.check_in_time IS NOT NULL
-                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, :early_arr_buffer)
                         THEN 1 ELSE 0
                     END as is_early_arrival
                 FROM attendance a
@@ -475,7 +486,13 @@ def get_employee_full_year_attendance(conn, employee_id, year):
                 AND a.attendance_date >= s.effective_from 
                 AND (s.effective_to IS NULL OR a.attendance_date <= s.effective_to)
                 ORDER BY a.attendance_date
-            """), {"emp_id": employee_id, "year": year})
+            """), {
+                "emp_id": employee_id, 
+                "year": year,
+                "late_buffer": get_time_buffer_str(LATE_BUFFER_MINUTES),
+                "ot_buffer": get_time_buffer_str(OVERTIME_BUFFER_MINUTES),
+                "early_arr_buffer": get_time_buffer_str(EARLY_ARRIVAL_BUFFER_MINUTES)
+            })
             return result.fetchall()
     except Exception as e:
         st.error(f"Error fetching year attendance: {e}")
@@ -495,7 +512,7 @@ def get_employee_monthly_attendance(conn, employee_id, year, month):
                     a.notes,
                     CASE 
                         WHEN a.check_in_time IS NOT NULL 
-                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, :late_buffer) 
                         THEN 1 ELSE 0 
                     END as is_late,
                     CASE 
@@ -505,12 +522,12 @@ def get_employee_monthly_attendance(conn, employee_id, year, month):
                     END as is_early,
                     CASE 
                         WHEN a.check_out_time IS NOT NULL 
-                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, :ot_buffer) 
                         THEN 1 ELSE 0 
                     END as is_overtime,
                     CASE
                         WHEN a.check_in_time IS NOT NULL
-                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, :early_arr_buffer)
                         THEN 1 ELSE 0
                     END as is_early_arrival,
                     s.shift_start_time,
@@ -526,7 +543,10 @@ def get_employee_monthly_attendance(conn, employee_id, year, month):
             """), {
                 "emp_id": employee_id, 
                 "year": year, 
-                "month": month
+                "month": month,
+                "late_buffer": get_time_buffer_str(LATE_BUFFER_MINUTES),
+                "ot_buffer": get_time_buffer_str(OVERTIME_BUFFER_MINUTES),
+                "early_arr_buffer": get_time_buffer_str(EARLY_ARRIVAL_BUFFER_MINUTES)
             })
             return result.fetchall()
     except Exception as e:
@@ -659,7 +679,7 @@ def get_all_employees_attendance(conn, year, month=None):
                        a.attendance_date, a.check_in_time, a.check_out_time, a.status,
                        CASE 
                            WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
-                           AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                           AND a.check_in_time > ADDTIME(s.shift_start_time, :late_buffer) 
                            THEN 1 ELSE 0 
                        END as is_late,
                        CASE 
@@ -669,12 +689,12 @@ def get_all_employees_attendance(conn, year, month=None):
                        END as is_early,
                        CASE 
                            WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
-                           AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                           AND a.check_out_time > ADDTIME(s.shift_end_time, :ot_buffer) 
                            THEN 1 ELSE 0 
                        END as is_overtime,
                        CASE
                            WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
-                           AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                           AND a.check_in_time < SUBTIME(s.shift_start_time, :early_arr_buffer)
                            THEN 1 ELSE 0
                        END as is_early_arrival
                 FROM employees e
@@ -688,12 +708,17 @@ def get_all_employees_attendance(conn, year, month=None):
                 ORDER BY e.employee_id, a.attendance_date
             """
             
+            params = {
+                "year": year,
+                "late_buffer": get_time_buffer_str(LATE_BUFFER_MINUTES),
+                "ot_buffer": get_time_buffer_str(OVERTIME_BUFFER_MINUTES),
+                "early_arr_buffer": get_time_buffer_str(EARLY_ARRIVAL_BUFFER_MINUTES)
+            }
             if month:
-                result = s.execute(text(query.format(month_clause="AND MONTH(a.attendance_date) = :month")), 
-                                 {"year": year, "month": month})
+                params["month"] = month
+                result = s.execute(text(query.format(month_clause="AND MONTH(a.attendance_date) = :month")), params)
             else:
-                result = s.execute(text(query.format(month_clause="")), 
-                                 {"year": year})
+                result = s.execute(text(query.format(month_clause="")), params)
             rows = result.fetchall()
             return rows
     except Exception as e:
@@ -766,7 +791,7 @@ def get_daily_attendance(conn, attendance_date):
                     COALESCE(a.notes, '') as notes,
                     CASE 
                         WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
-                        AND a.check_in_time > ADDTIME(s.shift_start_time, '00:05:00') 
+                        AND a.check_in_time > ADDTIME(s.shift_start_time, :late_buffer) 
                         THEN 1 ELSE 0 
                     END as is_late,
                     CASE 
@@ -776,12 +801,12 @@ def get_daily_attendance(conn, attendance_date):
                     END as is_early,
                     CASE 
                         WHEN a.check_out_time IS NOT NULL AND s.shift_end_time IS NOT NULL
-                        AND a.check_out_time > ADDTIME(s.shift_end_time, '00:10:00') 
+                        AND a.check_out_time > ADDTIME(s.shift_end_time, :ot_buffer) 
                         THEN 1 ELSE 0 
                     END as is_overtime,
                     CASE
                         WHEN a.check_in_time IS NOT NULL AND s.shift_start_time IS NOT NULL
-                        AND a.check_in_time < SUBTIME(s.shift_start_time, '00:08:00')
+                        AND a.check_in_time < SUBTIME(s.shift_start_time, :early_arr_buffer)
                         THEN 1 ELSE 0
                     END as is_early_arrival,
                     s.shift_start_time,
@@ -795,7 +820,10 @@ def get_daily_attendance(conn, attendance_date):
                 WHERE e.employment_status = 'Active'
                 ORDER BY e.employee_name
             """), {
-                "att_date": attendance_date
+                "att_date": attendance_date,
+                "late_buffer": get_time_buffer_str(LATE_BUFFER_MINUTES),
+                "ot_buffer": get_time_buffer_str(OVERTIME_BUFFER_MINUTES),
+                "early_arr_buffer": get_time_buffer_str(EARLY_ARRIVAL_BUFFER_MINUTES)
             })
             return result.fetchall()
     except Exception as e:
@@ -1570,7 +1598,7 @@ def create_mini_month_calendar(year, month, attendance_dict):
                 render_mini_day_card(day_date, attendance_dict, is_current_month)
 
 # --- Analytics Functions ---
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=0)
 def get_holidays(_conn, year):
     """Fetch all holidays for a given year."""
     try:
@@ -1583,7 +1611,7 @@ def get_holidays(_conn, year):
         st.error(f"Error fetching holidays: {e}")
         return set()
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=0)
 def get_analytics_data(_conn, year, month=None):
     """Fetch all attendance data for analytics, for active employees."""
     try:

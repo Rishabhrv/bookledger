@@ -30,7 +30,15 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.write("## 🗑️ Extra & Deleted Books Manager")
+col1, col2 = st.columns([9, 1],vertical_alignment="bottom")
+
+with col1:
+    st.write("## 🗑️ Extra & Deleted Books Manager")
+with col2:
+    if st.button("🔄 Refresh", key="refresh_operations", type="tertiary", use_container_width=True):
+        st.cache_data.clear()
+
+
 conn = connect_db()
 
 # --- Data Fetching Functions ---

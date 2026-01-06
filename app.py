@@ -256,6 +256,13 @@ BUTTON_CONFIG = {
         "permission": "ijisem",
         "type": "new_tab",
     },
+    "academic_guru": {
+        "label": "Academic Guru",
+        "icon": "🎓",
+        "page_path": "academic_guru",
+        "permission": "academic_guru",
+        "type": "new_tab",
+    },
     "print_management": {
         "label": "Manage Prints",
         "icon": "🖨️",
@@ -6267,7 +6274,6 @@ def edit_operation_dialog(book_id, conn):
         with col2:
             if st.button("🔄 Refresh", key="refresh_operations", type="tertiary", use_container_width=True):
                 st.cache_data.clear()
-                st.rerun()
     else:
         st.markdown(f"### Operations for Book ID: {book_id}")
         st.warning("Book title not found.")
@@ -6383,7 +6389,7 @@ def edit_operation_dialog(book_id, conn):
     cover_options = ["Select Cover Designer"] + cover_names + ["Add New..."]
 
     # --- Tabs Layout ---
-    op_tabs = st.tabs(["✍️ Writing", "📏 Formatting", "🔍 Proofreading", "🎨 Book Cover"])
+    op_tabs = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
 
     # ==========================
     # TAB 1: Writing
@@ -6545,7 +6551,7 @@ def edit_operation_dialog(book_id, conn):
     # ==========================
     # TAB 2: Formatting
     # ==========================
-    with op_tabs[1]:
+    with op_tabs[2]:
         with st.container(border=True):
             with st.form(key=f"formatting_form_{book_id}", border=False):
                 selected_formatter = st.selectbox(
@@ -6600,7 +6606,7 @@ def edit_operation_dialog(book_id, conn):
     # ==========================
     # TAB 3: Proofreading
     # ==========================
-    with op_tabs[2]:
+    with op_tabs[1]:
         with st.container(border=True):
             with st.form(key=f"proofreading_form_{book_id}", border=False):
                 selected_proofreader = st.selectbox(
