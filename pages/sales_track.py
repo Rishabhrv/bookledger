@@ -601,6 +601,7 @@ with st.expander("📊 Filtered Metrics", expanded=True):
         st.info("No data available for metrics.")
 
 # Pagination
+total_pages = 0
 if not orders_df.empty:
     page_size = 20
     total_items = len(orders_df)
