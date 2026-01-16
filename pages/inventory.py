@@ -948,180 +948,132 @@ with filcol4:
     if st.button("📉", key="show_visualizations", type="secondary", width="stretch"):
         show_charts(data_for_chart)
 
-with filcol3:
-    with st.popover("More Filters & Sort", width="stretch"):
+# --- 1. SESSION STATE INITIALIZATION ---
+# We use the widget keys as the primary source of truth
+default_values = {
+    'search_term': '',
+    'cell_nos_widget': [],
+    'out_of_stock_widget': False,
+    'empty_cell_widget': False,
+    'no_links_widget': False,
+    'delivered_widget': True,
+    'stock_condition_widget': None,
+    'stock_value_widget': 0,
+    'sort_column_widget': 'Book Title',
+    'sort_order_widget': 'Ascending',
+    'current_page': 1
+}
 
-        if st.button(":material/restart_alt: Reset Filters", key="reset_filters", type="secondary", width="stretch"):
-            # Reset only non-widget session state variables
-            st.session_state.update({
-                'search_term': '',
-                'cell_nos': [],
-                'out_of_stock': False,
-                'stock_condition': None,
-                'stock_value': 0,
-                'sort_column': 'Book Title',
-                'sort_order': 'Ascending',
-                'current_page': 1,
-                'no_links': False,
-                'delivered': True  # Reset to default (True)
-            })
-            st.rerun()
-        
-        st.checkbox(
-            "Show Out of Stock Books",
-            value=st.session_state['out_of_stock'],
-            key="out_of_stock_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'out_of_stock': st.session_state['out_of_stock_widget'],
-                    'current_page': 1
-                })
-            )
-        )
+for key, value in default_values.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
 
-        st.checkbox(
-            "Show Books with No Links",
-            value=st.session_state['no_links'],
-            key="no_links_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'no_links': st.session_state['no_links_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-
-        st.checkbox(
-            "Show Delivered Books",
-            value=st.session_state['delivered'],
-            key="delivered_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'delivered': st.session_state['delivered_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-
-        cell_options = [x for x in df['Cell No.'].unique() if pd.notnull(x)]
-        st.multiselect(
-            "Filter by Cell",
-            options=cell_options,
-            default=st.session_state['cell_nos'],
-            key="cell_nos_widget",
-            placeholder="Filter by Cell",
-            on_change=lambda: (
-                st.session_state.update({
-                    'cell_nos': st.session_state['cell_nos_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-
-        st.selectbox(
-            "Stock Filter",
-            [None, "Greater than", "Equal to", "Less than"],
-            index=[None, "Greater than", "Equal to", "Less than"].index(st.session_state['stock_condition']),
-            key="stock_condition_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'stock_condition': st.session_state['stock_condition_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-        max_stock = int(df['In Stock'].max()) if not df['In Stock'].empty else 0
-        st.number_input(
-            "Stock Value",
-            min_value=0,
-            max_value=max_stock,
-            value=st.session_state['stock_value'],
-            key="stock_value_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'stock_value': st.session_state['stock_value_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-        st.selectbox(
-            "Sort by",
-            options=df.columns,
-            index=list(df.columns).index(st.session_state['sort_column']) if st.session_state['sort_column'] in df.columns else 0,
-            key="sort_column_widget",
-            on_change=lambda: (
-                st.session_state.update({
-                    'sort_column': st.session_state['sort_column_widget'],
-                    'current_page': 1
-                })
-            )
-        )
-
-        col1, col2 = st.columns([3, 1.2], gap="small", vertical_alignment="bottom")
-        with col1:
-            st.radio(
-                "Sort Order",
-                ["Ascending", "Descending"],
-                index=["Ascending", "Descending"].index(st.session_state['sort_order']),
-                horizontal=True,
-                key="sort_order_widget",
-                on_change=lambda: (
-                    st.session_state.update({
-                        'sort_order': st.session_state['sort_order_widget'],
-                        'current_page': 1
-                    })
-                )
-            )
-        with col2:
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label=":material/vertical_align_bottom: Export CSV",
-                data=csv,
-                file_name="inventory_export.csv",
-                mime="text/csv",
-                key="export_table",
-                type="tertiary"
-            )
-
-# Apply filters
+# --- 2. FILTERING & SORTING LOGIC ---
+# This must stay before the UI to ensure the CSV export is accurate
 filtered_df = df.copy()
-if st.session_state['delivered']:
+
+# Apply Filters based on WIDGET keys
+if st.session_state['delivered_widget']:
     filtered_df = filtered_df[filtered_df['deliver'] == 1]
+
+if st.session_state['out_of_stock_widget']:
+    filtered_df = filtered_df[filtered_df['In Stock'] == 0]
+
+if st.session_state['empty_cell_widget']:
+    filtered_df = filtered_df[filtered_df['Cell No.'].isna() | (filtered_df['Cell No.'].astype(str).str.strip() == "")]
+
 if st.session_state['search_term']:
     filtered_df = filtered_df[
         filtered_df['Book Title'].str.contains(st.session_state['search_term'], case=False, na=False) |
         filtered_df['Book ID'].astype(str).str.contains(st.session_state['search_term'], case=False, na=False)
     ]
-if st.session_state['cell_nos']:
-    filtered_df = filtered_df[filtered_df['Cell No.'].isin(st.session_state['cell_nos'])]
-if st.session_state['out_of_stock']:
-    filtered_df = filtered_df[filtered_df['In Stock'] == 0]
-elif st.session_state['stock_condition'] is not None:
-    if st.session_state['stock_condition'] == "Equal to":
-        filtered_df = filtered_df[filtered_df['In Stock'] == st.session_state['stock_value']]
-    elif st.session_state['stock_condition'] == "Greater than":
-        filtered_df = filtered_df[filtered_df['In Stock'] > st.session_state['stock_value']]
-    elif st.session_state['stock_condition'] == "Less than":
-        filtered_df = filtered_df[filtered_df['In Stock'] < st.session_state['stock_value']]
-if st.session_state['no_links']:
+
+if st.session_state['cell_nos_widget']:
+    filtered_df = filtered_df[filtered_df['Cell No.'].isin(st.session_state['cell_nos_widget'])]
+
+if not st.session_state['out_of_stock_widget'] and st.session_state['stock_condition_widget']:
+    cond = st.session_state['stock_condition_widget']
+    val = st.session_state['stock_value_widget']
+    if cond == "Equal to":
+        filtered_df = filtered_df[filtered_df['In Stock'] == val]
+    elif cond == "Greater than":
+        filtered_df = filtered_df[filtered_df['In Stock'] > val]
+    elif cond == "Less than":
+        filtered_df = filtered_df[filtered_df['In Stock'] < val]
+
+if st.session_state['no_links_widget']:
     filtered_df = filtered_df[
-        filtered_df['flipkart_link'].isna() &
-        filtered_df['agph_link'].isna() &
-        filtered_df['amazon_link'].isna() &
-        filtered_df['google_link'].isna()
+        filtered_df['flipkart_link'].isna() & 
+        filtered_df['agph_link'].isna() & 
+        filtered_df['amazon_link'].isna()
     ]
 
+# Sort logic
+sort_asc = st.session_state['sort_order_widget'] == "Ascending"
+filtered_df = filtered_df.sort_values(by=st.session_state['sort_column_widget'], ascending=sort_asc)
 
+# --- 3. UI RENDERING ---
+with filcol3:
+    with st.popover("⚙️ Advanced Filters & Export", width="stretch"):
+        
+        # Reset Button logic - This now updates the WIDGET keys directly
+        if st.button(":material/restart_alt: Reset All Filters", type="primary", use_container_width=True):
+            for key, value in default_values.items():
+                st.session_state[key] = value
+            st.rerun()
+
+        st.divider()
+
+        # Section 1: Quick Toggles
+        st.markdown("**Status Filters**")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.checkbox("Show Delivered", key="delivered_widget")
+            st.checkbox("Out of Stock Only", key="out_of_stock_widget")
+        with col_b:
+            st.checkbox("Missing Links", key="no_links_widget")
+            st.checkbox("No Cell Number", key="empty_cell_widget")
+
+        st.divider()
+
+        # Section 2: Inventory Specifics
+        st.markdown("**Inventory & Location**")
+        cell_options = sorted([x for x in df['Cell No.'].unique() if pd.notnull(x)])
+        st.multiselect("Filter by Cell", options=cell_options, key="cell_nos_widget")
+
+        s_col1, s_col2 = st.columns(2)
+        with s_col1:
+            st.selectbox("Condition", [None, "Greater than", "Equal to", "Less than"], key="stock_condition_widget")
+        with s_col2:
+            st.number_input("Stock Value", min_value=0, key="stock_value_widget")
+
+        st.divider()
+
+        # Section 3: Sorting & Data Export
+        st.markdown("**Sorting & Export**")
+        sort_col1, sort_col2 = st.columns([2, 1])
+        with sort_col1:
+            st.selectbox("Sort by", options=df.columns, key="sort_column_widget")
+        with sort_col2:
+            st.radio("Order", ["Ascending", "Descending"], key="sort_order_widget")
+
+        # The CSV is generated from the ALREADY filtered_df
+        csv_data = filtered_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Visible Results (CSV)",
+            data=csv_data,
+            file_name="inventory_filtered.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+
+# Final Status Badge
 with filcol1:
     st.markdown(f'<div class="status-badge-red">All Books <span class="badge-count">{len(filtered_df)}</span></div>', unsafe_allow_html=True)
 
-# Sort functionality
-sort_ascending = st.session_state['sort_order'] == "Ascending"
-filtered_df = filtered_df.sort_values(by=st.session_state['sort_column'], ascending=sort_ascending)
-
 # Custom table with pagination
 if not filtered_df.empty:
-    column_widths = [0.8, 3, 0.6, 1.3, 1, 0.8, 1, 0.5, 0.6, 0.6, 0.7, 0.7]
+    column_widths = [0.8, 3, 0.6, 1.3, 1, 1, 0.6, 0.6, 0.7, 0.7, 0.7, 0.7]
     books_per_page = 50
     total_books = len(filtered_df)
     total_pages = (total_books + books_per_page - 1) // books_per_page
@@ -1134,11 +1086,11 @@ if not filtered_df.empty:
         cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
         cols[1].markdown('<div class="table-header">Book Title</div>', unsafe_allow_html=True)
         cols[2].markdown('<div class="table-header">Cell</div>', unsafe_allow_html=True)
-        cols[3].markdown('<div class="table-header">ISBN</div>', unsafe_allow_html=True)
-        cols[4].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
-        cols[5].markdown('<div class="table-header">Prints</div>', unsafe_allow_html=True)
-        cols[6].markdown('<div class="table-header">To Authors</div>', unsafe_allow_html=True)
-        cols[7].markdown('<div class="table-header">AGPH</div>', unsafe_allow_html=True)
+        cols[3].markdown('<div class="table-header">Date</div>', unsafe_allow_html=True)
+        cols[4].markdown('<div class="table-header">Prints</div>', unsafe_allow_html=True)
+        cols[5].markdown('<div class="table-header">To Authors</div>', unsafe_allow_html=True)
+        cols[6].markdown('<div class="table-header">AGPH</div>', unsafe_allow_html=True)
+        cols[7].markdown('<div class="table-header">Direct</div>', unsafe_allow_html=True)
         cols[8].markdown('<div class="table-header">Amazon</div>', unsafe_allow_html=True)
         cols[9].markdown('<div class="table-header">Filpkart</div>', unsafe_allow_html=True)
         cols[10].markdown('<div class="table-header">Stock</div>', unsafe_allow_html=True)
@@ -1152,11 +1104,11 @@ if not filtered_df.empty:
             cols[0].markdown(f'<div class="{row_class}">{row["Book ID"]}</div>', unsafe_allow_html=True)
             cols[1].markdown(f'<div class="{row_class}">{row["Book Title"]}</div>', unsafe_allow_html=True)
             cols[2].markdown(f'<div class="{row_class}">{cell_no}</div>', unsafe_allow_html=True)
-            cols[3].markdown(f'<div class="{row_class}">{isbn}</div>', unsafe_allow_html=True)
-            cols[4].markdown(f'<div class="{row_class}">{publication_date}</div>', unsafe_allow_html=True)
-            cols[5].markdown(f'<div class="{row_class}">{int(row["Total Prints"]) if pd.notnull(row["Total Prints"]) else 0}</div>', unsafe_allow_html=True)
-            cols[6].markdown(f'<div class="{row_class}">{int(row["Author Copies"]) if pd.notnull(row["Author Copies"]) else 0}</div>', unsafe_allow_html=True)
-            cols[7].markdown(f'<div class="{row_class}">{int(row["AGPH Store"]) if pd.notnull(row["AGPH Store"]) else 0}</div>', unsafe_allow_html=True)
+            cols[3].markdown(f'<div class="{row_class}">{publication_date}</div>', unsafe_allow_html=True)
+            cols[4].markdown(f'<div class="{row_class}">{int(row["Total Prints"]) if pd.notnull(row["Total Prints"]) else 0}</div>', unsafe_allow_html=True)
+            cols[5].markdown(f'<div class="{row_class}">{int(row["Author Copies"]) if pd.notnull(row["Author Copies"]) else 0}</div>', unsafe_allow_html=True)
+            cols[6].markdown(f'<div class="{row_class}">{int(row["AGPH Store"]) if pd.notnull(row["AGPH Store"]) else 0}</div>', unsafe_allow_html=True)
+            cols[7].markdown(f'<div class="{row_class}">{int(row["Direct"]) if pd.notnull(row["Direct"]) else 0}</div>', unsafe_allow_html=True)
             cols[8].markdown(f'<div class="{row_class}">{int(row["Amazon"]) if pd.notnull(row["Amazon"]) else 0}</div>', unsafe_allow_html=True)
             cols[9].markdown(f'<div class="{row_class}">{int(row["Filpkart"]) if pd.notnull(row["Filpkart"]) else 0}</div>', unsafe_allow_html=True)
             cols[10].markdown(f'**<div class="{row_class}">{int(row["In Stock"]) if pd.notnull(row["In Stock"]) else 0}</div>**', unsafe_allow_html=True)

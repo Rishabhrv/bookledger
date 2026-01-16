@@ -277,6 +277,13 @@ BUTTON_CONFIG = {
         "permission": "inventory",
         "type": "new_tab",
     },
+    "sales_track": {
+        "label": "Sales Tracking",
+        "icon": "📈",
+        "page_path": "sales_track",
+        "permission": "sales_track",
+        "type": "new_tab",
+    },
     "author_positions": {
         "label": "Open Positions",
         "icon": "📚",

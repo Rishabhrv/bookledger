@@ -26,6 +26,7 @@ ACCESS_TO_BUTTON = {
     "Message": "messages",
     "Attendance": "attendance",
     "Extra Books": "extra_books",
+    "Sales Tracking": "sales_track",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Authors Edit": "edit_author_detail"

@@ -107,13 +107,16 @@ st.markdown("""
         color: #2c3e50;
     }
     .branch-text {
-        font-size: 12px;
-        color: #0d6efd;
-        background-color: #e7f1ff;
-        padding: 2px 6px;
-        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        color: #5c7cfa;
+        background-color: #f8f9ff;
+        border: 1px solid #e0e7ff;
+        padding: 1px 8px;
+        border-radius: 12px;
         display: inline-block;
         margin-bottom: 4px;
+        letter-spacing: 0.3px;
     }
     .services-text {
         font-size: 12px;
@@ -183,6 +186,7 @@ def fetch_orders(conn):
                 o.order_id,
                 c.full_name,
                 c.university,
+                c.phone,
                 o.branch,
                 o.title_topic,
                 o.deadline,
@@ -198,7 +202,7 @@ def fetch_orders(conn):
             JOIN clients c ON o.client_id = c.client_id
             LEFT JOIN order_services os ON o.order_id = os.order_id
             LEFT JOIN services s ON os.service_id = s.service_id
-            GROUP BY o.order_id, c.full_name, c.university, o.branch, o.title_topic, o.deadline, o.total_amount, o.payment_status, o.status, o.created_at, o.assignee
+            GROUP BY o.order_id, c.full_name, c.university, c.phone, o.branch, o.title_topic, o.deadline, o.total_amount, o.payment_status, o.status, o.created_at, o.assignee
             ORDER BY o.order_id DESC
         """
         df = conn.query(query, ttl=0)
@@ -249,6 +253,14 @@ def fetch_all_usernames(conn):
         st.error(f"User Fetch Error: {e}")
         return []
 
+def get_service_options(conn):
+    try:
+        df = conn.query("SELECT service_name FROM services ORDER BY service_name", ttl=0)
+        return df['service_name'].tolist()
+    except Exception as e:
+        st.error(f"Error fetching services: {e}")
+        return []
+
 # ==============================================================================
 # FILTERS
 # ==============================================================================
@@ -257,7 +269,7 @@ def all_filters(df):
     if 'filters' not in st.session_state:
         st.session_state.filters = {'status': None, 'payment': None}
 
-    col1, col2, col3 = st.columns([4, 4, 2], vertical_alignment="center")
+    col1, col2, col3, col4 = st.columns([4, 4, 2, 1], vertical_alignment="center")
     
     with col1:
         search_query = st.text_input(
@@ -286,6 +298,17 @@ def all_filters(df):
                 default=st.session_state.filters['payment']
             )
 
+    with col3:
+        if st.button("➕ New Order", type="primary", use_container_width=True):
+            add_order_dialog(conn, users_conn)
+
+    with col4:
+        with st.popover("Settings", use_container_width=True):
+            if st.button("Edit Client", use_container_width=True, type="tertiary"):
+                edit_client_dialog(conn)
+            if st.button("Edit Services", use_container_width=True, type="tertiary"):
+                manage_services_config_dialog(conn)
+
     filtered_df = df.copy()
     if search_query:
         search_query = search_query.lower()
@@ -302,7 +325,7 @@ def all_filters(df):
     if st.session_state.filters['payment']:
         filtered_df = filtered_df[filtered_df['payment_status'] == st.session_state.filters['payment']]
 
-    return filtered_df, col3
+    return filtered_df
 
 # ==============================================================================
 # DIALOGS
@@ -647,12 +670,7 @@ def add_order_dialog(conn, users_conn):
     with st.container():
         st.subheader("🛠️ Services & Fee")
         
-        service_options = [
-            "Synopsis", "Thesis Document", "Thesis Chapters", "Research Paper Writing",
-            "Research Paper Publishing", "Review Paper Writing", "Review Paper Publishing",
-            "Conference Paper Writing", "Presentation (PPT)", "Plagiarism Removing",
-            "Software Work", "Questionnaire", "Hypothesis Testing"
-        ]
+        service_options = get_service_options(conn)
 
         col1, col2 = st.columns([2, 1])
 
@@ -779,12 +797,7 @@ def edit_order_dialog(order_id, conn, users_conn):
         st.error(f"Error fetching order: {e}")
         return
 
-    service_options = [
-        "Synopsis", "Thesis Document", "Thesis Chapters", "Research Paper Writing",
-        "Research Paper Publishing", "Review Paper Writing", "Review Paper Publishing",
-        "Conference Paper Writing", "Presentation (PPT)", "Plagiarism Removing",
-        "Software Work", "Questionnaire", "Hypothesis Testing", "Other Work"
-    ]
+    service_options = get_service_options(conn)
 
     with st.container():
         # === Assignee ===
@@ -870,28 +883,121 @@ def edit_order_dialog(order_id, conn, users_conn):
             except Exception as e:
                 st.error(f"Error: {e}")
 
+@st.dialog("Edit Client Details", width="medium", on_dismiss="rerun")
+def edit_client_dialog(conn):
+    # Fetch all clients
+    try:
+        with conn.session as s:
+            clients = s.execute(text("SELECT client_id, full_name, email, phone, university FROM clients ORDER BY full_name")).fetchall()
+        
+        if not clients:
+            st.warning("No clients found.")
+            return
+
+        client_dict = {c.client_id: c for c in clients}
+        client_options = {c.client_id: f"{c.full_name} ({c.university or 'No Uni'})" for c in clients}
+        
+        selected_id = st.selectbox("Select Client", options=list(client_options.keys()), format_func=lambda x: client_options[x])
+        
+        if selected_id:
+            client = client_dict[selected_id]
+            st.write("")
+            with st.form("edit_client_form"):
+                new_name = st.text_input("Full Name", value=client.full_name)
+                col_c1, col_c2 = st.columns(2)
+                with col_c1:
+                    new_phone = st.text_input("Phone / WhatsApp", value=client.phone or "")
+                with col_c2:
+                    new_email = st.text_input("Email", value=client.email or "")
+                
+                new_uni = st.text_input("University", value=client.university or "")
+                
+                if st.form_submit_button("Update Client Details", type="primary"):
+                    try:
+                        with conn.session as s:
+                            s.execute(text("""
+                                UPDATE clients 
+                                SET full_name = :name, email = :email, phone = :phone, university = :uni
+                                WHERE client_id = :cid
+                            """), {
+                                "name": new_name, "email": new_email or None, 
+                                "phone": new_phone or None, "uni": new_uni or None,
+                                "cid": selected_id
+                            })
+                            s.commit()
+                        st.success("Client updated successfully!")
+                    except Exception as e:
+                        st.error(f"Error updating client: {e}")
+    except Exception as e:
+        st.error(f"Database error: {e}")
+
+@st.dialog("Manage Offered Services", width="medium", on_dismiss="rerun")
+def manage_services_config_dialog(conn):
+    st.caption("Manage the master list of services offered.")
+    
+    # --- Add New Service ---
+    with st.container():
+        c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+        new_svc_name = c1.text_input("Add New Service", placeholder="e.g. Statistical Analysis", label_visibility="visible")
+        if c2.button("Add Service", type="primary", use_container_width=True):
+            if new_svc_name.strip():
+                try:
+                    with conn.session as s:
+                        s.execute(text("INSERT INTO services (service_name) VALUES (:name)"), {"name": new_svc_name.strip()})
+                        s.commit()
+                    st.success("Added!")
+                except Exception as e:
+                    st.error(f"Error adding: {e}")
+            else:
+                st.warning("Please enter a service name.")
+    
+    st.divider()
+
+    # --- List Services ---
+    try:
+        # Fetch directly to list
+        with conn.session as s:
+            services = s.execute(text("SELECT service_id, service_name FROM services ORDER BY service_name")).fetchall()
+        
+        if not services:
+            st.info("No services defined.")
+            return
+
+        for svc in services:
+            col1, col2 = st.columns([4, 1], vertical_alignment="center")
+            col1.write(svc.service_name)
+            if col2.button("🗑️", key=f"del_btn_{svc.service_id}"):
+                try:
+                    with conn.session as s:
+                        s.execute(text("DELETE FROM services WHERE service_id = :id"), {"id": svc.service_id})
+                        s.commit()
+                except Exception:
+                    st.error("Cannot delete (in use).")
+
+    except Exception as e:
+        st.error(f"Error loading services: {e}")
+
 # ==============================================================================
 # MAIN PAGE
 # ==============================================================================
 
 
-col1,col2 = st.columns([8,1], vertical_alignment="bottom")
+col1,col2= st.columns([11,1], vertical_alignment="bottom")
 with col1:
     st.title("Academic Guru 🎓")
 
 with col2:
-    st.caption(f'User: {st.session_state.username}')
+    if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
+        st.cache_data.clear()
 
 # Load Data
 with st.spinner("Fetching orders..."):
     df = fetch_orders(conn)
 
 # Filters and Action Bar
-filtered_df, action_col = all_filters(df)
+filtered_df = all_filters(df)
 
-with action_col:
-    if st.button("➕ New Order", type="primary", use_container_width=True):
-        add_order_dialog(conn, users_conn)
+
 
 with st.expander("📊Overview", expanded=False):
     # Metrics
@@ -958,11 +1064,15 @@ else:
                 # Client & Assignee
                 with cols[1]:
                     uni = row['university'] if row['university'] else "Unknown University"
+                    phone = row['phone'] if row['phone'] else "No Phone"
                     
                     st.markdown(f"""
                         <div class="client-name">{row['full_name']}</div>
                         <div class="client-sub">
                             <span class="material-symbols-rounded" style="font-size:14px">school</span> {uni}
+                        </div>
+                        <div class="client-sub">
+                            <span class="material-symbols-rounded" style="font-size:14px">call</span> {phone}
                         </div>
                         
                     """, unsafe_allow_html=True)
