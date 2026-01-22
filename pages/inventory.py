@@ -627,6 +627,7 @@ def update_book_details(book_id, current_data):
     if print_status != 0:
         with tab1:
             # Sales inputs
+            st.warning("⚠️ Manual edits here may be overwritten if you perform a 'Sync with Orders' from the main inventory page. It is recommended to record sales through the 'Sales Tracking' page.")
             st.markdown("#### Sales Numbers and Cell No.")
             col1, col2 = st.columns(2)
             with col1:
@@ -1049,8 +1050,6 @@ with filcol3:
 
         st.divider()
 
-        # Section 3: Sorting & Data Export
-        st.markdown("**Sorting & Export**")
         sort_col1, sort_col2 = st.columns([2, 1])
         with sort_col1:
             st.selectbox("Sort by", options=df.columns, key="sort_column_widget")

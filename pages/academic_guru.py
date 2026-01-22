@@ -53,8 +53,8 @@ click_id = st.session_state.get("click_id", None)
 session_id = st.session_state.get("session_id", None)
 
 
-# Log page access if coming from main page and click_id is new
-if user_app in ["main", "tasks"] and click_id and click_id not in st.session_state.logged_click_ids:
+# Log page access if click_id is new and user is admin or coming from main/tasks app
+if (user_role == 'admin' or user_app in ["main", "tasks"]) and click_id and click_id not in st.session_state.logged_click_ids:
     try:
         log_activity(
             users_conn,
@@ -305,9 +305,9 @@ def all_filters(df):
     with col4:
         with st.popover("Settings", use_container_width=True):
             if st.button("Edit Client", use_container_width=True, type="tertiary"):
-                edit_client_dialog(conn)
+                edit_client_dialog(conn, users_conn)
             if st.button("Edit Services", use_container_width=True, type="tertiary"):
-                manage_services_config_dialog(conn)
+                manage_services_config_dialog(conn, users_conn)
 
     filtered_df = df.copy()
     if search_query:
@@ -376,7 +376,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.dialog("Update Payment", on_dismiss="rerun", width="medium")
-def payment_dialog(order_id, conn):
+def payment_dialog(order_id, conn, users_conn):
 
     col1, col2 = st.columns([4, 1])
     with col1:
@@ -389,13 +389,13 @@ def payment_dialog(order_id, conn):
         with conn.session as session:
             query = text("SELECT total_amount FROM orders WHERE order_id = :order_id")
             result = session.execute(query, {'order_id': order_id}).fetchone()
-            current_total_amount = result.total_amount if result and result.total_amount else 0
+            current_total_amount = float(result.total_amount) if result and result.total_amount else 0.0
 
             payments_query = text("SELECT payment_id, amount, payment_date FROM order_payments WHERE order_id = :order_id ORDER BY created_at")
             payments = session.execute(payments_query, {'order_id': order_id}).fetchall()
             
-            total_paid = sum(p.amount for p in payments)
-            due_amount = max(0, current_total_amount - total_paid)
+            total_paid = sum(float(p.amount) for p in payments)
+            due_amount = max(0.0, current_total_amount - total_paid)
             
             # Metrics Section
             c1, c2, c3 = st.columns(3, gap="medium")
@@ -446,6 +446,20 @@ def payment_dialog(order_id, conn):
                  session.execute(text("UPDATE orders SET total_amount = :amt WHERE order_id = :oid"),
                                  {'amt': new_total_amount, 'oid': order_id})
                  session.commit()
+            
+            # Log Activity
+            try:
+                log_activity(
+                    users_conn,
+                    st.session_state.user_id,
+                    st.session_state.username,
+                    st.session_state.session_id,
+                    "updated payment total",
+                    f"Order #{order_id}: Total Amount updated from ₹{current_total_amount:,.2f} to ₹{new_total_amount:,.2f}"
+                )
+            except Exception as e:
+                st.error(f"Log Error: {e}")
+
             st.success("Total amount updated.")
 
 
@@ -479,6 +493,20 @@ def payment_dialog(order_id, conn):
                             session.execute(text("UPDATE orders SET payment_status = :status WHERE order_id = :oid"),
                                             {'status': new_status, 'oid': order_id})
                             session.commit()
+                        
+                        # Log Activity
+                        try:
+                            log_activity(
+                                users_conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "added payment",
+                                f"Order #{order_id}: Added Payment of ₹{new_payment_amount:,.2f}"
+                            )
+                        except Exception as e:
+                            st.error(f"Log Error: {e}")
+
                         st.success("Payment added successfully!")
                     except Exception as e:
                         st.error(f"Error adding payment: {e}")
@@ -516,7 +544,7 @@ def manage_services_dialog(order_id, conn, users_conn):
     except Exception:
         pass
 
-    st.write(f"### 📋 {header_info} Services")
+    st.write(f"### 📋 {header_info}")
     
     # 1. FETCH DATA
     users = fetch_all_usernames(users_conn)
@@ -527,6 +555,7 @@ def manage_services_dialog(order_id, conn, users_conn):
         FROM order_services os
         JOIN services s ON os.service_id = s.service_id
         WHERE os.order_id = :oid
+        ORDER BY s.service_name
     """
     df = conn.query(query, params={'oid': order_id}, ttl=0)
     
@@ -534,69 +563,240 @@ def manage_services_dialog(order_id, conn, users_conn):
         st.info("No services found.")
         return
 
-    # 2. PREPARE DATAFRAME FOR UI
-    # We map status to emojis to give it "color" since editable cells can't have bg colors
+    # Status Mappings
     status_map = {
-        'NOT_STARTED': '⚪ NOT STARTED',
-        'IN_PROGRESS': '🔵 IN PROGRESS',
-        'CHANGES_REQUIRED': '🟡 CHANGES REQUIRED',
-        'ON_HOLD': '🟠 ON HOLD',
-        'COMPLETED': '🟢 COMPLETED'
+        'NOT_STARTED': 'Not Started',
+        'IN_PROGRESS': 'In Progress',
+        'CHANGES_REQUIRED': 'Changes Required',
+        'ON HOLD': 'On Hold',
+        'COMPLETED': 'Completed'
     }
-    # Reverse map for database saving
     rev_status_map = {v: k for k, v in status_map.items()}
+    status_options = list(status_map.values())
     
-    # Format DF for display
-    display_df = df.copy()
-    display_df['status'] = display_df['status'].map(status_map).fillna('⚪ NOT STARTED')
-    display_df['service'] = display_df['custom_name'].fillna(display_df['service_name'])
+    # We will collect the "current state" of chapters df in this dict to process on Save
+    chapter_editors = {} 
+
     
-    # 3. CONFIGURE THE EDITOR
-    # This turns the table into a smart interface
-    edited_df = st.data_editor(
-        display_df[['order_service_id', 'service', 'start_date', 'end_date', 'assignee', 'status']],
-        column_config={
-            "order_service_id": None, # Hide ID
-            "service": st.column_config.TextColumn("Service Name", disabled=True, width="medium"),
-            "start_date": st.column_config.DatetimeColumn("Start", format="D MMM YYYY, h:mm a"),
-            "end_date": st.column_config.DatetimeColumn("End", format="D MMM YYYY, h:mm a"),
-            "assignee": st.column_config.SelectboxColumn("Assignee", options=[None] + users, width="small"),
-            "status": st.column_config.SelectboxColumn("Status", options=list(status_map.values()), width="medium", required=True),
-        },
-        hide_index=True,
-        use_container_width=True,
-        key=f"editor_{order_id}"
-    )
+    # Helper for status formatting
+    def format_status_label(status_code):
+        return status_map.get(status_code, status_code.replace('_', ' ').title())
 
-    col1, col2 = st.columns([7, 1])
+    # Helper for status colors
+    def get_status_color(status_code):
+        color_map = {
+            'NOT_STARTED': 'red',
+            'IN_PROGRESS': 'blue',
+            'CHANGES_REQUIRED': 'orange',
+            'ON HOLD': 'grey',
+            'COMPLETED': 'green'
+        }
+        return color_map.get(status_code, 'grey')
 
-    with col2:
-        # 4. SAVE CHANGES
-        # We detect changes by comparing the returned dataframe with the original
-        if st.button("Save All Changes", type="primary", use_container_width=True):
-            changes_found = False
+    # Split DataFrames - Specifically targeting "Thesis Document" or "Thesis Chapters"
+    target_services = ["Thesis Document", "Thesis Chapters"]
+    
+    thesis_df = df[
+        df['service_name'].isin(target_services) | 
+        df['custom_name'].str.contains('|'.join(target_services), case=False, na=False)
+    ]
+    other_df = df[~df.index.isin(thesis_df.index)]
+
+    # --- RENDER FUNCTION ---
+    def render_service_card(row, users, status_options, expanded=True):
+        service_name = row['custom_name'] if row['custom_name'] else row['service_name']
+        actual_service_name = row['service_name']
+        os_id = row['order_service_id']
+        current_status_code = row['status']
+        
+        status_label = format_status_label(current_status_code)
+        status_color = get_status_color(current_status_code)
+        
+        # Expander Title with Color
+        expander_title = f":{status_color}[{status_label}] - {service_name}"
+        
+        with st.expander(expander_title, expanded=expanded):
+            c1, c2, c3, c4 = st.columns(4)
+            
+            # Dynamic keys for widgets
+            val_start = row['start_date'] if pd.notna(row['start_date']) else None
+            val_end = row['end_date'] if pd.notna(row['end_date']) else None
+            
+            new_start = c1.datetime_input("Start Date", value=val_start, key=f"start_{os_id}", format="YYYY/MM/DD")
+            new_end = c2.datetime_input("End Date", value=val_end, key=f"end_{os_id}", format="YYYY/MM/DD")
+            
+            # Handle Assignee default index
             try:
-                with conn.session as session:
-                    for idx, row in edited_df.iterrows():
-                        # Strip emojis back to DB format
-                        clean_status = rev_status_map.get(row['status'], 'NOT_STARTED')
+                assignee_idx = users.index(row['assignee']) + 1 
+            except (ValueError, TypeError):
+                assignee_idx = 0
+            
+            new_assignee = c3.selectbox("Assignee", options=[None] + users, index=assignee_idx, key=f"assignee_{os_id}")
+            
+            # Handle Status default index
+            try:
+                status_label_current = status_map.get(current_status_code, 'Not Started')
+                status_idx = status_options.index(status_label_current)
+            except ValueError:
+                status_idx = 0
+            
+            new_status_label = c4.selectbox("Status", options=status_options, index=status_idx, key=f"status_{os_id}")
+
+            # --- THESIS CHAPTERS LOGIC (Specific to target services) ---
+            is_target_thesis = any(ts.lower() in service_name.lower() for ts in target_services) or \
+                              actual_service_name in target_services
+
+            if is_target_thesis:
+                st.markdown(":material/library_books: **Thesis Chapters Management**")
+                
+                ch_query = """
+                    SELECT chapter_id, chapter_name, start_date, end_date, plagiarism_check, status, assignee
+                    FROM thesis_chapters
+                    WHERE order_service_id = :os_id
+                    ORDER BY chapter_id
+                """
+                chapters_df = conn.query(ch_query, params={'os_id': os_id}, ttl=0)
+                
+                # Map chapter status to labels for editor
+                display_chapters_df = chapters_df.copy()
+                display_chapters_df['status'] = display_chapters_df['status'].map(status_map).fillna('Not Started')
+
+                edited_chapters = st.data_editor(
+                    display_chapters_df,
+                    column_config={
+                        "chapter_id": None,
+                        "chapter_name": st.column_config.TextColumn("Chapter Name", required=True, width="medium"),
+                        "start_date": st.column_config.DatetimeColumn("Start", format="D MMM YYYY, h:mm a"),
+                        "end_date": st.column_config.DatetimeColumn("End", format="D MMM YYYY, h:mm a"),
+                        "assignee": st.column_config.SelectboxColumn("Assignee", options=users, width="medium"),
+                        "plagiarism_check": st.column_config.CheckboxColumn("Plag. Check", default=False, width="small"),
+                        "status": st.column_config.SelectboxColumn("Status", options=status_options, required=True, default="Not Started"),
+                    },
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    key=f"ch_editor_{os_id}"
+                )
+                
+                chapter_editors[os_id] = {
+                    'original': chapters_df,
+                    'edited': edited_chapters
+                }
+
+    # A. Render Thesis Services (Full Width)
+    if not thesis_df.empty:
+        st.subheader("Thesis Services")
+        for i, row in thesis_df.iterrows():
+            render_service_card(row, users, status_options)
+        st.divider()
+
+    # B. Render Other Services (2 Columns)
+    if not other_df.empty:
+        st.subheader("Other Services")
+        cols = st.columns(2)
+        for i, (index, row) in enumerate(other_df.iterrows()):
+            with cols[i % 2]:
+                render_service_card(row, users, status_options, expanded=False)
+
+    st.write("")
+    if st.button("Save All Changes", type="primary", use_container_width=True):
+        try:
+            with conn.session as session:
+                with st.spinner("Saving changes..."):
+                    import time
+                    time.sleep(2)  # Simulate delay
+                    changes_made = [] # To store descriptive log strings
+                    
+                    # --- A. SAVE & TRACK SERVICES ---
+                    for i, row in df.iterrows():
+                        os_id = row['order_service_id']
+                        s_name = row['custom_name'] if row['custom_name'] else row['service_name']
                         
-                        session.execute(text("""
-                            UPDATE order_services 
-                            SET start_date = :s, end_date = :e, assignee = :a, status = :st
-                            WHERE order_service_id = :id
-                        """), {
-                            's': row['start_date'], 'e': row['end_date'],
-                            'a': row['assignee'], 'st': clean_status,
-                            'id': row['order_service_id']
-                        })
+                        # Get values from session state
+                        new_s = st.session_state.get(f"start_{os_id}")
+                        new_e = st.session_state.get(f"end_{os_id}")
+                        new_a = st.session_state.get(f"assignee_{os_id}")
+                        new_st_label = st.session_state.get(f"status_{os_id}")
+                        new_st_code = rev_status_map.get(new_st_label, 'NOT_STARTED')
+
+                        # Comparison Logic for Logging
+                        field_changes = []
+                        if str(new_s) != str(row['start_date']): field_changes.append(f"Start Date ({row['start_date']} → {new_s})")
+                        if str(new_e) != str(row['end_date']): field_changes.append(f"End Date ({row['end_date']} → {new_e})")
+                        if new_a != row['assignee']: field_changes.append(f"Assignee ({row['assignee']} → {new_a})")
+                        if new_st_code != row['status']: field_changes.append(f"Status ({row['status']} → {new_st_code})")
+
+                        if field_changes:
+                            changes_made.append(f"Updated Service '{s_name}': {', '.join(field_changes)}")
+                            # DB Update
+                            session.execute(text("""
+                                UPDATE order_services 
+                                SET start_date = :s, end_date = :e, assignee = :a, status = :st
+                                WHERE order_service_id = :id
+                            """), {'s': new_s, 'e': new_e, 'a': new_a, 'st': new_st_code, 'id': os_id})
+
+                    # --- B. SAVE & TRACK CHAPTERS ---
+                    for os_id, ch_data in chapter_editors.items():
+                        original_df = ch_data['original']
+                        edited_df = ch_data['edited']
+                        
+                        orig_ids = set(original_df['chapter_id'].dropna().astype(int))
+                        current_ids = set(edited_df['chapter_id'].dropna().astype(int))
+                        
+                        # 1. Identify Deletions
+                        ids_to_delete = orig_ids - current_ids
+                        for did in ids_to_delete:
+                            ch_name = original_df[original_df['chapter_id'] == did]['chapter_name'].values[0]
+                            changes_made.append(f"Deleted Chapter: '{ch_name}'")
+                            session.execute(text("DELETE FROM thesis_chapters WHERE chapter_id = :cid"), {'cid': did})
+                        
+                        # 2. Identify Upserts
+                        for idx, ch_row in edited_df.iterrows():
+                            cid = ch_row.get('chapter_id')
+                            p_check = 1 if ch_row['plagiarism_check'] else 0
+                            assignee_val = ch_row['assignee'][0] if isinstance(ch_row['assignee'], list) else ch_row['assignee']
+                            status_val = ch_row['status'][0] if isinstance(ch_row['status'], list) else ch_row['status']
+                            ch_st_code = rev_status_map.get(status_val, 'NOT_STARTED')
+
+                            if pd.notna(cid) and cid in orig_ids:
+                                # Update Check: See if anything actually changed
+                                orig_row = original_df[original_df['chapter_id'] == cid].iloc[0]
+                                if ch_row['chapter_name'] != orig_row['chapter_name'] or ch_st_code != orig_row['status']:
+                                    changes_made.append(f"Updated Chapter '{ch_row['chapter_name']}' status to {ch_st_code}")
+                                
+                                session.execute(text("""
+                                    UPDATE thesis_chapters 
+                                    SET chapter_name = :name, start_date = :s, end_date = :e, 
+                                        plagiarism_check = :pc, status = :st, assignee = :assignee
+                                    WHERE chapter_id = :cid
+                                """), {'name': ch_row['chapter_name'], 's': ch_row['start_date'], 'e': ch_row['end_date'],
+                                       'pc': p_check, 'st': ch_st_code, 'assignee': assignee_val, 'cid': cid})
+                            else:
+                                # Insert
+                                changes_made.append(f"Added New Chapter: '{ch_row['chapter_name']}'")
+                                session.execute(text("""
+                                    INSERT INTO thesis_chapters (order_service_id, chapter_name, start_date, end_date, plagiarism_check, status, assignee)
+                                    VALUES (:osid, :name, :s, :e, :pc, :st, :assignee)
+                                """), {'osid': os_id, 'name': ch_row['chapter_name'], 's': ch_row['start_date'], 'e': ch_row['end_date'],
+                                       'pc': p_check, 'st': ch_st_code, 'assignee': assignee_val})
+
                     session.commit()
-                    st.success("Saved!")
-                    st.toast("Data Saved successfully!", icon="✅")
-            except Exception as e:
-                st.error(f"Save failed: {e}")
-    with col1:
-        st.caption("Tip: You can drag column borders to resize or click headers to sort.")
+                    
+                    # --- C. FINAL LOGGING ---
+                    if changes_made:
+                        log_detail = " | ".join(changes_made)
+                        log_activity(
+                            users_conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "updated services",
+                            f"Order #{order_id}: {log_detail}"
+                        )
+
+                    st.success("All changes saved successfully!")
+                
+        except Exception as e:
+            st.error(f"Error saving changes: {e}")
 
 
 @st.dialog("Add New Academic Work Order", width="large", on_dismiss="rerun")
@@ -768,6 +968,28 @@ def add_order_dialog(conn, users_conn):
                     })
 
                 session.commit()
+                
+                # Log Activity
+                try:
+                    client_log_name = new_name.strip()
+                    if client_mode == "Existing Client":
+                        cn_res = session.execute(text("SELECT full_name FROM clients WHERE client_id = :id"), {'id': selected_client}).fetchone()
+                        if cn_res:
+                            client_log_name = f"{cn_res[0]} (ID: {selected_client})"
+                        else:
+                            client_log_name = f"Client ID: {selected_client}"
+
+                    log_activity(
+                        users_conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "created order",
+                        f"Created Order #{order_id} | Client: {client_log_name} | Topic: {topic}"
+                    )
+                except Exception as e:
+                    st.error(f"Log Error: {e}")
+
                 st.success(f"✅ Order #{order_id} created successfully!")
 
         except Exception as e:
@@ -863,6 +1085,20 @@ def edit_order_dialog(order_id, conn, users_conn):
                                      'NOT_STARTED')
                                 """), {"order_id": order_id, "service_name": service_name, "deadline": deadline})
                             session.commit()
+                            
+                            # Log Update
+                            try:
+                                log_activity(
+                                    users_conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "updated order",
+                                    f"Updated Order #{order_id} | Topic: {topic} | Branch: {branch}"
+                                )
+                            except Exception as e:
+                                st.error(f"Log Error: {e}")
+
                             st.success("Updated!")
                     except Exception as e:
                         st.error(f"Error: {e}")
@@ -879,12 +1115,26 @@ def edit_order_dialog(order_id, conn, users_conn):
                     session.execute(text("DELETE FROM order_services WHERE order_id = :order_id"), {'order_id': order_id})
                     session.execute(text("DELETE FROM orders WHERE order_id = :order_id"), {'order_id': order_id})
                     session.commit()
+                
+                # Log Delete
+                try:
+                    log_activity(
+                        users_conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "deleted order",
+                        f"Deleted Order #{order_id} | Topic: {order.title_topic}"
+                    )
+                except Exception as e:
+                    st.error(f"Log Error: {e}")
+
                 st.success("Deleted.")
             except Exception as e:
                 st.error(f"Error: {e}")
 
 @st.dialog("Edit Client Details", width="medium", on_dismiss="rerun")
-def edit_client_dialog(conn):
+def edit_client_dialog(conn, users_conn):
     # Fetch all clients
     try:
         with conn.session as s:
@@ -925,6 +1175,20 @@ def edit_client_dialog(conn):
                                 "cid": selected_id
                             })
                             s.commit()
+                        
+                        # Log Activity
+                        try:
+                            log_activity(
+                                users_conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "updated client",
+                                f"Updated Client Details: {new_name} (ID: {selected_id})"
+                            )
+                        except Exception as e:
+                            st.error(f"Log Error: {e}")
+
                         st.success("Client updated successfully!")
                     except Exception as e:
                         st.error(f"Error updating client: {e}")
@@ -932,7 +1196,7 @@ def edit_client_dialog(conn):
         st.error(f"Database error: {e}")
 
 @st.dialog("Manage Offered Services", width="medium", on_dismiss="rerun")
-def manage_services_config_dialog(conn):
+def manage_services_config_dialog(conn, users_conn):
     st.caption("Manage the master list of services offered.")
     
     # --- Add New Service ---
@@ -945,6 +1209,20 @@ def manage_services_config_dialog(conn):
                     with conn.session as s:
                         s.execute(text("INSERT INTO services (service_name) VALUES (:name)"), {"name": new_svc_name.strip()})
                         s.commit()
+                    
+                    # Log Add
+                    try:
+                        log_activity(
+                            users_conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "added service definition",
+                            f"Added Service: {new_svc_name.strip()}"
+                        )
+                    except Exception as e:
+                        st.error(f"Log Error: {e}")
+
                     st.success("Added!")
                 except Exception as e:
                     st.error(f"Error adding: {e}")
@@ -971,6 +1249,21 @@ def manage_services_config_dialog(conn):
                     with conn.session as s:
                         s.execute(text("DELETE FROM services WHERE service_id = :id"), {"id": svc.service_id})
                         s.commit()
+                    
+                    # Log Delete
+                    try:
+                        log_activity(
+                            users_conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "deleted service definition",
+                            f"Deleted Service: {svc.service_name}"
+                        )
+                    except Exception as e:
+                        st.error(f"Log Error: {e}")
+                    
+                    st.rerun()
                 except Exception:
                     st.error("Cannot delete (in use).")
 
@@ -1151,7 +1444,7 @@ else:
                             edit_order_dialog(row['order_id'], conn, users_conn)
                     with btn_col2:
                         if st.button(":material/currency_rupee:", key=f"pay_{row['order_id']}", help="Payments"):
-                            payment_dialog(row['order_id'], conn)
+                            payment_dialog(row['order_id'], conn, users_conn)
                     with btn_col3:
                          if st.button(":material/design_services:", key=f"services_{row['order_id']}", help="Manage Services"):
                             manage_services_dialog(row['order_id'], conn, users_conn)

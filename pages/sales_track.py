@@ -6,7 +6,6 @@ from sqlalchemy import text
 from constants import log_activity, initialize_click_and_session_id, connect_db
 import uuid
 from auth import validate_token
-from pages.academic_guru import add_order_dialog
 
 st.set_page_config(page_title='Sales Tracking', page_icon="📈", layout="wide")
 
@@ -18,6 +17,29 @@ st.logo(logo, size="large", icon_image=small_logo)
 # Validate token and initialize session
 validate_token()
 initialize_click_and_session_id()
+conn = connect_db()
+
+# Initialize logged_click_ids if not present
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+
+session_id = st.session_state.session_id
+click_id = st.session_state.get("click_id", None)
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Sales Tracking"
+        )
+        st.session_state.logged_click_ids.add(click_id)
+    except Exception as e:
+        st.error(f"Error logging navigation: {str(e)}")
 
 # Access control
 user_role = st.session_state.get("role", None)
@@ -34,7 +56,19 @@ if user_role != 'admin' and not (
     st.error("⚠️ Access Denied: You don't have permission to access this page.")
     st.stop()
 
-conn = connect_db()
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 7px !important;  /* Small padding for breathing room */
+        }
+            """, unsafe_allow_html=True)
+
 
 # Initialize Table
 def init_db():
@@ -122,79 +156,75 @@ with col2:
     if st.button(":material/refresh: Refresh", key="refresh", type="tertiary"):
         st.cache_data.clear()
 
-# Add New Order Section
-@st.dialog("Printed Book Order", width="large", on_dismiss="rerun")
+@st.dialog("Printed Book Order", width="large")
 def add_order_dialog():
-    st.subheader("Order Details")
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    # --- SECTION 1: CORE ORDER DETAILS ---
+    st.subheader("📦 Order Information")
+    
+    # Row 1: Book, Source, and Quantity
+    r1c1, r1c2, r1c3 = st.columns([2, 1, 1])
+    with r1c1:
         selected_book_label = st.selectbox("Select Book", options=list(book_options.keys()), index=None, placeholder="Choose a book...")
-        # Get MRP for selected book
         selected_mrp = 0.0
         if selected_book_label:
             bid = book_options[selected_book_label]
             selected_mrp = float(book_prices.get(bid, 0.0) or 0.0)
-            st.caption(f"MRP: ₹{selected_mrp:,.2f}")
+            st.caption(f"**MRP:** ₹{selected_mrp:,.2f}")
 
-    with c2:
-        # Trigger rerun on change to update conditional fields
+    with r1c2:
         source = st.selectbox("Source", ["Amazon", "Flipkart", "Website", "Direct"])
-    with c3:
-        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
     
-    c4, c5, c6 = st.columns(3)
-    with c4:
+    with r1c3:
+        quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+
+    # Row 2: ID, Date, and Conditional Discounted Price
+    r2c1, r2c2, r2c3 = st.columns(3, vertical_alignment="bottom")
+    with r2c1:
+        order_id = st.text_input("Order ID", placeholder="e.g., #12345")
+    
+    with r2c2:
+        order_date = st.date_input("Order Date", value=datetime.now())
+
+    with r2c3:
         discounted_price = None
         if source == "Direct":
-            discounted_price = st.number_input("Discounted Price (Per Unit)", min_value=0.0, value=selected_mrp, step=10.0, help="Selling price per book")
-    with c5:
-        order_date = st.date_input("Order Date", value=datetime.now())
-    with c6:
-        order_id = st.text_input("Order ID", placeholder="e.g., #12345")
-        
-    # Status Selection
-    status_options = ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"]
-    order_status = st.selectbox("Order Status", status_options)
+            discounted_price = st.number_input("Unit Price (Direct)", min_value=0.0, value=selected_mrp, step=10.0)
+        else:
+            # Placeholder to keep the layout consistent
+            st.info("Price managed by Platform")
 
-    # Status Date
-    date_label = f"{order_status} Date" if order_status != "New Order" else "Status Date"
-    status_date = st.date_input(date_label, value=datetime.now(), help=f"Date when order was {order_status}")
+    # Row 3: Workflow/Status
+    st.markdown("---")
+    r3c1, r3c2 = st.columns(2)
+    with r3c1:
+        status_options = ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"]
+        order_status = st.selectbox("Order Status", status_options)
+    
+    with r3c2:
+        date_label = f"{order_status} Date" if order_status != "New Order" else "Status Date"
+        status_date = st.date_input(date_label, value=datetime.now())
 
-    st.divider()
-    st.subheader("Customer Details")
+    # --- SECTION 2: CUSTOMER DETAILS ---
+    st.subheader("👤 Customer & Shipping")
     
-    city = None
-    customer_name = None
-    customer_phone = None
-    shipping_address = None
-    corresponding_person = None
-    organization = None
-    
-    if source in ["Amazon", "Flipkart", "Website"]:
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            customer_name = st.text_input("Customer Name", placeholder="Enter Name")
-        with cc2:
-            customer_phone = st.text_input("Customer Number", placeholder="Enter Phone Number")
-        
+    # Initialize variables
+    city, customer_name, customer_phone, shipping_address = None, None, None, None
+    corresponding_person, organization = None, None
+
+    # Use a container to keep the layout tight
+    with st.container(border=True):
+        if source == "Direct":
+            cc1, cc2 = st.columns(2)
+            corresponding_person = cc1.text_input("Corresponding Person", placeholder="Contact Name")
+            organization = cc2.text_input("Organization", placeholder="School/Store Name")
+        else:
+            cc1, cc2 = st.columns(2)
+            customer_name = cc1.text_input("Customer Name", placeholder="Enter Full Name")
+            customer_phone = cc2.text_input("Phone Number", placeholder="e.g., 9876543210")
+
         cc3, cc4 = st.columns([1, 2])
-        with cc3:
-            city = st.text_input("City", placeholder="Enter City")
-        with cc4:
-            shipping_address = st.text_area("Address", placeholder="Enter Shipping Address", height=68)
-        
-    elif source == "Direct":
-        cc1, cc2 = st.columns(2)
-        with cc1:
-            corresponding_person = st.text_input("Corresponding Person", placeholder="Person Name")
-        with cc2:
-            organization = st.text_input("Organization", placeholder="Organization Name")
-        
-        cc3, cc4 = st.columns([1, 2])
-        with cc3:
-            city = st.text_input("City", placeholder="Enter City")
-        with cc4:
-            shipping_address = st.text_area("Location / Address", placeholder="Enter Location or Address", height=68)
+        city = cc3.text_input("City", placeholder="City Name")
+        shipping_address = cc4.text_area("Full Address", placeholder="House No, Street, Landmark...", height=68)
 
     if st.button("Record Sale", type="primary"):
         if not selected_book_label:
@@ -263,22 +293,27 @@ def add_order_dialog():
                     }
                     inv_col = source_map[source]
 
-                    # Check if inventory record exists
-                    exists = s.execute(text("SELECT 1 FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
-                    
-                    if exists:
-                        s.execute(
-                            text(f"UPDATE inventory SET {inv_col} = COALESCE({inv_col}, 0) + :quantity WHERE book_id = :book_id"),
-                            {"quantity": quantity, "book_id": book_id}
-                        )
-                    else:
-                        # Create new inventory record
-                        s.execute(
-                            text(f"INSERT INTO inventory (book_id, {inv_col}) VALUES (:book_id, :quantity)"),
-                            {"book_id": book_id, "quantity": quantity}
-                        )
+                    # Only update inventory if it's NOT a return
+                    if order_status != "Returned":
+                        # Check if inventory record exists
+                        exists = s.execute(text("SELECT 1 FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+                        
+                        if exists:
+                            s.execute(
+                                text(f"UPDATE inventory SET {inv_col} = COALESCE({inv_col}, 0) + :quantity WHERE book_id = :book_id"),
+                                {"quantity": quantity, "book_id": book_id}
+                            )
+                        else:
+                            # Create new inventory record
+                            s.execute(
+                                text(f"INSERT INTO inventory (book_id, {inv_col}) VALUES (:book_id, :quantity)"),
+                                {"book_id": book_id, "quantity": quantity}
+                            )
 
                     s.commit()
+                
+                # Extract book title from label "Title (ID: ...)"
+                book_title = selected_book_label.split(" (ID:")[0] if selected_book_label else "Unknown Book"
                 
                 log_activity(
                     conn,
@@ -286,7 +321,7 @@ def add_order_dialog():
                     st.session_state.username,
                     st.session_state.session_id,
                     "recorded sale",
-                    f"Book: {book_id}, Source: {source}, Qty: {quantity}, Status: {order_status}"
+                    f"Order #{order_id} - {book_title} (Qty: {quantity}) via {source}"
                 )
                 st.success("✅ Sale recorded successfully!")
                 st.cache_data.clear()
@@ -456,6 +491,7 @@ def edit_order_dialog(order_data):
                 # Handle inventory adjustments
                 old_qty = int(order_data['quantity'])
                 old_source = order_data['source']
+                old_status = order_data['order_status']
                 
                 source_map = {
                     "Amazon": "amazon_sales",
@@ -464,27 +500,30 @@ def edit_order_dialog(order_data):
                     "Direct": "direct_sales"
                 }
 
-                # Revert old
-                old_inv_col = source_map.get(old_source, "amazon_sales")
-                s.execute(
-                    text(f"UPDATE inventory SET {old_inv_col} = GREATEST(COALESCE({old_inv_col}, 0) - :qty, 0) WHERE book_id = :book_id"),
-                    {"qty": old_qty, "book_id": book_id}
-                )
+                # 1. Revert old sale if it was counted (not a return)
+                if old_status != "Returned":
+                    old_inv_col = source_map.get(old_source, "amazon_sales")
+                    s.execute(
+                        text(f"UPDATE inventory SET {old_inv_col} = GREATEST(COALESCE({old_inv_col}, 0) - :qty, 0) WHERE book_id = :book_id"),
+                        {"qty": old_qty, "book_id": book_id}
+                    )
 
-                # Apply new
-                new_inv_col = source_map.get(source, "amazon_sales")
-                # Check exist
-                exists = s.execute(text("SELECT 1 FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
-                if exists:
-                    s.execute(
-                        text(f"UPDATE inventory SET {new_inv_col} = COALESCE({new_inv_col}, 0) + :qty WHERE book_id = :book_id"),
-                        {"qty": quantity, "book_id": book_id}
-                    )
-                else:
-                    s.execute(
-                        text(f"INSERT INTO inventory (book_id, {new_inv_col}) VALUES (:book_id, :qty)"),
-                        {"book_id": book_id, "qty": quantity}
-                    )
+                # 2. Apply new sale if it should be counted (not a return)
+                if order_status != "Returned":
+                    new_inv_col = source_map.get(source, "amazon_sales")
+                    # Check exist
+                    exists = s.execute(text("SELECT 1 FROM inventory WHERE book_id = :book_id"), {"book_id": book_id}).fetchone()
+                    if exists:
+                        s.execute(
+                            text(f"UPDATE inventory SET {new_inv_col} = COALESCE({new_inv_col}, 0) + :qty WHERE book_id = :book_id"),
+                            {"qty": quantity, "book_id": book_id}
+                        )
+                    else:
+                        # Create new inventory record
+                        s.execute(
+                            text(f"INSERT INTO inventory (book_id, {new_inv_col}) VALUES (:book_id, :qty)"),
+                            {"book_id": book_id, "qty": quantity}
+                        )
 
                 s.commit()
             
@@ -494,7 +533,7 @@ def edit_order_dialog(order_data):
                 st.session_state.username,
                 st.session_state.session_id,
                 "updated sale",
-                f"Order ID: {order_data['id']}, New Status: {order_status}"
+                f"Order #{order_data.get('order_id', 'N/A')} - {order_data.get('title', 'Unknown Book')} (New Status: {order_status})"
             )
             st.success("✅ Order updated successfully!")
             st.cache_data.clear()
@@ -504,27 +543,102 @@ def edit_order_dialog(order_data):
         except Exception as e:
             st.error(f"Error updating order: {e}")
 
+# Delete Order Dialog
+@st.dialog("Delete Order", width="small")
+def delete_order_dialog(order_data):
+    st.warning(f"Are you sure you want to delete Order #{order_data['order_id']}?")
+    st.write(f"Book: {order_data['title']}")
+    st.write(f"Quantity: {order_data['quantity']}")
+    
+    if st.button("Confirm Delete", type="primary", use_container_width=True):
+        try:
+            with conn.session as s:
+                # 1. Delete from sales_orders
+                s.execute(text("DELETE FROM sales_orders WHERE id = :id"), {"id": order_data['id']})
+                
+                # 2. Update inventory (revert sale if it was counted)
+                if order_data['order_status'] != "Returned":
+                    source_map = {
+                        "Amazon": "amazon_sales",
+                        "Flipkart": "flipkart_sales",
+                        "Website": "website_sales",
+                        "Direct": "direct_sales"
+                    }
+                    inv_col = source_map.get(order_data['source'], "amazon_sales")
+                    s.execute(
+                        text(f"UPDATE inventory SET {inv_col} = GREATEST(COALESCE({inv_col}, 0) - :qty, 0) WHERE book_id = :book_id"),
+                        {"qty": order_data['quantity'], "book_id": order_data['book_id']}
+                    )
+                s.commit()
+            
+            log_activity(
+                conn,
+                st.session_state.user_id,
+                st.session_state.username,
+                st.session_state.session_id,
+                "deleted sale",
+                f"Order #{order_data.get('order_id', 'N/A')} - {order_data.get('title', 'Unknown Book')} (Qty: {order_data['quantity']})"
+            )
+            st.success("✅ Order deleted successfully!")
+            st.cache_data.clear()
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error deleting order: {e}")
+
 
 col1, col2, col3 = st.columns([4, 2, 1], vertical_alignment="center")
+
 with col1:
     search_order = st.text_input("Search", placeholder="Search Order ID, Book, Customer, Phone...", label_visibility="collapsed")
 with col2:
     with st.popover("Filter Orders", width="stretch"):
-        st.caption("Filter Options")
-        filter_date_range = st.date_input("Date Range", value=[], help="Select start and end date")
-        filter_source = st.multiselect("Source", ["Amazon", "Flipkart", "Website", "Direct"])
-        filter_status = st.multiselect("Status", ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"])
+        
+        # Reset Button
+        if st.button("Reset All Filters", type="primary", use_container_width=True):
+            st.session_state.filter_year = None
+            st.session_state.filter_month = None
+            st.session_state.filter_source_key = []
+            st.session_state.filter_status_key = []
+            st.session_state.filter_books_key = []
+            st.rerun()
+        
+        # Fetch available years
+        try:
+            years_df = conn.query("SELECT DISTINCT YEAR(order_date) as year FROM sales_orders ORDER BY year DESC", show_spinner=False)
+            available_years = years_df['year'].tolist() if not years_df.empty else [datetime.now().year]
+        except:
+            available_years = [datetime.now().year]
+            
+        selected_year = st.pills("Year", available_years, selection_mode="single", key="filter_year")
+        
+        # Month Filter
+        all_months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        available_months = []
+        
+        if selected_year:
+            try:
+                # Fetch months for the selected year
+                month_query = f"SELECT DISTINCT MONTH(order_date) as month FROM sales_orders WHERE YEAR(order_date) = {selected_year} ORDER BY month"
+                months_df = conn.query(month_query, show_spinner=False)
+                if not months_df.empty:
+                    available_months = [all_months[m-1] for m in months_df['month'].tolist()]
+            except:
+                available_months = []
+        
+        selected_month = st.pills("Month", available_months, selection_mode="single", key="filter_month")
+        
+        filter_source = st.multiselect("Source", ["Amazon", "Flipkart", "Website", "Direct"], key="filter_source_key")
+        filter_status = st.multiselect("Status", ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"], key="filter_status_key")
         # Book filter
-        filter_books = st.multiselect("Book", options=list(book_options.keys()), placeholder="Select specific books")
+        filter_books = st.multiselect("Book", options=list(book_options.keys()), placeholder="Select specific books", key="filter_books_key")
 
 with col3:
-        if st.button("➕ New Order", type="primary", use_container_width=True):
-            add_order_dialog()
+    if st.button("➕ New Order", type="primary", use_container_width=True):
+        add_order_dialog()
 
 st.write("")
     
-    
-
 # Build Query
 base_query = """
     SELECT 
@@ -537,6 +651,17 @@ base_query = """
     WHERE 1=1
 """
 params = {}
+
+# Apply Year Filter
+if selected_year:
+    base_query += " AND YEAR(so.order_date) = :year"
+    params["year"] = selected_year
+
+# Apply Month Filter
+if selected_month:
+    month_index = all_months.index(selected_month) + 1
+    base_query += " AND MONTH(so.order_date) = :month"
+    params["month"] = month_index
 
 if filter_source:
     base_query += " AND so.source IN :sources"
@@ -551,11 +676,6 @@ if filter_books:
     selected_book_ids = [book_options[label] for label in filter_books]
     base_query += " AND so.book_id IN :book_ids"
     params["book_ids"] = tuple(selected_book_ids)
-
-if len(filter_date_range) == 2:
-    base_query += " AND so.order_date BETWEEN :start_date AND :end_date"
-    params["start_date"] = filter_date_range[0]
-    params["end_date"] = filter_date_range[1]
 
 if search_order:
     search_term = f"%{search_order}%"
@@ -581,7 +701,7 @@ except Exception as e:
     orders_df = pd.DataFrame()
 
 # Metrics Section (Filtered Data)
-with st.expander("📊 Filtered Metrics", expanded=True):
+with st.expander("📊 Filtered Metrics", expanded=False):
     if not orders_df.empty:
         # Define sources to display
         sources = ["Amazon", "Flipkart", "Website", "Direct"]
@@ -634,11 +754,14 @@ if not orders_df.empty:
         .client-name {
             font-weight: 600;
             color: #333;
+            line-height: 1.2;
+            margin-bottom: 10px;
         }
         .client-sub {
             font-size: 12px;
-            color: #666;
-            margin-top: 2px;
+            color: #6c757d;
+            line-height: 1.1;
+            margin-top: 6px;
         }
         .month-header {
             font-size: 15px;
@@ -694,7 +817,7 @@ if not orders_df.empty:
         <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@1" rel="stylesheet" />
     """, unsafe_allow_html=True)
 
-    col_sizes = [0.8, 2.5, 0.8, 0.8, 0.5, 0.8, 1.0, 1.5, 0.6]
+    col_sizes = [0.8, 2.5, 0.8, 0.8, 0.5, 0.8, 1.0, 1, 1]
     headers = ["Order ID", "Book", "Date", "Source", "Qty", "Price", "City", "Status", "Action"]
 
     # Table Header
@@ -722,13 +845,13 @@ if not orders_df.empty:
                 # Order ID
                 cols[0].markdown(f"<span style='color:#888; font-weight:500'>#{row['order_id'] or '-'}</span>", unsafe_allow_html=True)
                 
-                # Book & Customer
+                # Book & Address
                 with cols[1]:
-                    cust_info = row['customer_name'] or row['corresponding_person'] or ""
-                    cust_suffix = f" <br><small style='color: #6c757d;'>👤 {cust_info}</small>" if cust_info else ""
+                    addr_info = row['shipping_address']
+                    addr_suffix = f"<div class='client-sub'>📍 {addr_info}</div>" if addr_info else ""
                     st.markdown(f"""
                         <div class="client-name">{row['title']} <span style="color:#888; font-weight:normal">({row['book_id']})</span></div>
-                        {cust_suffix}
+                        {addr_suffix}
                     """, unsafe_allow_html=True)
                 
                 # Order Date
@@ -754,10 +877,14 @@ if not orders_df.empty:
                     else:
                         st.write(f"₹{mrp:,.0f}")
 
-                # City (Pill Badge)
+                # City & Customer
                 with cols[6]:
+                    cust_info = row['customer_name'] or row['corresponding_person'] or ""
+                    cust_suffix = f"<div class='client-sub' style='margin-top:4px;'>👤 {cust_info}</div>" if cust_info else ""
                     if row['city']:
-                        st.markdown(f"<span class='city-badge'>{row['city']}</span>", unsafe_allow_html=True)
+                        st.markdown(f"<span class='city-badge'>{row['city']}</span>{cust_suffix}", unsafe_allow_html=True)
+                    elif cust_info:
+                        st.markdown(f"{cust_suffix}", unsafe_allow_html=True)
                     else:
                         st.write("-")
 
@@ -779,8 +906,11 @@ if not orders_df.empty:
 
                 # Action
                 with cols[8]:
-                    if st.button("✏️", key=f"edit_{row['id']}", help="Edit Order"):
+                    btn_col1, btn_col2 = st.columns(2)
+                    if btn_col1.button("✏️", key=f"edit_{row['id']}", help="Edit Order"):
                         edit_order_dialog(row)
+                    if btn_col2.button("🗑️", key=f"del_{row['id']}", help="Delete Order"):
+                        delete_order_dialog(row)
 
                 st.markdown('<div class="row-divider"></div>', unsafe_allow_html=True)
                 st.markdown('<div class="data-row"></div>', unsafe_allow_html=True)
