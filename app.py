@@ -14,7 +14,7 @@ from urllib.parse import urlencode, quote
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
-from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count
+from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count, check_ready_to_print
 from auth import VALID_APPS
 import json
 import smtplib
@@ -111,7 +111,8 @@ if "session_id" not in st.session_state:
 
 # Base URL for your app
 BASE_URL  = st.secrets["general"]["BASE_URL"]
-UPLOAD_DIR = st.secrets["general"]["UPLOAD_DIR"]
+SYLLABUS_UPLOAD_DIR = st.secrets["general"]["SYLLABUS_UPLOAD_DIR"]
+AUTHOR_PHOTO_UPLOAD_DIR = st.secrets["general"]["AUTHOR_PHOTO_UPLOAD_DIR"]
 EMAIL_ADDRESS = st.secrets["export_email"]["EMAIL_ADDRESS"]
 EMAIL_PASSWORD = st.secrets["export_email"]["EMAIL_PASSWORD"]
 GMAIL_SMTP_SERVER = st.secrets["email_servers"]["GMAIL_SMTP_SERVER"]
@@ -1987,10 +1988,30 @@ def settings_dialog(conn):
 # Dialog for managing authors
 @st.dialog("Manage Authors", width="medium", on_dismiss = 'rerun')
 def edit_author_detail(conn):
+    # Ensure columns exist
+    try:
+        with conn.session as s:
+            s.execute(text("SELECT about_author, author_photo FROM authors LIMIT 1"))
+    except Exception:
+        # Columns likely missing, add them
+        try:
+            with conn.session as s:
+                try:
+                    s.execute(text("ALTER TABLE authors ADD COLUMN about_author TEXT"))
+                except Exception:
+                    pass
+                try:
+                    s.execute(text("ALTER TABLE authors ADD COLUMN author_photo TEXT"))
+                except Exception:
+                    pass
+                s.commit()
+        except Exception as e:
+             st.error(f"Error updating database schema: {e}")
+
     # Fetch all authors from database
     with conn.session as s:
         authors = s.execute(
-            text("SELECT author_id, name, email, phone FROM authors ORDER BY name")
+            text("SELECT author_id, name, email, phone, about_author, author_photo FROM authors ORDER BY name")
         ).fetchall()
     
     if not authors:
@@ -2040,6 +2061,31 @@ def edit_author_detail(conn):
             value=selected_author.phone if selected_author.phone is not None else "",
             key=f"phone_{selected_author.author_id}"
         )
+        
+        # New Fields
+        new_about_author = st.text_area(
+            "About The Author",
+            value=selected_author.about_author if selected_author.about_author is not None else "",
+            key=f"about_{selected_author.author_id}",
+            height=200
+        )
+        
+        current_photo = selected_author.author_photo if selected_author.author_photo is not None else None
+        uploaded_photo = st.file_uploader("Upload Author Photo", type=['jpg', 'png', 'jpeg'], key=f"photo_{selected_author.author_id}")
+
+        if current_photo:
+            st.success(f"Current Photo Available")
+            if os.path.exists(current_photo):
+                with open(current_photo, "rb") as file:
+                    st.download_button(
+                        label="⬇️ Download Current Photo",
+                        data=file,
+                        file_name=os.path.basename(current_photo),
+                        mime="image/jpeg",
+                         key=f"dl_{selected_author.author_id}"
+                    )
+            else:
+                 st.warning("⚠️ Photo file record exists but file not found on server.")
 
         btn_col1, btn_col2 = st.columns([3, 1])
 
@@ -2060,7 +2106,31 @@ def edit_author_detail(conn):
                             changes.append(f"Email changed from '{selected_author.email or ''}' to '{new_email}'")
                         if new_phone != (selected_author.phone or ''):
                             changes.append(f"Phone changed from '{selected_author.phone or ''}' to '{new_phone}'")
+                        if new_about_author != (selected_author.about_author or ''):
+                             changes.append("Updated About Author")
                         
+                       # Handle Photo Upload
+                        photo_path = current_photo
+                        if uploaded_photo:
+                            try:
+                                file_extension = os.path.splitext(uploaded_photo.name)[1]
+                                # Use author name and ID for filename
+                                author_name_clean = selected_author.name.replace(" ", "_").replace("/", "_").replace("\\", "_")
+                                unique_filename = f"{author_name_clean}_{selected_author.author_id}{file_extension}"
+                                save_path = os.path.join(AUTHOR_PHOTO_UPLOAD_DIR, unique_filename)
+                                
+                                if not os.path.exists(AUTHOR_PHOTO_UPLOAD_DIR):
+                                    os.makedirs(AUTHOR_PHOTO_UPLOAD_DIR)
+                                    
+                                with open(save_path, "wb") as f:
+                                    f.write(uploaded_photo.getbuffer())
+                                
+                                photo_path = save_path
+                                changes.append("Updated Author Photo")
+                            except Exception as e:
+                                st.error(f"Failed to upload photo: {e}")
+                                st.stop()
+
                         try:
                             with conn.session as s:
                                 s.execute(
@@ -2068,13 +2138,17 @@ def edit_author_detail(conn):
                                         UPDATE authors 
                                         SET name = :name, 
                                             email = :email, 
-                                            phone = :phone 
+                                            phone = :phone,
+                                            about_author = :about_author,
+                                            author_photo = :author_photo
                                         WHERE author_id = :author_id
                                     """),
                                     {
                                         "name": new_name,
                                         "email": new_email if new_email else None,
                                         "phone": new_phone if new_phone else None,
+                                        "about_author": new_about_author if new_about_author else None,
+                                        "author_photo": photo_path,
                                         "author_id": selected_author.author_id
                                     }
                                 )
@@ -2814,10 +2888,10 @@ def add_book_dialog(conn):
                             if book_data["syllabus_file"] and not book_data["is_publish_only"] and not book_data["is_thesis_to_book"]:
                                 file_extension = os.path.splitext(book_data["syllabus_file"].name)[1]
                                 unique_filename = f"syllabus_{book_data['title'].replace(' ', '_')}_{int(time.time())}{file_extension}"
-                                syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
-                                if not os.access(UPLOAD_DIR, os.W_OK):
-                                    st.error(f"No write permission for {UPLOAD_DIR}.")
-                                    raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
+                                syllabus_path_temp = os.path.join(SYLLABUS_UPLOAD_DIR, unique_filename)
+                                if not os.access(SYLLABUS_UPLOAD_DIR, os.W_OK):
+                                    st.error(f"No write permission for {SYLLABUS_UPLOAD_DIR}.")
+                                    raise PermissionError(f"Cannot write to {SYLLABUS_UPLOAD_DIR}")
                                 try:
                                     with open(syllabus_path_temp, "wb") as f:
                                         f.write(book_data["syllabus_file"].getbuffer())
@@ -3629,10 +3703,10 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     if syllabus_file and not new_is_publish_only and not new_is_thesis_to_book and st.session_state[f"publisher_{book_id}"] in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]:
                         file_extension = os.path.splitext(syllabus_file.name)[1]
                         unique_filename = f"syllabus_{new_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
-                        syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
-                        if not os.access(UPLOAD_DIR, os.W_OK):
-                            st.error(f"No write permission for {UPLOAD_DIR}.")
-                            raise PermissionError(f"Cannot write to {UPLOAD_DIR}")
+                        syllabus_path_temp = os.path.join(SYLLABUS_UPLOAD_DIR, unique_filename)
+                        if not os.access(SYLLABUS_UPLOAD_DIR, os.W_OK):
+                            st.error(f"No write permission for {SYLLABUS_UPLOAD_DIR}.")
+                            raise PermissionError(f"Cannot write to {SYLLABUS_UPLOAD_DIR}")
                         try:
                             with open(syllabus_path_temp, "wb") as f:
                                 f.write(syllabus_file.getbuffer())
@@ -4196,7 +4270,7 @@ def manage_price_dialog(book_id, conn):
 # Function to fetch book_author details along with author details for a given book_id
 def fetch_book_authors(book_id, conn):
     query = f"""
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
@@ -4833,14 +4907,10 @@ def edit_author_dialog(book_id, conn):
         st.session_state.checkbox_states = {}
 
     tab1, tab2 = st.tabs(["Existing Authors", "Add New"])
-
     with tab1:
-
-        # Calculate number of columns based on number of authors (max 3 columns for better layout)
         num_authors = len(book_authors)
-        num_columns = min(2, 2)  # Limit to 2 columns to avoid overcrowding
+        num_columns = min(2, 2)  
         cols = st.columns(num_columns)
-
         # Iterate through authors and assign each to a column
         for idx, (_, row) in enumerate(book_authors.iterrows()):
             author_id = row['author_id']
@@ -4849,7 +4919,6 @@ def edit_author_dialog(book_id, conn):
             expander_key = f"expander_{author_id}"
             if expander_key not in st.session_state.expander_states:
                 st.session_state.expander_states[expander_key] = True  # Default to collapsed
-
             # Initialize previous checkbox states for this author
             if author_id not in st.session_state.checkbox_states:
                 st.session_state.checkbox_states[author_id] = {
@@ -4862,24 +4931,75 @@ def edit_author_dialog(book_id, conn):
                     'agreement_received': bool(row['agreement_received']),
                     'printing_confirmation': bool(row['printing_confirmation'])
                 }
-
             # Place each author expander in a column (cycle through columns if more authors than columns)
             with cols[idx % num_columns]:
                 with st.expander(f"📖 {row['name']} (ID: {author_id}) Position: {author_position}", expanded=st.session_state.expander_states[expander_key]):
                     # Display author details
                     with st.container():
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown(f"**📌 Author ID:** {row['author_id']}")
-                            st.markdown(f"**👤 Name:** {row['name']}")
-                        with col2:
-                            st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
-                            st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
+
+                        # col1, col2 = st.columns([1,1.2])
+                        # with col1:
+                        #         if row['author_photo']:
+                        #             st.image(row['author_photo'],width = 100)
+                        #         else:
+                                    
+                        #             uploaded_photo = st.file_uploader("Upload Author Photo", type=['jpg', 'png', 'jpeg'], key=f"photo_{row['id']}")
+                                         
+                        # with col2:
+                        #     st.markdown(f"**📌 Author ID:** {row['author_id']}")
+                        #     st.markdown(f"**👤 Name:** {row['name']}")
+                        #     st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
+                        #     st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
+
+                        # if row['author_photo']:
+                        #     col1, col2 = st.columns([1, 2])
+
+                        #     with col1:
+                        #         st.image(row['author_photo'],width = 100)
+
+                        #     with col2:
+                        #         st.markdown(f"**📌 Author ID:** {row['author_id']}")
+                        #         st.markdown(f"**👤 Name:** {row['name']}")
+                        #         st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
+                        #         st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
+
+                        # else:
+                        #     col1, col2 = st.columns(2)
+                        #     with col1:
+                        #         st.markdown(f"**📌 Author ID:** {row['author_id']}")
+                        #         st.markdown(f"**👤 Name:** {row['name']}")
+                        #     with col2:
+                        #         st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
+                        #         st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
+
+                        if row['author_photo']:
+
+                            col1, col2, col3 = st.columns([0.3,0.6,1], gap="small")
+
+                            with col1:
+                                st.image(row['author_photo'],width = 100)
+                            
+                            with col2:
+                                st.markdown(f"**📌 Author ID:** {row['author_id']}")
+                                st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
+                                
+                            with col3:
+                                st.markdown(f"**👤 Name:** {row['name']}")
+                                st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
+
+                        else:
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.markdown(f"**📌 Author ID:** {row['author_id']}")
+                                st.markdown(f"**👤 Name:** {row['name']}")
+                            with col2:
+                                st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
+                                st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")                  
 
                         # Tabs for organizing fields
                         tab_titles = ["Checklists", "Basic Info", "Delivery"]
                         tab_objects = st.tabs(tab_titles)
-                        
+                    
                         # Checklists tab (no form, no save button)
                         with tab_objects[0]:
                             col5, col6 = st.columns(2)
@@ -4902,43 +5022,25 @@ def edit_author_dialog(book_id, conn):
                                     )
                                     st.session_state.checkbox_states[author_id]['welcome_mail_sent'] = updates_checklist['welcome_mail_sent']
                                     update_book_authors(row['id'], {'welcome_mail_sent': int(updates_checklist['welcome_mail_sent'])}, conn)
-
+                                
+                                # Author Details Received - Display only, no auto-sync on dialog open
                                 updates_checklist['author_details_sent'] = st.checkbox(
                                     "📥 Author Details Received",
                                     value=bool(row['author_details_sent']),
-                                    help="Check if the author's details have been sent.",
-                                    key=f"author_details_sent_{row['id']}"
+                                    help="Check if the author's details have been received.",
+                                    key=f"author_details_sent_{row['id']}",
+                                    disabled=False
                                 )
-                                if updates_checklist['author_details_sent'] != st.session_state.checkbox_states[author_id]['author_details_sent']:
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        "updated checklist",
-                                        f"Book ID: {book_id}, Author ID: {author_id}, Author Details Received changed to '{updates_checklist['author_details_sent']}'"
-                                    )
-                                    st.session_state.checkbox_states[author_id]['author_details_sent'] = updates_checklist['author_details_sent']
-                                    update_book_authors(row['id'], {'author_details_sent': int(updates_checklist['author_details_sent'])}, conn)
-
+                                
+                                # Photo Received - Display only, no auto-sync on dialog open
                                 updates_checklist['photo_recive'] = st.checkbox(
                                     "📷 Photo Received",
                                     value=bool(row['photo_recive']),
                                     help="Check if the author's photo has been received.",
-                                    key=f"photo_recive_{row['id']}"
+                                    key=f"photo_recive_{row['id']}",
+                                    disabled=False
                                 )
-                                if updates_checklist['photo_recive'] != st.session_state.checkbox_states[author_id]['photo_recive']:
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        "updated checklist",
-                                        f"Book ID: {book_id}, Author ID: {author_id}, Photo Received changed to '{updates_checklist['photo_recive']}'"
-                                    )
-                                    st.session_state.checkbox_states[author_id]['photo_recive'] = updates_checklist['photo_recive']
-                                    update_book_authors(row['id'], {'photo_recive': int(updates_checklist['photo_recive'])}, conn)
-
+                                
                                 updates_checklist['id_proof_recive'] = st.checkbox(
                                     "🆔 ID Proof Received",
                                     value=bool(row['id_proof_recive']),
@@ -4956,7 +5058,6 @@ def edit_author_dialog(book_id, conn):
                                     )
                                     st.session_state.checkbox_states[author_id]['id_proof_recive'] = updates_checklist['id_proof_recive']
                                     update_book_authors(row['id'], {'id_proof_recive': int(updates_checklist['id_proof_recive'])}, conn)
-
                             with col6:    
                                 updates_checklist['digital_book_sent'] = st.checkbox(
                                     "📤 Digital Book Sent",
@@ -4975,7 +5076,6 @@ def edit_author_dialog(book_id, conn):
                                     )
                                     st.session_state.checkbox_states[author_id]['digital_book_sent'] = updates_checklist['digital_book_sent']
                                     update_book_authors(row['id'], {'digital_book_sent': int(updates_checklist['digital_book_sent'])}, conn)
-
                                 updates_checklist['cover_agreement_sent'] = st.checkbox(
                                     "📜 Cover Agreement Sent",
                                     value=bool(row['cover_agreement_sent']),
@@ -4993,7 +5093,6 @@ def edit_author_dialog(book_id, conn):
                                     )
                                     st.session_state.checkbox_states[author_id]['cover_agreement_sent'] = updates_checklist['cover_agreement_sent']
                                     update_book_authors(row['id'], {'cover_agreement_sent': int(updates_checklist['cover_agreement_sent'])}, conn)
-
                                 updates_checklist['agreement_received'] = st.checkbox(
                                     "✍🏻 Agreement Received",
                                     value=bool(row['agreement_received']),
@@ -5011,7 +5110,6 @@ def edit_author_dialog(book_id, conn):
                                     )
                                     st.session_state.checkbox_states[author_id]['agreement_received'] = updates_checklist['agreement_received']
                                     update_book_authors(row['id'], {'agreement_received': int(updates_checklist['agreement_received'])}, conn)
-
                                 updates_checklist['printing_confirmation'] = st.checkbox(
                                     "🖨️ Printing Confirmation Received",
                                     value=bool(row['printing_confirmation']),
@@ -5033,7 +5131,6 @@ def edit_author_dialog(book_id, conn):
                         # Form for Basic Info and Delivery tabs
                         with st.form(key=f"edit_form_{row['id']}", border=False):
                             updates = {}
-
                             # Tab 1: Basic Info
                             with tab_objects[1]:
                                 col3, col4 = st.columns(2)
@@ -5068,6 +5165,15 @@ def edit_author_dialog(book_id, conn):
                                         help="Enter the name of the publishing consultant.",
                                         key=f"publishing_consultant_{row['id']}"
                                     )
+                            
+                                # New Fields for Author Table (collected separately as they belong to authors table)
+                                author_updates = {}
+                                author_updates['about_author'] = st.text_area(
+                                    "About The Author",
+                                    value=row['about_author'] if row['about_author'] is not None else "",
+                                    key=f"about_{row['id']}",
+                                    height=200
+                                )
                                 updates['delivery_address'] = st.text_area(
                                     "Delivery Address",
                                     value=row['delivery_address'] or "",
@@ -5076,6 +5182,21 @@ def edit_author_dialog(book_id, conn):
                                     key=f"delivery_address_{row['id']}"
                                 )
 
+                                current_photo = row['author_photo'] if row['author_photo'] is not None else None
+                                uploaded_photo = st.file_uploader("Upload Author Photo", type=['jpg', 'png', 'jpeg'], key=f"photo_{row['id']}")
+                                if current_photo:
+                                    if os.path.exists(current_photo):
+                                        with open(current_photo, "rb") as file:
+                                            st.download_button(
+                                                label="⬇️ Download Photo",
+                                                data=file,
+                                                file_name=os.path.basename(current_photo),
+                                                mime="image/jpeg",
+                                                key=f"dl_{row['id']}"
+                                            )
+                                    else:
+                                        st.caption("⚠️ File record exists but file missing.")
+                            
                             # Tab 3: Delivery
                             with tab_objects[2]:
                                 if print_status == 0:
@@ -5110,7 +5231,6 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the name of the delivery vendor.",
                                             key=f"delivery_vendor_{row['id']}"
                                         )
-
                             # Submit and Remove buttons
                             col_submit, col_remove = st.columns([8, 1])
                             with col_submit:
@@ -5119,7 +5239,6 @@ def edit_author_dialog(book_id, conn):
                                     for key in updates:
                                         if isinstance(updates[key], bool):
                                             updates[key] = int(updates[key])
-
                                     # Track changes for logging
                                     changes = []
                                     original_row = row.to_dict()
@@ -5129,13 +5248,78 @@ def edit_author_dialog(book_id, conn):
                                             original_value = pd.Timestamp(original_value).date()
                                         if value != original_value:
                                             changes.append(f"{key.replace('_', ' ').title()} changed from '{original_value}' to '{value}'")
-
+                                
+                                    # Handle Author Table Updates
+                                    author_changes = []
+                                    photo_path = current_photo
+                                
+                                    if uploaded_photo:
+                                        try:
+                                            import time
+                                            file_extension = os.path.splitext(uploaded_photo.name)[1]
+                                            # Use author name and ID for filename
+                                            author_name_clean = row['name'].replace(" ", "_").replace("/", "_").replace("\\", "_")
+                                            unique_filename = f"{author_name_clean}_{author_id}{file_extension}"
+                                            save_path = os.path.join(AUTHOR_PHOTO_UPLOAD_DIR, unique_filename)
+                                            
+                                            if not os.path.exists(AUTHOR_PHOTO_UPLOAD_DIR):
+                                                os.makedirs(AUTHOR_PHOTO_UPLOAD_DIR)
+                                                
+                                            with open(save_path, "wb") as f:
+                                                f.write(uploaded_photo.getbuffer())
+                                            
+                                            photo_path = save_path
+                                            author_updates['author_photo'] = photo_path
+                                            author_changes.append("Updated Author Photo")
+                                        except Exception as e:
+                                            st.error(f"Failed to upload photo: {e}")
+                                
+                                    if author_updates.get('about_author') != row['about_author']:
+                                        author_changes.append("Updated About Author")
+                                        
+                                    # Determine if auto-checkboxes need to be updated (separate from main changes)
+                                    auto_check_author_details = False
+                                    auto_check_photo = False
+                                    
+                                    # Check if about_author has content after save
+                                    has_about = bool(author_updates.get('about_author') and str(author_updates.get('about_author')).strip())
+                                    if has_about and not bool(row['author_details_sent']):
+                                        # Only set to 1 if it's currently not checked
+                                        updates['author_details_sent'] = 1
+                                        auto_check_author_details = True
+                                
+                                    # Check if photo was uploaded
+                                    has_photo_file = bool(photo_path and str(photo_path).strip())
+                                    if has_photo_file and not bool(row['photo_recive']):
+                                        # Only set to 1 if it's currently not checked
+                                        updates['photo_recive'] = 1
+                                        auto_check_photo = True
+                                        
                                     try:
                                         with st.spinner("Saving changes..."):
                                             import time
                                             time.sleep(1)
+                                        
+                                            # Update book_authors table
                                             update_book_authors(row['id'], updates, conn)
-                                            # Log save action
+                                        
+                                            # Update authors table if needed
+                                            if author_changes:
+                                                with conn.session as s:
+                                                    update_query = "UPDATE authors SET about_author = :about_author"
+                                                    params = {"about_author": author_updates['about_author'], "author_id": author_id}
+                                                
+                                                    if 'author_photo' in author_updates:
+                                                        update_query += ", author_photo = :author_photo"
+                                                        params["author_photo"] = author_updates['author_photo']
+                                                
+                                                    update_query += " WHERE author_id = :author_id"
+                                                    s.execute(text(update_query), params)
+                                                    s.commit()
+                                                
+                                                changes.extend(author_changes)
+                                            
+                                            # Log main save action (without auto-checkbox changes)
                                             if changes:
                                                 log_activity(
                                                     conn,
@@ -5145,21 +5329,40 @@ def edit_author_dialog(book_id, conn):
                                                     "updated author details",
                                                     f"Book ID: {book_id}, Author ID: {author_id}, {', '.join(changes)}"
                                                 )
+                                            
+                                            # Log auto-checkbox updates separately
+                                            if auto_check_author_details:
+                                                log_activity(
+                                                    conn,
+                                                    st.session_state.user_id,
+                                                    st.session_state.username,
+                                                    st.session_state.session_id,
+                                                    "updated checklist",
+                                                    f"Book ID: {book_id}, Author ID: {author_id}, Author Details Received changed to 'True'"
+                                                )
+                                            
+                                            if auto_check_photo:
+                                                log_activity(
+                                                    conn,
+                                                    st.session_state.user_id,
+                                                    st.session_state.username,
+                                                    st.session_state.session_id,
+                                                    "updated checklist",
+                                                    f"Book ID: {book_id}, Author ID: {author_id}, Photo Received changed to 'True'"
+                                                )
+                                            
                                             st.cache_data.clear()
                                             st.success(f"✔️ Updated details for {row['name']} (Author ID: {author_id})")
                                             st.toast(f"Updated details for {row['name']} (Author ID: {author_id})", icon="✔️", duration="long")
                                     except Exception as e:
                                         st.error(f"❌ Error updating author details: {e}")
                                         st.toast("Error updating author details", icon="❌", duration="long")
-
                             with col_remove:
                                 confirmation_key = f"confirm_remove_{row['id']}"
                                 if confirmation_key not in st.session_state:
                                     st.session_state[confirmation_key] = False
-
                                 if st.form_submit_button("🗑️", width="stretch", type="secondary", help=f"Remove {row['name']} from this book"):
                                     st.session_state[confirmation_key] = True
-
                         # Confirmation form for removal
                         if st.session_state[confirmation_key]:
                             with st.form(f"confirm_form_{row['id']}", border=False):
@@ -6489,13 +6692,13 @@ def edit_operation_dialog(book_id, conn):
                 st.write("") # Spacer
                 if st.form_submit_button("💾 Save Writing", width="stretch", disabled=is_publish_only or is_thesis_to_book, type="primary"):
                     with st.spinner("Saving..."):
-                        os.makedirs(UPLOAD_DIR, exist_ok=True)
+                        os.makedirs(SYLLABUS_UPLOAD_DIR, exist_ok=True)
                         # Handle syllabus file upload
                         new_syllabus_path = current_syllabus_path
                         if syllabus_file and not (is_publish_only or is_thesis_to_book):
                             file_extension = os.path.splitext(syllabus_file.name)[1]
                             unique_filename = f"syllabus_{book_title.replace(' ', '_')}_{int(time.time())}{file_extension}"
-                            new_syllabus_path_temp = os.path.join(UPLOAD_DIR, unique_filename)
+                            new_syllabus_path_temp = os.path.join(SYLLABUS_UPLOAD_DIR, unique_filename)
                             try:
                                 with open(new_syllabus_path_temp, "wb") as f:
                                     f.write(syllabus_file.getbuffer())
@@ -6728,38 +6931,6 @@ def update_operation_details(book_id, updates):
 ##################################--------------- Edit Inventory Dialog ----------------------------##################################
 ###################################################################################################################################
 
-# Function to check if all conditions are met for ready_to_print
-def check_ready_to_print(book_id, conn):
-    query = """
-    SELECT CASE 
-        WHEN (
-            (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1)
-            AND b.proofreading_complete = 1 
-            AND b.formatting_complete = 1 
-            AND b.cover_page_complete = 1
-            AND NOT EXISTS (
-                SELECT 1 
-                FROM book_authors ba 
-                WHERE ba.book_id = :book_id 
-                AND (
-                    ba.welcome_mail_sent != 1 
-                    OR ba.photo_recive != 1 
-                    OR ba.id_proof_recive != 1 
-                    OR ba.author_details_sent != 1 
-                    OR ba.cover_agreement_sent != 1 
-                    OR ba.agreement_received != 1 
-                    OR ba.digital_book_sent != 1 
-                    OR ba.printing_confirmation != 1
-                )
-            )
-        ) THEN 1 
-        ELSE 0 
-    END AS ready_to_print
-    FROM books b
-    WHERE b.book_id = :book_id
-    """
-    result = conn.query(query, params={"book_id": book_id}, ttl=0, show_spinner=False)
-    return result.iloc[0]['ready_to_print'] == 1
 
 # Function to get detailed print status (missing conditions)
 def get_print_status(book_id, conn):

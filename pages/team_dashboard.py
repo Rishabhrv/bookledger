@@ -557,7 +557,9 @@ def fetch_author_details(book_id):
             a.name AS 'Author Name',
             ba.author_position AS 'Position',
             ba.photo_recive AS 'Photo Received',
-            ba.author_details_sent AS 'Details Sent'
+            ba.author_details_sent AS 'Details Sent',
+            a.about_author AS 'About Author',
+            a.author_photo AS 'Author Photo Path'
         FROM book_authors ba
         JOIN authors a ON ba.author_id = a.author_id
         WHERE ba.book_id = {book_id}
@@ -584,7 +586,7 @@ def fetch_holds(section: str) -> pd.DataFrame:
 #on_hold_books = fetch_hold_books()
 
 
-@st.dialog("Author Details", width='medium')
+@st.dialog("Author Details", width="large")
 def show_author_details_dialog(book_id):
     # Fetch book details (title and ISBN)
     conn = connect_db()
@@ -605,22 +607,85 @@ def show_author_details_dialog(book_id):
 
     # Author Details Table
     if not author_details_df.empty:
-        # Prepare HTML table
-        table_html = '<table><tr><th>Author ID</th><th>Author Name</th><th>Position</th><th>Photo Received</th><th>Details Received</th></tr>'
+        # Table Header
+        header_cols = st.columns([1, 2, 1, 1.5, 1.5, 1.5, 1.5])
+        with header_cols[0]: st.markdown("**ID**")
+        with header_cols[1]: st.markdown("**Name**")
+        with header_cols[2]: st.markdown("**Pos**")
+        with header_cols[3]: st.markdown("**Photo**")
+        with header_cols[4]: st.markdown("**Details**")
+        with header_cols[5]: st.markdown("**Info**")
+        with header_cols[6]: st.markdown("**Photo**")
+        st.divider()
+
         for _, row in author_details_df.iterrows():
-            photo_class = "pill-yes" if row["Photo Received"] else "pill-no"
-            details_class = "pill-yes" if row["Details Sent"] else "pill-no"
-            table_html += (
-                f'<tr>'
-                f'<td>{row["Author ID"]}</td>'
-                f'<td>{row["Author Name"]}</td>'
-                f'<td>{row["Position"]}</td>'
-                f'<td><span class="{photo_class}">{"Yes" if row["Photo Received"] else "No"}</span></td>'
-                f'<td><span class="{details_class}">{"Yes" if row["Details Sent"] else "No"}</span></td>'
-                f'</tr>'
-            )
-        table_html += '</table>'
-        st.markdown(table_html, unsafe_allow_html=True)
+            cols = st.columns([1, 2, 1, 1.5, 1.5, 1.5, 1.5])
+            with cols[0]: st.write(str(row['Author ID']))
+            with cols[1]: st.write(row['Author Name'])
+            with cols[2]: st.write(row['Position'])
+            
+            with cols[3]: 
+                if row["Photo Received"]:
+                    st.markdown('<span class="pill-yes">Yes</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<span class="pill-no">No</span>', unsafe_allow_html=True)
+            
+            with cols[4]:
+                if row["Details Sent"]:
+                    st.markdown('<span class="pill-yes">Yes</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<span class="pill-no">No</span>', unsafe_allow_html=True)
+            
+            with cols[5]:
+                about_author = row.get('About Author')
+                has_about = bool(about_author and str(about_author).strip())
+                st.download_button(
+                    label="⬇️ Info",
+                    data=str(about_author) if has_about else "",
+                    file_name=f"about_{row['Author Name'].replace(' ', '_')}.txt" if has_about else "none.txt",
+                    mime="text/plain",
+                    key=f"dl_about_{row['Author ID']}",
+                    help="Download About The Author" if has_about else "No info available",
+                    disabled=not has_about,
+                    on_click=lambda: log_activity(
+                        conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "downloaded author file",
+                        f"Book ID: {book_id}, Author ID: {row['Author ID']}, Type: About Author"
+                    )
+                )
+
+            with cols[6]:
+                photo_path = row.get('Author Photo Path')
+                has_photo = bool(photo_path and os.path.exists(photo_path))
+                photo_data = b""
+                if has_photo:
+                    try:
+                        with open(photo_path, "rb") as file:
+                            photo_data = file.read()
+                    except Exception:
+                        has_photo = False
+                
+                st.download_button(
+                    label="⬇️ Photo",
+                    data=photo_data,
+                    file_name=os.path.basename(photo_path) if has_photo else "none.jpg",
+                    mime="image/jpeg",
+                    key=f"dl_photo_{row['Author ID']}",
+                    help="Download Author Photo" if has_photo else "No photo available",
+                    disabled=not has_photo,
+                    on_click=lambda: log_activity(
+                        conn,
+                        st.session_state.user_id,
+                        st.session_state.username,
+                        st.session_state.session_id,
+                        "downloaded author file",
+                        f"Book ID: {book_id}, Author ID: {row['Author ID']}, Type: Author Photo"
+                    )
+                )
+            st.divider()
     else:
         st.warning("No author details available.")
 
@@ -2099,7 +2164,15 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                                     mime="application/pdf",
                                     key=f"download_syllabus_{section}_{row['Book ID']}",
                                     disabled=disabled,
-                                    help="Download Syllabus"
+                                    help="Download Syllabus",
+                                    on_click=lambda: log_activity(
+                                        conn,
+                                        st.session_state.user_id,
+                                        st.session_state.username,
+                                        st.session_state.session_id,
+                                        "downloaded syllabus",
+                                        f"Book ID: {row['Book ID']}"
+                                    )
                                 )
                         else:
                             st.download_button(
@@ -2190,7 +2263,15 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                                     file_name=syllabus_path.split("/")[-1],
                                     mime="application/pdf",
                                     key=f"download_syllabus_{section}_{row['Book ID']}_running",
-                                    disabled=disabled
+                                    disabled=disabled,
+                                    on_click=lambda: log_activity(
+                                        conn,
+                                        st.session_state.user_id,
+                                        st.session_state.username,
+                                        st.session_state.session_id,
+                                        "downloaded syllabus",
+                                        f"Book ID: {row['Book ID']}"
+                                    )
                                 )
                         else:
                             st.download_button(

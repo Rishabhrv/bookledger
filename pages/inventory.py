@@ -5,7 +5,7 @@ import time
 from auth import validate_token
 from sqlalchemy import text
 import plotly.graph_objects as go
-from constants import log_activity, initialize_click_and_session_id, connect_db
+from constants import log_activity, initialize_click_and_session_id, connect_db, check_ready_to_print
 
 
 
@@ -627,7 +627,6 @@ def update_book_details(book_id, current_data):
     if print_status != 0:
         with tab1:
             # Sales inputs
-            st.warning("⚠️ Manual edits here may be overwritten if you perform a 'Sync with Orders' from the main inventory page. It is recommended to record sales through the 'Sales Tracking' page.")
             st.markdown("#### Sales Numbers and Cell No.")
             col1, col2 = st.columns(2)
             with col1:
@@ -723,22 +722,35 @@ def update_book_details(book_id, current_data):
             st.info("No print editions found. Add a new print edition below.")
 
         with st.expander("Add New Print Edition", expanded=False):
-            # Add new PrintEdition
-            st.markdown("#### Add New Print Edition")
-            col1, col2, col3, col4 = st.columns([0.5, 1, 1.2, 0.7])
-            with col1:
-                new_num_copies = st.number_input("Copies", min_value=0, step=1, value=0, key=f"new_num_copies_{book_id}")
-            with col2:
-                print_color = st.selectbox("Color", options=["Black & White", "Full Color"], key=f"print_color_{book_id}")
-            with col3:
-                binding = st.selectbox("Binding", options=["Paperback", "Hardcover"], key=f"binding_{book_id}")
-            with col4:
-                book_size = st.selectbox("Size", options=["6x9", "8.5x11"], key=f"book_size_{book_id}")
+            # Check if book is ready for print or already printed
+            is_ready_checks = check_ready_to_print(book_id, conn)
+            can_add_edition = (print_status != 0) or is_ready_checks
             
-            # Conditional input for color pages
-            new_color_pages = None
-            if print_color == "Full Color":
-                new_color_pages = st.number_input("Number of Color Pages", min_value=0, step=1, value=0, key=f"new_color_pages_{book_id}")
+            # Initialize default values
+            new_num_copies = 0
+            print_color = "Black & White"
+            binding = "Paperback"
+            book_size = "6x9"
+            new_color_pages = 0
+
+            if can_add_edition:
+                # Add new PrintEdition
+                st.markdown("#### Add New Print Edition")
+                col1, col2, col3, col4 = st.columns([0.5, 1, 1.2, 0.7])
+                with col1:
+                    new_num_copies = st.number_input("Copies", min_value=0, step=1, value=0, key=f"new_num_copies_{book_id}")
+                with col2:
+                    print_color = st.selectbox("Color", options=["Black & White", "Full Color"], key=f"print_color_{book_id}")
+                with col3:
+                    binding = st.selectbox("Binding", options=["Paperback", "Hardcover"], key=f"binding_{book_id}")
+                with col4:
+                    book_size = st.selectbox("Size", options=["6x9", "8.5x11"], key=f"book_size_{book_id}")
+                
+                # Conditional input for color pages
+                if print_color == "Full Color":
+                    new_color_pages = st.number_input("Number of Color Pages", min_value=0, step=1, value=0, key=f"new_color_pages_{book_id}")
+            else:
+                st.warning("⚠️ Cannot add print edition: Book is not ready for print.")
 
     if st.button("Save"):
         with st.spinner('Saving...'):
@@ -774,10 +786,11 @@ def update_book_details(book_id, current_data):
                         links_changes.append("Google Link changed")
 
 
-                if print_color == "Full Color" and (new_color_pages is None or new_color_pages <= 0):
-                    st.error("Number of Color Pages must be greater than 0 for Full Color.")
-                    return
-                print_edition_added = True
+                if can_add_edition:
+                    if print_color == "Full Color" and (new_color_pages is None or new_color_pages <= 0):
+                        st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                        return
+                    print_edition_added = True
 
                 with conn.session as session:
                     if print_status != 0:

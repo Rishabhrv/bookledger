@@ -322,3 +322,36 @@ def get_total_unread_count(ict_conn, user_id):
     except Exception as e:
         # Optional: st.error(f"Error fetching unread counts: {e}")
         return 0
+    
+# Function to check if all conditions are met for ready_to_print
+def check_ready_to_print(book_id, conn):
+    query = """
+    SELECT CASE 
+        WHEN (
+            (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1)
+            AND b.proofreading_complete = 1 
+            AND b.formatting_complete = 1 
+            AND b.cover_page_complete = 1
+            AND NOT EXISTS (
+                SELECT 1 
+                FROM book_authors ba 
+                WHERE ba.book_id = :book_id 
+                AND (
+                    ba.welcome_mail_sent != 1 
+                    OR ba.photo_recive != 1 
+                    OR ba.id_proof_recive != 1 
+                    OR ba.author_details_sent != 1 
+                    OR ba.cover_agreement_sent != 1 
+                    OR ba.agreement_received != 1 
+                    OR ba.digital_book_sent != 1 
+                    OR ba.printing_confirmation != 1
+                )
+            )
+        ) THEN 1 
+        ELSE 0 
+    END AS ready_to_print
+    FROM books b
+    WHERE b.book_id = :book_id
+    """
+    result = conn.query(query, params={"book_id": book_id}, ttl=0, show_spinner=False)
+    return result.iloc[0]['ready_to_print'] == 1
