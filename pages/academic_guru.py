@@ -118,6 +118,19 @@ st.markdown("""
         margin-bottom: 4px;
         letter-spacing: 0.3px;
     }
+    .level-text {
+        font-size: 11px;
+        font-weight: 500;
+        color: #2b8a3e;
+        background-color: #f0fdf4;
+        border: 1px solid #dcfce7;
+        padding: 1px 8px;
+        border-radius: 12px;
+        display: inline-block;
+        margin-bottom: 4px;
+        margin-right: 5px;
+        letter-spacing: 0.3px;
+    }
     .services-text {
         font-size: 12px;
         color: #555;
@@ -188,6 +201,7 @@ def fetch_orders(conn):
                 c.university,
                 c.phone,
                 o.branch,
+                o.academic_level,
                 o.title_topic,
                 o.deadline,
                 o.total_amount,
@@ -202,7 +216,7 @@ def fetch_orders(conn):
             JOIN clients c ON o.client_id = c.client_id
             LEFT JOIN order_services os ON o.order_id = os.order_id
             LEFT JOIN services s ON os.service_id = s.service_id
-            GROUP BY o.order_id, c.full_name, c.university, c.phone, o.branch, o.title_topic, o.deadline, o.total_amount, o.payment_status, o.status, o.created_at, o.assignee
+            GROUP BY o.order_id, c.full_name, c.university, c.phone, o.branch, o.academic_level, o.title_topic, o.deadline, o.total_amount, o.payment_status, o.status, o.created_at, o.assignee
             ORDER BY o.order_id DESC
         """
         df = conn.query(query, ttl=0)
@@ -851,6 +865,8 @@ def add_order_dialog(conn, users_conn):
             with col_p2:
                 branch = st.text_input("Academic Branch", placeholder="Computer Science")
 
+            academic_level = st.radio("Academic Level", ["M.Tech", "PhD", "Other"], horizontal=True)
+
             # Assignee and Logistics in a compact row
             col_l1, col_l2, col_l3 = st.columns(3)
             
@@ -938,9 +954,9 @@ def add_order_dialog(conn, users_conn):
                 # 2. Insert Order
                 order_result = session.execute(text("""
                     INSERT INTO orders 
-                    (client_id, branch, title_topic, requirements, deadline, total_amount, payment_status, status, created_at, assignee)
+                    (client_id, branch, title_topic, requirements, deadline, total_amount, payment_status, status, created_at, assignee, academic_level)
                     VALUES 
-                    (:client_id, :branch, :topic, :requirements, :deadline, :amount, 'PENDING', 'NEW', :created_at, :assignee)
+                    (:client_id, :branch, :topic, :requirements, :deadline, :amount, 'PENDING', 'NEW', :created_at, :assignee, :academic_level)
                 """), {
                     "client_id": final_client_id,
                     "branch": branch.strip(),
@@ -949,7 +965,8 @@ def add_order_dialog(conn, users_conn):
                     "deadline": deadline,
                     "amount": total_amount or None,
                     "created_at": registration_date,
-                    "assignee": assignee
+                    "assignee": assignee,
+                    "academic_level": academic_level
                 })
                 session.flush()
                 order_id = order_result.lastrowid
@@ -1000,7 +1017,7 @@ def edit_order_dialog(order_id, conn, users_conn):
     try:
         with conn.session as session:
             order = session.execute(text("""
-                SELECT branch, title_topic, requirements, deadline, created_at, assignee 
+                SELECT branch, title_topic, requirements, deadline, created_at, assignee, academic_level
                 FROM orders WHERE order_id = :order_id
             """), {'order_id': order_id}).fetchone()
             
@@ -1034,6 +1051,14 @@ def edit_order_dialog(order_id, conn, users_conn):
 
         assignee = st.selectbox("Assignee", options=users, index=assignee_index, key=f"edit_assignee_{order_id}")
 
+        current_level_idx = 0
+        if order.academic_level == "PhD":
+            current_level_idx = 1
+        elif order.academic_level == "Other":
+            current_level_idx = 2
+
+        academic_level = st.radio("Academic Level", ["M.Tech", "PhD", "Other"], index=current_level_idx, horizontal=True, key=f"edit_level_{order_id}")
+
         col1, col2 = st.columns(2)
         with col1:
             branch = st.text_input("Branch", value=order.branch, key=f"edit_branch_{order_id}")
@@ -1065,12 +1090,13 @@ def edit_order_dialog(order_id, conn, users_conn):
                             session.execute(text("""
                                 UPDATE orders 
                                 SET branch = :branch, title_topic = :topic, requirements = :req, 
-                                    deadline = :deadline, created_at = :created_at, assignee = :assignee
+                                    deadline = :deadline, created_at = :created_at, assignee = :assignee,
+                                    academic_level = :academic_level
                                 WHERE order_id = :order_id
                             """), {
                                 'branch': branch, 'topic': topic, 'req': requirements,
                                 'deadline': deadline, 'created_at': registration_date,
-                                'assignee': assignee, 'order_id': order_id
+                                'assignee': assignee, 'academic_level': academic_level, 'order_id': order_id
                             })
 
                             session.execute(text("DELETE FROM order_services WHERE order_id = :order_id"), {'order_id': order_id})
@@ -1356,14 +1382,10 @@ else:
                 
                 # Client & Assignee
                 with cols[1]:
-                    uni = row['university'] if row['university'] else "Unknown University"
                     phone = row['phone'] if row['phone'] else "No Phone"
                     
                     st.markdown(f"""
                         <div class="client-name">{row['full_name']}</div>
-                        <div class="client-sub">
-                            <span class="material-symbols-rounded" style="font-size:14px">school</span> {uni}
-                        </div>
                         <div class="client-sub">
                             <span class="material-symbols-rounded" style="font-size:14px">call</span> {phone}
                         </div>
@@ -1400,8 +1422,10 @@ else:
                     
                     services_html = " ,  ".join(colored_services) if colored_services else 'No services specified'
 
+                    level_display = f'<div class="level-text">{row["academic_level"]}</div>' if row['academic_level'] else ''
+
                     st.markdown(f"""
-                        <div class="branch-text">{row['branch']}</div>
+                        <div>{level_display}<div class="branch-text">{row['branch']}</div></div>
                         <div class="topic-text">{row['title_topic']}  {assignee_display}</div>
                         <div class="services-text">{services_html}</div>
                     """, unsafe_allow_html=True)

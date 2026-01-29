@@ -7354,30 +7354,30 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                             st.error(f"❌ Error saving print edition: {str(e)}")
                                             st.toast(f"Error saving print edition: {str(e)}", duration="long")
 
-                                # Delete Option
-                                if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
-                                    with st.spinner("Deleting print edition..."):
-                                        import time
-                                        time.sleep(3)
-                                        try:
-                                            with conn.session as session:
-                                                session.execute(
-                                                    text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
-                                                    {"print_id": selected_print_id}
-                                                )
-                                                session.commit()
-                                            st.success("Print edition deleted successfully!")
-                                            st.toast("Print edition deleted!", icon="🗑️")
-                                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
-                                            st.cache_data.clear()
-                                        except Exception as e:
-                                            st.error(f"Error deleting print edition: {e}")
-                                            with conn.session as session:
-                                                session.rollback()
+                        #         # Delete Option
+                        #         if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
+                        #             with st.spinner("Deleting print edition..."):
+                        #                 import time
+                        #                 time.sleep(3)
+                        #                 try:
+                        #                     with conn.session as session:
+                        #                         session.execute(
+                        #                             text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
+                        #                             {"print_id": selected_print_id}
+                        #                         )
+                        #                         session.commit()
+                        #                     st.success("Print edition deleted successfully!")
+                        #                     st.toast("Print edition deleted!", icon="🗑️")
+                        #                     log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
+                        #                     st.cache_data.clear()
+                        #                 except Exception as e:
+                        #                     st.error(f"Error deleting print edition: {e}")
+                        #                     with conn.session as session:
+                        #                         session.rollback()
                         
-                        else:
-                            st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
-                            st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
+                        # else:
+                        #     st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
+                        #     st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
 
         with print_col2:
 
