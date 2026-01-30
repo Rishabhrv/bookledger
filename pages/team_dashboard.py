@@ -588,12 +588,22 @@ def fetch_holds(section: str) -> pd.DataFrame:
 
 @st.dialog("Author Details", width="large")
 def show_author_details_dialog(book_id):
-    # Fetch book details (title and ISBN)
+    # Fetch book details (title, ISBN, and about text)
     conn = connect_db()
-    book_query = f"SELECT title, isbn FROM books WHERE book_id = {book_id}"
+    book_query = f"SELECT title, isbn, about_book, about_book_200 FROM books WHERE book_id = {book_id}"
     book_data = conn.query(book_query, show_spinner=False)
-    book_title = book_data.iloc[0]['title'] if not book_data.empty else "Unknown Title"
-    isbn = book_data.iloc[0]['isbn'] if not book_data.empty and pd.notnull(book_data.iloc[0]['isbn']) else "Not Assigned"
+    
+    if not book_data.empty:
+        row = book_data.iloc[0]
+        book_title = row['title']
+        isbn = row['isbn'] if pd.notnull(row['isbn']) else "Not Assigned"
+        about_book = row.get('about_book', '')
+        about_book_200 = row.get('about_book_200', '')
+    else:
+        book_title = "Unknown Title"
+        isbn = "Not Assigned"
+        about_book = ""
+        about_book_200 = ""
 
     # Fetch author details
     author_details_df = fetch_author_details(book_id)
@@ -601,9 +611,41 @@ def show_author_details_dialog(book_id):
     # Header
     st.markdown(f'<div class="dialog-header">Book ID: {book_id} - {book_title}</div>', unsafe_allow_html=True)
 
-    # ISBN Display
-    st.markdown('<div class="info-label">ISBN</div>', unsafe_allow_html=True)
-    st.markdown(f'<span class="info-value">{isbn}</span>', unsafe_allow_html=True)
+    col1, col2 = st.columns([1,4], gap="small") 
+
+    with col2:
+        # ISBN Display
+        st.markdown('<div class="info-label">ISBN</div>', unsafe_allow_html=True)
+        st.markdown(f'<span class="info-value">{isbn}</span>', unsafe_allow_html=True)
+    
+    with col1:
+        # About Book Downloads
+        st.markdown('<div class="info-label">Book Descriptions</div>', unsafe_allow_html=True)
+    
+        has_about_book = bool(about_book and str(about_book).strip())
+        has_about_book_200 = bool(about_book_200 and str(about_book_200).strip())
+
+        st.download_button(
+            label="⬇️ About Book",
+            data=str(about_book) if has_about_book else "",
+            file_name=f"about_book_{book_title}_{book_id}.txt",
+            mime="text/plain",
+            key=f"dl_about_book_{book_title}_{book_id}",
+            disabled=not has_about_book,
+            help="Download About the Book text" if has_about_book else "No info available"
+        )
+        
+        st.download_button(
+            label="⬇️ About Book (200 Words)",
+            data=str(about_book_200) if has_about_book_200 else "",
+            file_name=f"about_book_200_{book_title}_{book_id}.txt",
+            mime="text/plain",
+            key=f"dl_about_book_200_{book_title}_{book_id}",
+            disabled=not has_about_book_200,
+            help="Download About the Book (200 words) text" if has_about_book_200 else "No info available"
+        )
+
+    st.write("")
 
     # Author Details Table
     if not author_details_df.empty:
@@ -614,7 +656,7 @@ def show_author_details_dialog(book_id):
         with header_cols[2]: st.markdown("**Pos**")
         with header_cols[3]: st.markdown("**Photo**")
         with header_cols[4]: st.markdown("**Details**")
-        with header_cols[5]: st.markdown("**Info**")
+        with header_cols[5]: st.markdown("**About**")
         with header_cols[6]: st.markdown("**Photo**")
         st.divider()
 
@@ -640,7 +682,7 @@ def show_author_details_dialog(book_id):
                 about_author = row.get('About Author')
                 has_about = bool(about_author and str(about_author).strip())
                 st.download_button(
-                    label="⬇️ Info",
+                    label="⬇️ About",
                     data=str(about_author) if has_about else "",
                     file_name=f"about_{row['Author Name'].replace(' ', '_')}.txt" if has_about else "none.txt",
                     mime="text/plain",
@@ -1564,6 +1606,10 @@ def edit_section_dialog(book_id, conn, section):
     if f"show_hold_form_{book_id}_{section}" not in st.session_state:
         st.session_state[f"show_hold_form_{book_id}_{section}"] = False
 
+    # Initialize session state for showing end writing form
+    if f"show_end_writing_form_{book_id}" not in st.session_state:
+        st.session_state[f"show_end_writing_form_{book_id}"] = False
+
     if pending:
         # For pending: Team member selector, then centered Start button
         selected_worker = st.selectbox(
@@ -1722,51 +1768,118 @@ def edit_section_dialog(book_id, conn, section):
             # End and Hold buttons side by side
             col_end, col_hold = st.columns(2)
             with col_end:
-                if st.button(f"⏹️ End {display_name} Now", type="primary", width='stretch'):
-                    if needs_pages and book_pages < 10:
-                        st.error("❌ Enter Book Pages before ending.")
-                    else:
-                        with st.spinner(f"Ending {display_name}..."):
-                            sleep(1)
-                            try:
-                                now = datetime.now(IST)
-                                updates = {config['end']: now}
-                                if needs_pages and book_pages is not None and current_pages != book_pages:
-                                    updates['book_pages'] = book_pages
-                                # Update database
-                                with conn.session as s:
-                                    set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
-                                    query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
-                                    params = updates.copy()
-                                    params["id"] = int(book_id)
-                                    s.execute(text(query), params)
-                                    s.commit()
-                                # Log the end action
-                                details = f"Book ID: {book_id}, End Time: {now}, By: {current_worker}"
-                                if needs_pages and book_pages is not None:
-                                    details += f", Pages: {book_pages}"
+                if section == 'writing':
+                    if st.button(f"⏹️ End {display_name} Now", type="primary", width='stretch', key=f"end_writing_btn_{book_id}"):
+                        if needs_pages and book_pages < 10:
+                            st.error("❌ Enter Book Pages before ending.")
+                        else:
+                            st.session_state[f"show_end_writing_form_{book_id}"] = True
+                else:
+                    if st.button(f"⏹️ End {display_name} Now", type="primary", width='stretch', key=f"end_other_btn_{book_id}"):
+                        if needs_pages and book_pages < 10:
+                            st.error("❌ Enter Book Pages before ending.")
+                        else:
+                            with st.spinner(f"Ending {display_name}..."):
+                                sleep(1)
                                 try:
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        f"ended {section}",
-                                        details
-                                    )
+                                    now = datetime.now(IST)
+                                    updates = {config['end']: now}
+                                    if needs_pages and book_pages is not None and current_pages != book_pages:
+                                        updates['book_pages'] = book_pages
+                                    # Update database
+                                    with conn.session as s:
+                                        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                                        query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
+                                        params = updates.copy()
+                                        params["id"] = int(book_id)
+                                        s.execute(text(query), params)
+                                        s.commit()
+                                    # Log the end action
+                                    details = f"Book ID: {book_id}, End Time: {now}, By: {current_worker}"
+                                    if needs_pages and book_pages is not None:
+                                        details += f", Pages: {book_pages}"
+                                    try:
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            f"ended {section}",
+                                            details
+                                        )
+                                    except Exception as e:
+                                        st.warning(f"Warning: {display_name} ended but failed to log activity: {str(e)}")
+                                    st.success(f"✔️ Ended {display_name}")
+                                    st.toast(f"Ended {display_name} for Book ID {book_id}", icon="⏹️", duration='long')
+                                    sleep(2)
+                                    st.rerun()
                                 except Exception as e:
-                                    st.warning(f"Warning: {display_name} ended but failed to log activity: {str(e)}")
-                                st.success(f"✔️ Ended {display_name}")
-                                st.toast(f"Ended {display_name} for Book ID {book_id}", icon="⏹️", duration='long')
-                                sleep(2)
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Failed to end {display_name}: {str(e)}")
-                                st.toast(f"Error ending {display_name} for Book ID {book_id}", icon="🚫", duration='long')
+                                    st.error(f"❌ Failed to end {display_name}: {str(e)}")
+                                    st.toast(f"Error ending {display_name} for Book ID {book_id}", icon="🚫", duration='long')
 
             with col_hold:
                 if st.button("⏸️ Hold Book", type="secondary", width='stretch'):
                     st.session_state[f"show_hold_form_{book_id}_{section}"] = True
+            
+            if section == 'writing' and st.session_state.get(f"show_end_writing_form_{book_id}", False):
+                with st.container(border=True):
+                    st.markdown("### Finalize Writing Details")
+                    about_book = st.text_area("About the Book", key=f"about_book_{book_id}")
+                    about_book_200 = st.text_area("About the Book in 200 Words", key=f"about_book_200_{book_id}")
+                    
+                    col_conf, col_cancel = st.columns(2)
+                    with col_conf:
+                        if st.button("✅ Confirm End", type="primary", width="stretch", key=f"confirm_end_writing_{book_id}"):
+                            if not about_book.strip() or not about_book_200.strip():
+                                st.error("❌ Please fill both 'About the Book' fields.")
+                            else:
+                                with st.spinner(f"Ending {display_name}..."):
+                                    sleep(1)
+                                    try:
+                                        now = datetime.now(IST)
+                                        updates = {config['end']: now}
+                                        if needs_pages and book_pages is not None and current_pages != book_pages:
+                                            updates['book_pages'] = book_pages
+                                        
+                                        # Add new fields
+                                        updates['about_book'] = about_book.strip()
+                                        updates['about_book_200'] = about_book_200.strip()
+
+                                        # Update database
+                                        with conn.session as s:
+                                            set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+                                            query = f"UPDATE books SET {set_clause} WHERE book_id = :id"
+                                            params = updates.copy()
+                                            params["id"] = int(book_id)
+                                            s.execute(text(query), params)
+                                            s.commit()
+                                        # Log the end action
+                                        details = f"Book ID: {book_id}, End Time: {now}, By: {current_worker}"
+                                        if needs_pages and book_pages is not None:
+                                            details += f", Pages: {book_pages}"
+                                        try:
+                                            log_activity(
+                                                conn,
+                                                st.session_state.user_id,
+                                                st.session_state.username,
+                                                st.session_state.session_id,
+                                                f"ended {section}",
+                                                details
+                                            )
+                                        except Exception as e:
+                                            st.warning(f"Warning: {display_name} ended but failed to log activity: {str(e)}")
+                                        st.success(f"✔️ Ended {display_name}")
+                                        st.toast(f"Ended {display_name} for Book ID {book_id}", icon="⏹️", duration='long')
+                                        st.session_state[f"show_end_writing_form_{book_id}"] = False # Reset
+                                        sleep(2)
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"❌ Failed to end {display_name}: {str(e)}")
+                                        st.toast(f"Error ending {display_name} for Book ID {book_id}", icon="🚫", duration='long')
+                    with col_cancel:
+                        if st.button("Cancel", type="secondary", width="stretch", key=f"cancel_end_writing_{book_id}"):
+                            st.session_state[f"show_end_writing_form_{book_id}"] = False
+                            st.rerun()
             
             # Render hold reason form full-width below buttons
             if st.session_state[f"show_hold_form_{book_id}_{section}"]:

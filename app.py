@@ -6455,7 +6455,8 @@ def edit_operation_dialog(book_id, conn):
         SELECT writing_start, writing_end, writing_by, 
                proofreading_start, proofreading_end, proofreading_by, 
                formatting_start, formatting_end, formatting_by, 
-               cover_start, cover_end, cover_by, book_pages
+               cover_start, cover_end, cover_by, book_pages,
+               about_book, about_book_200
         FROM books WHERE book_id = {book_id}
     """
     book_operations = conn.query(query, show_spinner=False)
@@ -6599,7 +6600,7 @@ def edit_operation_dialog(book_id, conn):
     cover_options = ["Select Cover Designer"] + cover_names + ["Add New..."]
 
     # --- Tabs Layout ---
-    op_tabs = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover"])
+    op_tabs = st.tabs(["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover", "ℹ️ About Book"])
 
     # ==========================
     # TAB 1: Writing
@@ -6915,6 +6916,38 @@ def edit_operation_dialog(book_id, conn):
                             st.success("Saved!")
                             st.toast("Updated Cover details", icon="✔️")
                             if selected_cover == "Add New..." and new_cover_designer: st.cache_data.clear()
+
+    # ==========================
+    # TAB 5: About Book
+    # ==========================
+    with op_tabs[4]:
+        with st.container(border=True):
+            with st.form(key=f"about_book_form_{book_id}", border=False):
+                about_book = st.text_area(
+                    "About the Book",
+                    value=current_data.get('about_book', "") if current_data.get('about_book') else "",
+                    height=150,
+                    key=f"about_book_input_{book_id}"
+                )
+                
+                about_book_200 = st.text_area(
+                    "About the Book (200 Words)",
+                    value=current_data.get('about_book_200', "") if current_data.get('about_book_200') else "",
+                    height=100,
+                    key=f"about_book_200_input_{book_id}"
+                )
+                
+                st.write("") # Spacer
+                if st.form_submit_button("💾 Save About Details", width="stretch", type="primary"):
+                    with st.spinner("Saving..."):
+                        updates = {
+                            "about_book": about_book.strip() if about_book else None,
+                            "about_book_200": about_book_200.strip() if about_book_200 else None
+                        }
+                        update_operation_details(book_id, updates)
+                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated about book details", f"Book ID: {book_id}")
+                        st.success("Saved!")
+                        st.toast("Updated About Book details", icon="✔️")
 
 def update_operation_details(book_id, updates):
     """Update operation details in the books table."""
@@ -7354,30 +7387,30 @@ def edit_inventory_delivery_dialog(book_id, conn):
                                             st.error(f"❌ Error saving print edition: {str(e)}")
                                             st.toast(f"Error saving print edition: {str(e)}", duration="long")
 
-                        #         # Delete Option
-                        #         if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
-                        #             with st.spinner("Deleting print edition..."):
-                        #                 import time
-                        #                 time.sleep(3)
-                        #                 try:
-                        #                     with conn.session as session:
-                        #                         session.execute(
-                        #                             text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
-                        #                             {"print_id": selected_print_id}
-                        #                         )
-                        #                         session.commit()
-                        #                     st.success("Print edition deleted successfully!")
-                        #                     st.toast("Print edition deleted!", icon="🗑️")
-                        #                     log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
-                        #                     st.cache_data.clear()
-                        #                 except Exception as e:
-                        #                     st.error(f"Error deleting print edition: {e}")
-                        #                     with conn.session as session:
-                        #                         session.rollback()
+                                # Delete Option
+                                if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
+                                    with st.spinner("Deleting print edition..."):
+                                        import time
+                                        time.sleep(3)
+                                        try:
+                                            with conn.session as session:
+                                                session.execute(
+                                                    text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
+                                                    {"print_id": selected_print_id}
+                                                )
+                                                session.commit()
+                                            st.success("Print edition deleted successfully!")
+                                            st.toast("Print edition deleted!", icon="🗑️")
+                                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
+                                            st.cache_data.clear()
+                                        except Exception as e:
+                                            st.error(f"Error deleting print edition: {e}")
+                                            with conn.session as session:
+                                                session.rollback()
                         
-                        # else:
-                        #     st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
-                        #     st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
+                        else:
+                            st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
+                            st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
 
         with print_col2:
 
