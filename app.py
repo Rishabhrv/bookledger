@@ -401,10 +401,10 @@ update_button_counts(conn)
 
 
 # Fetch books from the database
-query = "SELECT book_id, title, date, isbn, apply_isbn, deliver, price, is_single_author, syllabus_path, " \
+query = "SELECT book_id, title, date, isbn, apply_isbn, isbn_receive_date, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
 "proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end," \
-"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, images FROM books WHERE is_cancelled = 0"
+"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, google_link, images FROM books WHERE is_cancelled = 0"
 
 books = conn.query(query,show_spinner = False)
 
@@ -7892,18 +7892,47 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         st.markdown(f"<div class='info-box'><span class='info-label'>Status:</span>{deliver_status}</div>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ISBN Status Table
+    st.markdown("<h4 class='section-title'>ISBN Status</h4>", unsafe_allow_html=True)
+    
+    # Determine ISBN Status
+    apply_isbn = book_row.get('apply_isbn', 0) == 1
+    isbn_val = book_row.get('isbn')
+    isbn_received = pd.notnull(isbn_val) and str(isbn_val).strip() != ''
+    isbn_date_raw = book_row.get('isbn_receive_date')
+    
+    if isbn_date_raw and pd.notnull(isbn_date_raw):
+        try:
+            isbn_date = pd.to_datetime(isbn_date_raw).strftime('%d %b %Y')
+        except:
+            isbn_date = str(isbn_date_raw)
+    else:
+        isbn_date = "-"
+
+    isbn_table_html = f"""
+    <table class='compact-table'>
+        <tr><th>Applied</th><th>Received</th><th>Received Date</th><th>ISBN</th></tr>
+        <tr>
+            <td>{'✅' if apply_isbn else '❌'}</td>
+            <td>{'✅' if isbn_received else '❌'}</td>
+            <td>{isbn_date}</td>
+            <td>{isbn_val if isbn_received else '-'}</td>
+        </tr>
+    </table>
+    """
+    st.markdown(isbn_table_html, unsafe_allow_html=True)
+
     # Author Checklists (Full Sequence)
     st.markdown("<h4 class='section-title'>Author Checklist</h4>", unsafe_allow_html=True)
     book_authors_df = authors_df[authors_df['book_id'] == book_id]
     if not book_authors_df.empty:
         checklist_columns = [
             'welcome_mail_sent', 'author_details_sent', 'photo_recive',
-            'apply_isbn_not_applied', 'isbn_not_received',
             'cover_agreement_sent', 'digital_book_sent', 'id_proof_recive',
             'agreement_received', 'printing_confirmation'
         ]
         checklist_labels = [
-            'Welcome', 'Details', 'Photo', 'ISBN Apply', 'ISBN Recv',
+            'Welcome', 'Details', 'Photo',
             'Cover/Agr', 'Digital', 'ID Proof', 'Agreement', 'Print Conf'
         ]
         
@@ -7940,15 +7969,7 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         for _, author in book_authors_df.iterrows():
             table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
             for col, label in zip(checklist_columns, checklist_labels):
-                if col in ['apply_isbn_not_applied', 'isbn_not_received']:
-                    # Handle book-level ISBN fields
-                    if col == 'apply_isbn_not_applied':
-                        status = '✅' if book_row.get('apply_isbn', 0) == 1 else '❌'
-                    else:  # isbn_not_received
-                        status = '✅' if pd.notnull(book_row.get('isbn')) and book_row.get('apply_isbn', 0) == 1 else '❌'
-                else:
-                    # Handle author-level fields
-                    status = '✅' if author[col] else '❌'
+                status = '✅' if author[col] else '❌'
                 table_html += f"<td>{status}</td>"
             table_html += "</tr>"
         table_html += "</table>"
@@ -7956,44 +7977,58 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     else:
         st.info("No authors found for this book.")
 
-    # Operations and Print Editions in two columns
-    col_ops, col_print = st.columns(2)
 
     # Operations Status
-    with col_ops:
-        st.markdown("<h4 class='section-title'>Operations Status</h4>", unsafe_allow_html=True)
-        operations = [
-            ('Writing', 'writing_start', 'writing_end'),
-            ('Proofreading', 'proofreading_start', 'proofreading_end'),
-            ('Formatting', 'formatting_start', 'formatting_end'),
-            ('Cover Design', 'cover_start', 'cover_end')
-        ]
-        # Check if book is publish-only or thesis-to-book
-        is_publish_only = book_row.get('is_publish_only', 0) == 1
-        is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
+    st.markdown("<h4 class='section-title'>Operations Status</h4>", unsafe_allow_html=True)
+    operations = [
+        ('Writing', 'writing_start', 'writing_end', 'writing_by'),
+        ('Proofreading', 'proofreading_start', 'proofreading_end', 'proofreading_by'),
+        ('Formatting', 'formatting_start', 'formatting_end', 'formatting_by'),
+        ('Cover Design', 'cover_start', 'cover_end', 'cover_by')
+    ]
+    # Check if book is publish-only or thesis-to-book
+    is_publish_only = book_row.get('is_publish_only', 0) == 1
+    is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
+    
+    table_html = "<table class='compact-table'><tr><th>Operation</th><th>Start</th><th>End</th><th>By</th><th>Status</th></tr>"
+    for op_name, start_field, end_field, by_field in operations:
+        by_who = book_row.get(by_field)
+        by_who = by_who if pd.notnull(by_who) and str(by_who).strip() != '' else '-'
         
-        table_html = "<table class='compact-table'><tr><th>Operation</th><th>Status</th></tr>"
-        for op_name, start_field, end_field in operations:
-            if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
-                status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
+        start_val = book_row.get(start_field)
+        end_val = book_row.get(end_field)
+        
+        start_str = start_val.strftime('%d %b %Y') if pd.notnull(start_val) else '-'
+        end_str = end_val.strftime('%d %b %Y') if pd.notnull(end_val) else '-'
+        
+        if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
+            status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
+            by_who = '-'
+            start_str = '-'
+            end_str = '-'
+        else:
+            if pd.notnull(start_val) and pd.notnull(end_val):
+                status = '✅ Done'
+            elif pd.notnull(start_val):
+                status = '⏳ Active'
             else:
-                start = book_row[start_field]
-                end = book_row[end_field]
-                if pd.notnull(start) and pd.notnull(end):
-                    status = '✅ Done'
-                elif pd.notnull(start):
-                    status = '⏳ Active'
-                else:
-                    status = '❌ Pending'
-            table_html += f"<tr><td>{op_name}</td><td>{status}</td></tr>"
-        table_html += "</table>"
-        st.markdown(table_html, unsafe_allow_html=True)
+                status = '❌ Pending'
+        table_html += f"<tr><td>{op_name}</td><td>{start_str}</td><td>{end_str}</td><td>{by_who}</td><td>{status}</td></tr>"
+    table_html += "</table>"
+    st.markdown(table_html, unsafe_allow_html=True)
 
-    # Print Editions
-    with col_print:
-        st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
-        conn = connect_db()
-        book_print_details_df = fetch_print_details(book_id, conn)
+
+    st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
+    conn = connect_db()
+    book_print_details_df = fetch_print_details(book_id, conn)
+    
+    # Check for basic print editions if detailed ones are missing
+    book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
+    
+    has_prints = not book_print_details_df.empty or not book_printeditions_df.empty
+    
+    if has_prints:
+        # Show Print Editions Table
         if not book_print_details_df.empty:
             table_html = "<table class='compact-table'><tr><th>Batch ID</th><th>Copies</th><th>Sent Date</th><th>Receive Date</th><th>Status</th></tr>"
             for _, row in book_print_details_df.iterrows():
@@ -8004,16 +8039,103 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
                 table_html += f"<tr><td>{batch_id}</td><td>{copies}</td><td>{sent_date}</td><td>{receive_date}</td><td>{row['status']}</td></tr>"
             table_html += "</table>"
             st.markdown(table_html, unsafe_allow_html=True)
+        elif not book_printeditions_df.empty:
+            table_html = "<table class='compact-table'><tr><th>Print ID</th><th>Status</th></tr>"
+            for _, row in book_printeditions_df.iterrows():
+                table_html += f"<tr><td>{row['print_id']}</td><td>{row['status']}</td></tr>"
+            table_html += "</table>"
+            st.markdown(table_html, unsafe_allow_html=True)
+
+        # Author Delivery Table (Only if printed)
+        st.markdown("<h4 class='section-title'>Author Delivery</h4>", unsafe_allow_html=True)
+        if not book_authors_df.empty:
+            table_html = "<table class='compact-table'><tr><th>Author</th><th>Status</th><th>Copies</th><th>Date</th></tr>"
+            for _, author in book_authors_df.iterrows():
+                delivery_date = author.get('delivery_date')
+                if pd.notnull(delivery_date):
+                    try:
+                        d_date = pd.to_datetime(delivery_date).strftime('%d %b %Y')
+                    except:
+                        d_date = str(delivery_date)
+                    status = "✅ Delivered"
+                else:
+                    d_date = "-"
+                    status = "❌ Pending"
+                table_html += f"<tr><td>{author['name']}</td><td>{status}</td><td>{author.get('number_of_books', '❌ Pending')}</td><td>{d_date}</td></tr>"
+            table_html += "</table>"
+            st.markdown(table_html, unsafe_allow_html=True)
         else:
-            book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
-            if not book_printeditions_df.empty:
-                table_html = "<table class='compact-table'><tr><th>Print ID</th><th>Status</th></tr>"
-                for _, row in book_printeditions_df.iterrows():
-                    table_html += f"<tr><td>{row['print_id']}</td><td>{row['status']}</td></tr>"
-                table_html += "</table>"
-                st.markdown(table_html, unsafe_allow_html=True)
-            else:
-                st.info("No print editions found.")
+            st.info("No authors found.")
+
+    else:
+        st.info("Book not printed yet.")
+
+    # Additional Details: Links & Inventory (Only if printed)
+    if has_prints:
+        st.markdown("---")
+        col_links, col_inv = st.columns(2)
+
+        with col_links:
+            st.markdown("<h4 class='section-title'>Store Links</h4>", unsafe_allow_html=True)
+            links_data = [
+                ("Amazon", book_row.get('amazon_link'), "https://img.icons8.com/color/48/000000/amazon.png"),
+                ("Flipkart", book_row.get('flipkart_link'), "https://img.icons8.com/?size=100&id=UU2im0hihoyi&format=png&color=000000"),
+                ("Google Books", book_row.get('google_link'), "https://img.icons8.com/color/48/000000/google-logo.png"),
+                ("AGPH Store", book_row.get('agph_link'), "https://img.icons8.com/fluency/48/shopping-bag.png")
+            ]
+            
+            table_html = "<table class='compact-table'><tr><th>Store</th><th>Link</th></tr>"
+            for name, link, icon in links_data:
+                if link and str(link).strip() and str(link) != 'None':
+                    status = f'<a href="{link}" target="_blank"><img src="{icon}" width="24" height="24" title="{name}"></a>'
+                else:
+                    status = "❌"
+                table_html += f"<tr><td>{name}</td><td>{status}</td></tr>"
+            table_html += "</table>"
+            st.markdown(table_html, unsafe_allow_html=True)
+
+        with col_inv:
+            st.markdown("<h4 class='section-title'>Inventory</h4>", unsafe_allow_html=True)
+            try:
+                # Total Printed
+                total_printed = book_print_details_df[book_print_details_df['status'] == 'Received']['copies_planned'].sum() if not book_print_details_df.empty else 0
+
+                # Fetch inventory sales
+                inv_res = conn.query(f"SELECT amazon_sales, flipkart_sales, website_sales, direct_sales FROM inventory WHERE book_id = '{book_id}'", show_spinner=False)
+                
+                if not inv_res.empty:
+                    inv_data = inv_res.iloc[0]
+                    amazon = int(inv_data['amazon_sales']) if pd.notnull(inv_data['amazon_sales']) else 0
+                    flipkart = int(inv_data['flipkart_sales']) if pd.notnull(inv_data['flipkart_sales']) else 0
+                    website = int(inv_data['website_sales']) if pd.notnull(inv_data['website_sales']) else 0
+                    direct = int(inv_data['direct_sales']) if pd.notnull(inv_data['direct_sales']) else 0
+                else:
+                    amazon = flipkart = website = direct = 0
+                
+                total_sales = amazon + flipkart + website + direct
+
+                # Author Copies
+                author_copies = book_authors_df['number_of_books'].fillna(0).astype(int).sum() if not book_authors_df.empty else 0
+                
+                current_inv = int(total_printed - total_sales - author_copies)
+                
+                # Inventory Table
+                inv_table_html = f"""
+                <table class='compact-table'>
+                    <tr><th>Category</th><th>Count</th></tr>
+                    <tr><td>Total Printed</td><td>{total_printed}</td></tr>
+                    <tr><td>Amazon Sales</td><td>{amazon}</td></tr>
+                    <tr><td>Flipkart Sales</td><td>{flipkart}</td></tr>
+                    <tr><td>Website Sales</td><td>{website}</td></tr>
+                    <tr><td>Direct Sales</td><td>{direct}</td></tr>
+                    <tr><td>Author Copies</td><td>{author_copies}</td></tr>
+                    <tr style='font-weight:bold; background-color:#f8f9fa;'><td>Current Stock</td><td>{current_inv}</td></tr>
+                </table>
+                """
+                st.markdown(inv_table_html, unsafe_allow_html=True)
+            
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
 
 
 
