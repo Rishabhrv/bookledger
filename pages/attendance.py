@@ -2625,8 +2625,8 @@ with tab2:
                                 except:
                                     return None
                             
-                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float)
-                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float)
+                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float).astype(float)
+                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float).astype(float)
 
                             
                             # Create line chart
@@ -2967,8 +2967,8 @@ with tab2:
                                 except:
                                     return None
                             
-                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float)
-                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float)
+                            trend_df['Check-In Numeric'] = trend_df['Check-In'].apply(time_to_float).astype(float)
+                            trend_df['Check-Out Numeric'] = trend_df['Check-Out'].apply(time_to_float).astype(float)
                             
                             # Create line chart
                             fig = px.line(
@@ -3129,7 +3129,8 @@ with tab3:
             except:
                 return str(time_str)
         
-        # Create display columns with time differences
+        # Convert display columns with time differences
+        df_daily = df_daily.sort_values(by='Check In', ascending=True, na_position='last')
         df_display = df_daily.copy()
         
         # Format times

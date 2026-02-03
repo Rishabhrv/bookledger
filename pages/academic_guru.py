@@ -281,7 +281,7 @@ def get_service_options(conn):
 
 def all_filters(df):
     if 'filters' not in st.session_state:
-        st.session_state.filters = {'status': None, 'payment': None}
+        st.session_state.filters = {'status': None, 'payment': None, 'assignee': None}
 
     col1, col2, col3, col4 = st.columns([4, 4, 2, 1], vertical_alignment="center")
     
@@ -296,7 +296,7 @@ def all_filters(df):
     with col2:
         with st.popover("Filters", width="stretch"):
             if st.button("Reset Filters", width="stretch"):
-                st.session_state.filters = {'status': None, 'payment': None}
+                st.session_state.filters = {'status': None, 'payment': None, 'assignee': None}
                 st.session_state.page = 0
                 st.rerun()
                 
@@ -310,6 +310,22 @@ def all_filters(df):
                 "Payment", 
                 options=['PENDING', 'PAID', 'PARTIAL'],
                 default=st.session_state.filters['payment']
+            )
+
+            available_assignees = sorted(df['assignee'].dropna().unique().tolist())
+            
+            # Determine index
+            current_assignee = st.session_state.filters.get('assignee')
+            try:
+                assignee_index = available_assignees.index(current_assignee) + 1 # +1 for None option
+            except (ValueError, TypeError):
+                assignee_index = 0
+
+            st.session_state.filters['assignee'] = st.selectbox(
+                "Assignee",
+                options=[None] + available_assignees,
+                format_func=lambda x: "All Assignees" if x is None else x,
+                index=assignee_index
             )
 
     with col3:
@@ -338,6 +354,9 @@ def all_filters(df):
         
     if st.session_state.filters['payment']:
         filtered_df = filtered_df[filtered_df['payment_status'] == st.session_state.filters['payment']]
+
+    if st.session_state.filters.get('assignee'):
+        filtered_df = filtered_df[filtered_df['assignee'] == st.session_state.filters['assignee']]
 
     return filtered_df
 

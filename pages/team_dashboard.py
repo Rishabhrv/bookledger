@@ -636,13 +636,13 @@ def show_author_details_dialog(book_id):
         )
         
         st.download_button(
-            label="⬇️ About Book (200 Words)",
+            label="⬇️ About Book (150 Words)",
             data=str(about_book_200) if has_about_book_200 else "",
             file_name=f"about_book_200_{book_title}_{book_id}.txt",
             mime="text/plain",
             key=f"dl_about_book_200_{book_title}_{book_id}",
             disabled=not has_about_book_200,
-            help="Download About the Book (200 words) text" if has_about_book_200 else "No info available"
+            help="Download About the Book (150 words) text" if has_about_book_200 else "No info available"
         )
 
     st.write("")

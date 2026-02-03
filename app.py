@@ -5614,6 +5614,14 @@ def edit_author_dialog(book_id, conn):
                                             for error in errors:
                                                 st.error(f"❌ {error}")
                                         else:
+                                            # Fix: Drop constraint to allow 3rd/4th editor if it exists
+                                            try:
+                                                with conn.session as s:
+                                                    s.execute(text("ALTER TABLE chapter_editors DROP CONSTRAINT chapter_editors_chk_1"))
+                                                    s.commit()
+                                            except Exception:
+                                                pass
+
                                             try:
                                                 with conn.session as s:
                                                     s.begin()
@@ -5942,6 +5950,14 @@ def edit_author_dialog(book_id, conn):
                                 for error in errors:
                                     st.error(f"❌ {error}")
                             else:
+                                # Fix: Drop constraint to allow 3rd/4th editor if it exists
+                                try:
+                                    with conn.session as s:
+                                        s.execute(text("ALTER TABLE chapter_editors DROP CONSTRAINT chapter_editors_chk_1"))
+                                        s.commit()
+                                except Exception:
+                                    pass
+
                                 try:
                                     with conn.session as s:
                                         s.begin()
@@ -6931,7 +6947,7 @@ def edit_operation_dialog(book_id, conn):
                 )
                 
                 about_book_200 = st.text_area(
-                    "About the Book (200 Words)",
+                    "About the Book (150 Words)",
                     value=current_data.get('about_book_200', "") if current_data.get('about_book_200') else "",
                     height=100,
                     key=f"about_book_200_input_{book_id}"
