@@ -72,6 +72,7 @@ section_labels = {
     "Proofreading Section": "proofreader",
     "Formatting Section": "formatter",
     "Cover Design Section": "cover_designer",
+    "Correction Hub": "correction_hub",
     "History": "book_timeline"
 }
 
@@ -549,6 +550,39 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
     df['resume_time'] = pd.to_datetime(df['resume_time'])
     return df
 
+def fetch_correction_books(section: str) -> pd.DataFrame:
+    conn = connect_db()
+    # Map section slug to DB Enum value
+    status_map = {
+        "writing": "Writing",
+        "proofreading": "Proofreading",
+        "formatting": "Formatting"
+    }
+    target_status = status_map.get(section)
+    
+    if not target_status:
+        return pd.DataFrame()
+
+    query = f"""
+        SELECT 
+            b.book_id AS 'Book ID',
+            b.title AS 'Title',
+            b.date AS 'Date',
+            (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Round',
+            b.correction_status AS 'Status',
+            (SELECT COUNT(*) FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}') as 'Active Tasks',
+            (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Correction Date',
+            (SELECT correction_file FROM author_corrections ac WHERE ac.book_id = b.book_id ORDER BY round_number DESC, created_at DESC LIMIT 1) AS 'Correction File',
+            (SELECT correction_text FROM author_corrections ac WHERE ac.book_id = b.book_id ORDER BY round_number DESC, created_at DESC LIMIT 1) AS 'Correction Text',
+            (SELECT worker FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'Correction By',
+            (SELECT correction_start FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'Correction Start'
+        FROM books b
+        WHERE b.correction_status = '{target_status}' AND b.is_cancelled = 0
+        ORDER BY b.date DESC
+    """
+    return conn.query(query, show_spinner=False)
+
+
 def fetch_author_details(book_id):
     conn = connect_db()
     query = f"""
@@ -801,6 +835,210 @@ def calculate_working_duration(start_date, end_date, hold_periods=None):
     remaining_hours = int(round(total_hours % work_day_hours))
 
     return (total_days, remaining_hours)
+
+@st.dialog("Correction Audit", width="large")
+def show_correction_audit_dialog(book_id, conn):
+    # Fetch book title
+    query = f"SELECT title FROM books WHERE book_id = :book_id"
+    book_details = conn.query(query, params={"book_id": book_id}, show_spinner=False)
+    if not book_details.empty:
+        book_title = book_details.iloc[0]['title']
+        st.markdown(f'<div class="dialog-header">Book ID: {book_id} - {book_title}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f"### Correction Audit for Book ID: {book_id}")
+
+    # 1. Fetch all data
+    reqs = conn.query("""
+        SELECT ac.*, a.name as author_name 
+        FROM author_corrections ac 
+        JOIN authors a ON ac.author_id = a.author_id 
+        WHERE ac.book_id = :bid ORDER BY ac.created_at DESC
+    """, params={"bid": book_id}, show_spinner=False)
+    
+    tasks = conn.query("""
+        SELECT * FROM corrections WHERE book_id = :bid ORDER BY correction_start DESC
+    """, params={"bid": book_id}, show_spinner=False)
+
+    # 2. Identify unique rounds across both tables
+    all_rounds = sorted(list(set(reqs['round_number'].tolist()) if not reqs.empty else [] 
+                           | set(tasks['round_number'].tolist()) if not tasks.empty else []), reverse=True)
+
+    if not all_rounds:
+        st.info("No correction history found for this book.")
+        return
+
+    # 3. Iterate through rounds
+    for r_num in all_rounds:
+        # Determine a summary for the expander label
+        r_tasks = tasks[tasks['round_number'] == r_num]
+        status_summary = "✅ Completed" if not r_tasks.empty and all(pd.notnull(r_tasks['correction_end'])) else "🚀 In Progress"
+        if r_tasks.empty: status_summary = "⏳ Pending Action"
+        
+        with st.expander(f"🔄 **Round {r_num}** — {status_summary}", expanded=(r_num == all_rounds[0])):
+            col_req, col_task = st.columns([1, 1], gap="medium")
+            
+            with col_req:
+                st.markdown("##### 📝 Author Request")
+                r_reqs = reqs[reqs['round_number'] == r_num]
+                if r_reqs.empty:
+                    st.info("No request logged for this round.")
+                for _, r in r_reqs.iterrows():
+                    with st.container(border=True):
+                        st.caption(f"📅 {r['created_at'].strftime('%d %b %Y, %I:%M %p')}")
+                        st.markdown(f"**From:** {r['author_name']}")
+                        st.write(r['correction_text'] or "*File only submission*")
+                        if r['correction_file']:
+                            # Using a button or link-like display for files
+                            st.markdown(f"📎 **File:** `{os.path.basename(r['correction_file'])}`")
+
+            with col_task:
+                st.markdown("##### 🛠️ Team Actions")
+                if r_tasks.empty:
+                    st.info("No team actions logged yet.")
+                
+                for _, t in r_tasks.sort_values('correction_start').iterrows():
+                    with st.container(border=True):
+                        # Action Header with Status Pill
+                        status_pill = '<span class="pill status-completed">Done</span>' if pd.notnull(t['correction_end']) else '<span class="pill status-running">Running</span>'
+                        st.markdown(f"**{t['section'].capitalize()}** {status_pill}", unsafe_allow_html=True)
+                        
+                        t_col1, t_col2 = st.columns(2)
+                        with t_col1:
+                            st.caption(f"👤 {t['worker']}")
+                        with t_col2:
+                            st.caption(f"⏱️ {t['correction_start'].strftime('%d %b %Y, %I:%M %p')}")
+                        
+                        if pd.notnull(t['correction_end']):
+                            st.caption(f"🏁 Ended: {t['correction_end'].strftime('%d %b %Y, %I:%M %p')}")
+                        
+                        if t['notes']:
+                            st.markdown(f"<small><b>Note:</b> {t['notes']}</small>", unsafe_allow_html=True)
+
+def render_correction_hub(conn):
+    st.subheader("🛠️ Correction Central Hub")
+    st.caption("Overview of all books with current or past correction activity.")
+
+    # 1. Fetch Summary Metrics
+    with conn.session as s:
+        # Total unique books with corrections
+        total_books_res = s.execute(text("""
+            SELECT COUNT(DISTINCT book_id) FROM (
+                SELECT book_id FROM author_corrections
+                UNION
+                SELECT book_id FROM corrections
+            ) as combined
+        """)).scalar()
+        
+        # Ongoing corrections (Running)
+        ongoing_res = s.execute(text("""
+            SELECT COUNT(DISTINCT book_id) FROM corrections WHERE correction_end IS NULL
+        """)).scalar()
+        
+        # Pending correction start (Status != 'None' and no active task)
+        pending_res = s.execute(text("""
+            SELECT COUNT(*) FROM books 
+            WHERE correction_status != 'None' AND correction_status IS NOT NULL
+            AND book_id NOT IN (SELECT book_id FROM corrections WHERE correction_end IS NULL)
+        """)).scalar()
+
+    m_col1, m_col2, m_col3 = st.columns(3)
+    with m_col1:
+        st.metric("Total Books with Corrections", total_books_res or 0)
+    with m_col2:
+        st.metric("Currently Running", ongoing_res or 0, delta_color="inverse")
+    with m_col3:
+        st.metric("Pending Team Start", pending_res or 0)
+
+    st.write("---")
+
+    # 2. Fetch Detailed List
+    query = """
+        SELECT 
+            b.book_id AS 'Book ID',
+            b.title AS 'Title',
+            b.date AS 'Enroll Date',
+            b.correction_status AS 'Current Lifecycle',
+            (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Total Rounds',
+            (SELECT section FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS 'Active Section',
+            (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Last Request',
+            (SELECT MAX(correction_start) FROM corrections c WHERE c.book_id = b.book_id) AS 'Last Action'
+        FROM books b
+        WHERE b.book_id IN (SELECT book_id FROM author_corrections)
+           OR b.book_id IN (SELECT book_id FROM corrections)
+        ORDER BY GREATEST(COALESCE(`Last Request`, '1970-01-01'), COALESCE(`Last Action`, '1970-01-01')) DESC
+    """
+    df = conn.query(query, show_spinner=False)
+
+    if df.empty:
+        st.info("No correction history found in the system yet.")
+        return
+
+    # Search and Filter
+    f_col1, f_col2 = st.columns([2, 1])
+    with f_col1:
+        search = st.text_input("Search by Title or ID", placeholder="Type here...", key="hub_search", label_visibility='collapsed')
+    with f_col2:
+        filter_status = st.selectbox("Filter Status", ["All", "Running", "Pending Start", "Completed Cycle"], label_visibility='collapsed')
+
+    filtered_df = df.copy()
+    if search:
+        filtered_df = filtered_df[
+            filtered_df['Title'].str.contains(search, case=False, na=False) |
+            filtered_df['Book ID'].astype(str).str.contains(search, case=False, na=False)
+        ]
+    
+    if filter_status == "Running":
+        filtered_df = filtered_df[filtered_df['Active Section'].notnull()]
+    elif filter_status == "Pending Start":
+        filtered_df = filtered_df[(filtered_df['Active Section'].isnull()) & (filtered_df['Current Lifecycle'] != 'None') & (filtered_df['Current Lifecycle'].notnull())]
+    elif filter_status == "Completed Cycle":
+        filtered_df = filtered_df[(filtered_df['Current Lifecycle'] == 'None') | (filtered_df['Current Lifecycle'].isnull())]
+
+    # Display Table
+    cont = st.container(border=True)
+    with cont:
+        # Title with Badge
+        st.markdown(f"<h5><span class='status-badge-orange'>Correction Audit List <span class='badge-count'>{len(filtered_df)}</span></span></h5>", 
+                    unsafe_allow_html=True)
+        
+        st.markdown('<div class="header-row">', unsafe_allow_html=True)
+
+        # Table Headers
+        column_sizes = [0.8, 3, 1.2, 1.2, 1.5, 1]
+        h_cols = st.columns(column_sizes)
+        headers = ["Book ID", "Book Title", "Latest Round", "Lifecycle", "Current Status", "Action"]
+        for i, h in enumerate(headers):
+            h_cols[i].markdown(f'<div class="header">{h}</div>', unsafe_allow_html=True)
+
+        st.write("")
+        st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
+
+        for _, row in filtered_df.iterrows():
+            with st.container():
+                r_cols = st.columns(column_sizes, vertical_alignment="center")
+                
+                with r_cols[0]: st.write(int(row['Book ID']))
+                with r_cols[1]: st.markdown(f"**{row['Title']}**")
+                with r_cols[2]: st.markdown(f"<span class='pill worker-by-1'>Round {row['Total Rounds']}</span>", unsafe_allow_html=True)
+                
+                with r_cols[3]:
+                    lc = row['Current Lifecycle']
+                    if lc == 'None' or pd.isna(lc):
+                        st.markdown("<span class='pill status-completed'>Closed</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<span class='pill status-pending'>{lc}</span>", unsafe_allow_html=True)
+
+                with r_cols[4]:
+                    if pd.notnull(row['Active Section']):
+                        st.markdown(f"<span class='pill status-running'>Running in {row['Active Section'].capitalize()}</span>", unsafe_allow_html=True)
+                    elif lc != 'None' and pd.notnull(lc):
+                        st.markdown("<span class='pill status-badge-yellow'>Waiting for Start</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<span class='pill status-badge-green'>All Processed</span>", unsafe_allow_html=True)
+
+                with r_cols[5]:
+                    if st.button("View Details", key=f"hub_view_{row['Book ID']}", use_container_width=True, type="secondary"):
+                        show_correction_audit_dialog(row['Book ID'], conn)
 
 def render_worker_completion_graph(books_df, selected_month, section, holds_df=None):
     """Render a graph and table showing completed books for a given section and month, with hold time excluded from time taken and hold time in the last column."""
@@ -1126,9 +1364,7 @@ def fetch_unique_names(column_name, conn):
     return sorted(result[column_name].tolist())
 
 # --- Helper Functions ---
-def get_status(start, end, current_date, is_in_correction=False):
-    if is_in_correction:
-        return "In Correction", None
+def get_status(start, end, current_date):
     if pd.isna(start) or start == '0000-00-00 00:00:00':
         return "Pending", None
     if pd.notna(start) and start != '0000-00-00 00:00:00' and pd.isna(end):
@@ -1208,11 +1444,9 @@ def correction_dialog(book_id, conn, section):
         correction_id = ongoing_correction.iloc[0]["correction_id"]
         current_start = ongoing_correction.iloc[0]["correction_start"]
         current_worker = ongoing_correction.iloc[0]["worker"]
-        current_notes = ongoing_correction.iloc[0]["notes"] or ""
     else:
         current_start = None
         current_worker = None
-        current_notes = ""
 
     # Fetch default worker if not ongoing
     if not is_ongoing:
@@ -1252,16 +1486,17 @@ def correction_dialog(book_id, conn, section):
 
     # Fetch all corrections for history
     query = """
-        SELECT correction_start AS Start, correction_end AS End, worker, notes
+        SELECT correction_start AS Start, correction_end AS End, worker, notes, round_number
         FROM corrections
         WHERE book_id = :book_id AND section = :section
         ORDER BY correction_start
     """
     corrections = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
     for idx, row in corrections.iterrows():
+        r_num = row['round_number'] if pd.notnull(row['round_number']) else 1
         events.append({
             "Time": row["Start"],
-            "Event": f"Correction Started by {row['worker']}",
+            "Event": f"Correction Started by {row['worker']} (Round {r_num})",
             "Notes": row['notes'] if pd.notnull(row['notes']) else "-"
         })
         if pd.notnull(row["End"]):
@@ -1274,19 +1509,19 @@ def correction_dialog(book_id, conn, section):
     events.sort(key=lambda x: x["Time"])
 
     # Display history in a timeline-like format
-    st.markdown(f'<div class="field-label">Full {display_name} History</div>', unsafe_allow_html=True)
-    if events:
-        for event in events:
-            time_str = event["Time"].strftime('%d %B %Y, %I:%M %p') if pd.notnull(event["Time"]) else "-"
-            event_str = event["Event"]
-            notes = event["Notes"]
-            # Use st.info for a clean, boxed appearance
-            if notes != "-":
-                st.info(f"**{time_str}**: {event_str}  \n**Reason**: {notes}")
-            else:
-                st.info(f"**{time_str}**: {event_str}")
-    else:
-        st.info("No history available.")
+    with st.expander(f"Show Full {display_name} History"):
+        if events:
+            for event in events:
+                time_str = event["Time"].strftime('%d %B %Y, %I:%M %p') if pd.notnull(event["Time"]) else "-"
+                event_str = event["Event"]
+                notes = event["Notes"]
+                # Use st.info for a clean, boxed appearance
+                if notes != "-":
+                    st.info(f"**{time_str}**: {event_str}  \n**Reason**: {notes}")
+                else:
+                    st.info(f"**{time_str}**: {event_str}")
+        else:
+            st.info("No history available.")
 
     # Custom CSS
     st.markdown("""
@@ -1307,11 +1542,9 @@ def correction_dialog(book_id, conn, section):
     names = fetch_unique_names(config["by"], conn)
     options = ["Select Team Member"] + names + ["Add New..."]
 
-    # Initialize session state for new worker and notes
+    # Initialize session state for new worker
     if f"{section}_correction_new_worker_{book_id}" not in st.session_state:
         st.session_state[f"{section}_correction_new_worker_{book_id}"] = ""
-    if f"{section}_correction_notes_{book_id}" not in st.session_state:
-        st.session_state[f"{section}_correction_notes_{book_id}"] = current_notes
 
     # Show warning if on hold
     if is_on_hold:
@@ -1348,16 +1581,6 @@ def correction_dialog(book_id, conn, section):
         else:
             worker = None
 
-        notes = st.text_area(
-            "Correction Notes",
-            value=st.session_state[f"{section}_correction_notes_{book_id}"],
-            key=f"{section}_correction_notes_{book_id}",
-            placeholder=f"Enter notes about this {display_name.lower()} correction...",
-            label_visibility="collapsed",
-            help=f"Optional notes about the {display_name.lower()} correction",
-            disabled=is_on_hold
-        )
-
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if is_on_hold:
@@ -1368,14 +1591,18 @@ def correction_dialog(book_id, conn, section):
                     with st.spinner(f"Starting {display_name} correction..."):
                         sleep(1)
                         now = datetime.now(IST)
+                        
+                        # Fetch current correction round
+                        round_res = conn.query("SELECT COALESCE(MAX(round_number), 1) as correction_round FROM author_corrections WHERE book_id = :book_id", params={"book_id": book_id}, show_spinner=False)
+                        current_round = int(round_res.iloc[0]['correction_round']) if not round_res.empty and pd.notnull(round_res.iloc[0]['correction_round']) else 1
+
                         updates = {
                             "book_id": book_id,
                             "section": section,
                             "correction_start": now,
                             "worker": worker,
-                            "notes": notes if notes.strip() else None
+                            "round_number": current_round
                         }
-                        updates = {k: v for k, v in updates.items() if v is not None}
                         insert_fields = ", ".join(updates.keys())
                         insert_placeholders = ", ".join([f":{key}" for key in updates.keys()])
                         with conn.session as s:
@@ -1387,7 +1614,7 @@ def correction_dialog(book_id, conn, section):
                             s.commit()
                         details = (
                             f"Book ID: {book_id}, Start: {now}, "
-                            f"Worker: {worker or 'None'}, Notes: {notes or 'None'}"
+                            f"Worker: {worker or 'None'}"
                         )
                         try:
                             log_activity(
@@ -1403,7 +1630,6 @@ def correction_dialog(book_id, conn, section):
                         st.success(f"✔️ Started {display_name} correction")
                         st.toast(f"✔️ Started {display_name} correction", icon="✔️", duration="long")
                         st.session_state.pop(f"{section}_correction_new_worker_{book_id}", None)
-                        st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
                         sleep(1)
                         st.rerun()
             else:
@@ -1422,40 +1648,53 @@ def correction_dialog(book_id, conn, section):
             st.markdown("**Assigned To**")
             st.info(current_worker or 'None')
 
-        st.markdown(f'<div class="field-label">Correction Notes</div>', unsafe_allow_html=True)
-        notes = st.text_area(
-            "Notes",
-            value=st.session_state[f"{section}_correction_notes_{book_id}"],
-            key=f"{section}_correction_notes_{book_id}",
-            placeholder=f"Enter notes about this {display_name.lower()} correction...",
-            label_visibility="collapsed",
-            help=f"Optional notes about the {display_name.lower()} correction"
-        )
-
         col_end, col_cancel = st.columns(2)
         with col_end:
             if st.button(f"⏹️ End {display_name} Correction Now", type="primary", width='stretch'):
                 with st.spinner(f"Ending {display_name} correction..."):
                     sleep(1)
                     now = datetime.now(IST)
-                    updates = {
-                        "correction_end": now,
-                        "notes": notes if notes.strip() else None
-                    }
-                    updates = {k: v for k, v in updates.items() if v is not None}
-                    update_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
                     with conn.session as s:
+                        # 1. End the specific correction task
                         query = f"""
                             UPDATE corrections
-                            SET {update_clause}
+                            SET correction_end = :correction_end
                             WHERE correction_id = :correction_id
                         """
-                        updates["correction_id"] = correction_id
-                        s.execute(text(query), updates)
+                        params = {
+                            "correction_end": now,
+                            "correction_id": correction_id
+                        }
+                        s.execute(text(query), params)
+                        
+                        # 2. Advance Lifecycle State
+                        # Check if this was the last active correction task for this section? 
+                        # Actually, the requirement implies the *Lifecycle* moves when the worker says "I'm done".
+                        # Assuming one main correction task per section per round usually, or the user explicitly ends the phase.
+                        # For simplicity based on prompt: "When they finish... it moves".
+                        
+                        next_status = None
+                        if section == 'writing':
+                            next_status = 'Proofreading'
+                        elif section == 'proofreading':
+                            next_status = 'Formatting'
+                        elif section == 'formatting':
+                            next_status = 'None' # Cycle Closed
+                        
+                        if next_status:
+                            s.execute(
+                                text("UPDATE books SET correction_status = :status WHERE book_id = :book_id"),
+                                {"status": next_status, "book_id": book_id}
+                            )
+
                         s.commit()
+
                     details = (
-                        f"Book ID: {book_id}, End: {now}, Notes: {notes or 'None'}"
+                        f"Book ID: {book_id}, End: {now}"
                     )
+                    if next_status:
+                         details += f", Advanced to {next_status}"
+
                     try:
                         log_activity(
                             conn,
@@ -1468,13 +1707,16 @@ def correction_dialog(book_id, conn, section):
                     except Exception as e:
                         st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
                     st.success(f"✔️ Ended {display_name} correction")
+                    if next_status == 'None':
+                         st.success("✅ Correction Cycle Complete!")
+                    elif next_status:
+                         st.info(f"➡️ Moved to {next_status}")
+
                     st.toast(f"Ended {display_name} correction", icon="✔️", duration="long")
-                    st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
                     sleep(1)
                     st.rerun()
         with col_cancel:
             if st.button("Cancel", type="secondary", width='stretch'):
-                st.session_state.pop(f"{section}_correction_notes_{book_id}", None)
                 st.rerun()
 
 
@@ -1953,6 +2195,149 @@ def edit_section_dialog(book_id, conn, section):
             st.markdown("**Total Book Pages**")
             st.info(current_pages)
 
+def render_correction_table(correction_books, section, conn):
+    count = len(correction_books)
+    title = "Active Corrections"
+    badge_color = "red"  # Using red to highlight corrections
+
+    cont = st.container(border=True)
+    with cont:
+        # Title with Badge
+        st.markdown(f"<h5><span class='status-badge-{badge_color}'>{title} <span class='badge-count'>{count}</span></span></h5>", 
+                    unsafe_allow_html=True)
+        
+        st.markdown('<div class="header-row">', unsafe_allow_html=True)
+
+        # Columns
+        column_sizes = [0.8, 4, 1, 0.8, 1, 1, 0.7, 1]
+        col_configs = st.columns(column_sizes)
+        
+        with col_configs[0]: st.markdown('<div class="header">Book ID</div>', unsafe_allow_html=True)
+        with col_configs[1]: st.markdown('<div class="header">Title</div>', unsafe_allow_html=True)
+        with col_configs[2]: st.markdown('<div class="header">Date</div>', unsafe_allow_html=True)
+        with col_configs[3]: st.markdown('<div class="header">Round</div>', unsafe_allow_html=True)
+        with col_configs[4]: st.markdown('<div class="header">Status</div>', unsafe_allow_html=True)
+        with col_configs[5]: st.markdown('<div class="header">Correction By</div>', unsafe_allow_html=True)
+        with col_configs[6]: st.markdown('<div class="header">File</div>', unsafe_allow_html=True)
+        with col_configs[7]: st.markdown('<div class="header">Action</div>', unsafe_allow_html=True)
+
+        st.write("")
+        
+        st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
+
+        current_date = datetime.now().date()
+        
+        # Create worker map for consistent coloring
+        unique_workers = [w for w in correction_books['Correction By'].unique() if pd.notnull(w) and w != '-']
+        worker_map = {worker: idx % 10 for idx, worker in enumerate(unique_workers)}
+
+        for _, row in correction_books.iterrows():
+            with st.container():
+                col_configs = st.columns(column_sizes, vertical_alignment="center")
+                
+                with col_configs[0]:
+                    st.write(int(row['Book ID']))
+                
+                with col_configs[1]:
+                    st.markdown(f"{row['Title']}")
+                
+                with col_configs[2]:
+                    date_val = row['Date']
+                    if isinstance(date_val, (pd.Timestamp, datetime)):
+                        date_str = date_val.strftime('%d %B %Y')
+                    else:
+                        date_str = str(date_val)
+                    st.write(date_str)
+                
+                with col_configs[3]:
+                    st.markdown(f'<span class="pill worker-by-1">Cycle {row["Round"]}</span>', unsafe_allow_html=True)
+                
+                with col_configs[4]:
+                    active_tasks = row['Active Tasks']
+                    if active_tasks > 0:
+                        # Running
+                        start_time = row['Correction Start']
+                        if pd.notnull(start_time):
+                            if not isinstance(start_time, (pd.Timestamp, datetime)):
+                                start_time = pd.to_datetime(start_time)
+                            days = (current_date - start_time.date()).days
+                            st.markdown(f'<span class="pill status-running">Running ({days}d)</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<span class="pill status-running">Running</span>', unsafe_allow_html=True)
+                    else:
+                        # Pending
+                        corr_date = row['Correction Date']
+                        if pd.notnull(corr_date):
+                            if not isinstance(corr_date, (pd.Timestamp, datetime)):
+                                corr_date = pd.to_datetime(corr_date)
+                            days = (current_date - corr_date.date()).days
+                            st.markdown(f'<span class="pill status-pending">Pending ({days}d)</span>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<span class="pill status-pending">Pending</span>', unsafe_allow_html=True)
+                
+                with col_configs[5]:
+                    worker = row.get('Correction By')
+                    if pd.notnull(worker) and worker != '-':
+                        class_name = f"worker-by-{worker_map.get(worker)}"
+                        st.markdown(f'<span class="pill {class_name}">{worker}</span>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<span class="pill worker-by-not">Not Assigned</span>', unsafe_allow_html=True)
+                
+                with col_configs[6]:
+                    file_path = row.get('Correction File')
+                    corr_text = row.get('Correction Text')
+                    has_file = pd.notnull(file_path) and file_path and os.path.exists(file_path)
+                    has_text = pd.notnull(corr_text) and str(corr_text).strip() != ""
+
+                    if has_file:
+                        with open(file_path, "rb") as file:
+                            st.download_button(
+                                label=":material/download:",
+                                data=file,
+                                file_name=os.path.basename(file_path),
+                                mime="application/octet-stream",
+                                key=f"dl_corr_file_{section}_{row['Book ID']}",
+                                help="Download Correction File",
+                                on_click=lambda: log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "downloaded correction file",
+                                    f"Book ID: {row['Book ID']}, Section: {section}, File: {os.path.basename(file_path)}"
+                                )
+                            )
+                    elif has_text:
+                        st.download_button(
+                            label=":material/download:",
+                            data=str(corr_text),
+                            file_name=f"correction_{row['Book ID']}.txt",
+                            mime="text/plain",
+                            key=f"dl_corr_text_{section}_{row['Book ID']}",
+                            help="Download Correction Text (.txt)",
+                            on_click=lambda: log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "downloaded correction text",
+                                f"Book ID: {row['Book ID']}, Section: {section}, Type: Text Download"
+                            )
+                        )
+                    else:
+                        st.download_button(
+                            label=":material/download:",
+                            data="",
+                            file_name="none",
+                            key=f"dl_corr_file_{section}_{row['Book ID']}_disabled",
+                            disabled=True,
+                            help="No file or text available"
+                        )
+
+                with col_configs[7]:
+                    if st.button("Manage", key=f"manage_corr_{section}_{row['Book ID']}"):
+                        correction_dialog(row['Book ID'], conn, section)
+
 
 def render_table(books_df, title, column_sizes, color, section, role, is_running=False):
     if books_df.empty:
@@ -2070,7 +2455,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             else:
                 columns.append("Action")
         elif "Completed" in title:
-            columns.extend([f"{section.capitalize()} By", f"{section.capitalize()} End", "Correction"])
+            columns.extend([f"{section.capitalize()} By", f"{section.capitalize()} End"])
         
         # Validate column sizes
         if len(column_sizes) < len(columns):
@@ -2082,32 +2467,6 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             with col_configs[i]:
                 st.markdown(f'<span class="header">{col}</span>', unsafe_allow_html=True)
         st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
-
-        # Fetch metadata for books in the current view
-        book_ids = tuple(filtered_df['Book ID'].tolist())
-        correction_book_ids = set() # For ONGOING corrections
-        correction_history_ids = set() # For ANY past correction
-
-        if book_ids:
-            # Fetch ongoing corrections for 'Running' table status pill
-            if is_running:
-                query_ongoing = """
-                    SELECT book_id
-                    FROM corrections
-                    WHERE section = :section AND correction_end IS NULL AND book_id IN :book_ids
-                """
-                with conn.session as s:
-                    ongoing_corrections = s.execute(text(query_ongoing), {"section": section, "book_ids": book_ids}).fetchall()
-                    correction_book_ids = set(row.book_id for row in ongoing_corrections)
-            
-            # Fetch all correction history for the new icon indicator
-            query_history = """
-                SELECT DISTINCT book_id FROM corrections
-                WHERE section = :section AND book_id IN :book_ids
-            """
-            with conn.session as s:
-                history_results = s.execute(text(query_history), {"section": section, "book_ids": book_ids}).fetchall()
-                correction_history_ids = {row.book_id for row in history_results}
 
         current_date = datetime.now().date()
         # Worker maps
@@ -2134,13 +2493,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             with col_configs[col_idx]:
                 title_text = row['Title']
 
-                # Add indicators for hold and correction history
-                # Check for hold history (assuming 'hold_start' column indicates this)
+                # Add indicators for hold
                 if 'hold_start' in row and pd.notnull(row['hold_start']) and str(row['hold_start']) != '0000-00-00 00:00:00':
                     title_text += ' <span class="history-icon" title="This book has been on hold before">:material/pause:</span>'
-                # Check for correction history from our fetched set
-                if row['Book ID'] in correction_history_ids:
-                    title_text += ' <span class="history-icon" title="This book has had corrections before">:material/build:</span>'
                 
                 if role == "proofreader":
                     if pd.notnull(row.get('is_publish_only')) and row['is_publish_only'] == 1:
@@ -2164,10 +2519,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     else:
                         status_html = '<span class="pill pending">Pending</span>'
                 else:
-                    is_in_correction = row['Book ID'] in correction_book_ids and is_running
-                    status, days = get_status(row[f'{section.capitalize()} Start'], row[f'{section.capitalize()} End'], current_date, is_in_correction)
+                    status, days = get_status(row[f'{section.capitalize()} Start'], row[f'{section.capitalize()} End'], current_date)
                     days_since = get_days_since_enrolled(row['Date'], current_date)
-                    status_html = f'<span class="pill status-{"correction" if is_in_correction else "pending" if status == "Pending" else "running" if status == "Running" else "completed"}">{status}'
+                    status_html = f'<span class="pill status-{"pending" if status == "Pending" else "running" if status == "Running" else "completed"}">{status}'
                     if days is not None and status == "Running":
                         duration = calculate_working_duration(row[f'{section.capitalize()} Start'], datetime.now())
                         if duration:
@@ -2316,13 +2670,8 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        is_in_correction = row['Book ID'] in correction_book_ids
-                        if is_in_correction:
-                            if st.button("Edit", key=f"edit_correction_{section}_{row['Book ID']}", help="Edit ongoing correction details"):
-                                correction_dialog(row['Book ID'], conn, section)
-                        else:
-                            if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
-                                edit_section_dialog(row['Book ID'], conn, section)
+                        if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
+                            edit_section_dialog(row['Book ID'], conn, section)
                     col_idx += 1
                     with col_configs[col_idx]:
                         if st.button("Details", key=f"details_{section}_{row['Book ID']}"):
@@ -2343,13 +2692,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        is_in_correction = row['Book ID'] in correction_book_ids
-                        if is_in_correction:
-                            if st.button("Edit", key=f"edit_correction_{section}_{row['Book ID']}", help="Edit ongoing correction details"):
-                                correction_dialog(row['Book ID'], conn, section)
-                        else:
-                            if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
-                                edit_section_dialog(row['Book ID'], conn, section)
+                        if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
+                            edit_section_dialog(row['Book ID'], conn, section)
+                    col_idx += 1
                 elif role == "writer":
                     if not skip_start:
                         with col_configs[col_idx]:
@@ -2397,13 +2742,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                             )
                     col_idx += 1
                     with col_configs[col_idx]:
-                        is_in_correction = row['Book ID'] in correction_book_ids
-                        if is_in_correction:
-                            if st.button("Edit", key=f"edit_correction_{section}_{row['Book ID']}", help="Edit ongoing correction details"):
-                                correction_dialog(row['Book ID'], conn, section)
-                        else:
-                            if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
-                                edit_section_dialog(row['Book ID'], conn, section)
+                        if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
+                            edit_section_dialog(row['Book ID'], conn, section)
+                    col_idx += 1
                 else:
                     if not skip_start:
                         with col_configs[col_idx]:
@@ -2420,13 +2761,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         st.markdown(f'<span class="pill {class_name}">{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
                     with col_configs[col_idx]:
-                        is_in_correction = row['Book ID'] in correction_book_ids
-                        if is_in_correction:
-                            if st.button("Edit", key=f"edit_correction_{section}_{row['Book ID']}", help="Edit ongoing correction details"):
-                                correction_dialog(row['Book ID'], conn, section)
-                        else:
-                            if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
-                                edit_section_dialog(row['Book ID'], conn, section)
+                        if st.button("Edit", key=f"edit_main_{section}_{row['Book ID']}", help="Edit main process details"):
+                            edit_section_dialog(row['Book ID'], conn, section)
+                    col_idx += 1
             # Pending-specific column
             elif "Pending" in title and user_role == role:
                 if role == "cover_designer":
@@ -2475,10 +2812,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     end_date = row[f'{section.capitalize()} End']
                     value = end_date.strftime('%Y-%m-%d') if not pd.isna(end_date) and end_date != '0000-00-00 00:00:00' else "-"
                     st.markdown(f'<span>{value}</span>', unsafe_allow_html=True)
-                col_idx += 1
-                with col_configs[col_idx]:
-                    if st.button("Edit", key=f"correction_{section}_{row['Book ID']}"):
-                        correction_dialog(row['Book ID'], conn, section)
+
 
 # --- Section Configuration ---
 sections = {
@@ -2495,22 +2829,12 @@ for section, config in sections.items():
         books_df = fetch_books(months_back=4, section=section)
         holds_df = fetch_holds(section=section)  # Fetch holds_df for the section
         
-        # Fetch books with ongoing corrections
-        query = """
-            SELECT DISTINCT book_id
-            FROM corrections
-            WHERE section = :section AND correction_end IS NULL
-        """
-        ongoing_corrections = conn.query(query, params={"section": section}, show_spinner=False)
-        ongoing_correction_ids = set(ongoing_corrections["book_id"].tolist())
-        
         not_on_hold_condition = (books_df['hold_start'].isnull() | books_df['resume_time'].notnull())
         
         if section == "writing":
             running_books = books_df[
-                ((books_df['Writing Start'].notnull() & 
-                  books_df['Writing End'].isnull()) |
-                 books_df['Book ID'].isin(ongoing_correction_ids)) &
+                (books_df['Writing Start'].notnull() & 
+                  books_df['Writing End'].isnull()) &
                 not_on_hold_condition
             ]
             on_hold_books = books_df[
@@ -2521,19 +2845,16 @@ for section, config in sections.items():
                 (books_df['Writing Start'].isnull()) &
                 (books_df['Is Publish Only'] != 1) &
                 (books_df['Is Thesis to Book'] != 1) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
             completed_books = books_df[
                 (books_df['Writing End'].notnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
         elif section == "proofreading":
             running_books = books_df[
-                ((books_df['Proofreading Start'].notnull() & 
-                  books_df['Proofreading End'].isnull()) |
-                 books_df['Book ID'].isin(ongoing_correction_ids)) &
+                (books_df['Proofreading Start'].notnull() & 
+                  books_df['Proofreading End'].isnull()) &
                 not_on_hold_condition
             ]
             on_hold_books = books_df[
@@ -2545,19 +2866,16 @@ for section, config in sections.items():
                  (books_df['Is Publish Only'] == 1) | 
                  (books_df['Is Thesis to Book'] == 1)) &
                 (books_df['Proofreading Start'].isnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
             completed_books = books_df[
                 (books_df['Proofreading End'].notnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
         elif section == "formatting":
             running_books = books_df[
-                ((books_df['Formatting Start'].notnull() & 
-                  books_df['Formatting End'].isnull()) |
-                 books_df['Book ID'].isin(ongoing_correction_ids)) &
+                (books_df['Formatting Start'].notnull() & 
+                  books_df['Formatting End'].isnull()) &
                 not_on_hold_condition
             ]
             on_hold_books = books_df[
@@ -2567,19 +2885,16 @@ for section, config in sections.items():
             pending_books = books_df[
                 (books_df['Proofreading End'].notnull()) &
                 (books_df['Formatting Start'].isnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
             completed_books = books_df[
                 (books_df['Formatting End'].notnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
         elif section == "cover":
             running_books = books_df[
-                ((books_df['Cover Start'].notnull() & 
-                  books_df['Cover End'].isnull()) |
-                 books_df['Book ID'].isin(ongoing_correction_ids)) &
+                (books_df['Cover Start'].notnull() & 
+                  books_df['Cover End'].isnull()) &
                 not_on_hold_condition
             ]
             on_hold_books = books_df[
@@ -2588,12 +2903,10 @@ for section, config in sections.items():
             ]
             pending_books = books_df[
                 (books_df['Cover Start'].isnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
             completed_books = books_df[
                 (books_df['Cover End'].notnull()) &
-                (~books_df['Book ID'].isin(ongoing_correction_ids)) &
                 not_on_hold_condition
             ]
 
@@ -2606,22 +2919,22 @@ for section, config in sections.items():
             column_sizes_running = [0.7, 5.2, 1, 1.3, 1.3, 1.2, 1, 1]
             column_sizes_on_hold = [0.7, 5.2, 1, 1, 1, 1.2, 1, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 0.8, 1]
-            column_sizes_completed = [0.7, 5, 1, 1.3, 1, 1, 1, 1]
+            column_sizes_completed = [0.7, 5, 1, 1.3, 1, 1, 1]
         elif section == "proofreading":
             column_sizes_running = [0.7, 5, 1, 1.2, 0.9, 1.6, 1.2, 1]
             column_sizes_on_hold = [0.7, 5, 1, 1.2, 0.9, 1, 1.2, 1]
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8]
-            column_sizes_completed = [0.7, 3, 1, 1.3, 1.1, 1, 1, 1, 1, 1]
+            column_sizes_completed = [0.7, 3, 1, 1.3, 1.1, 1, 1, 1, 1]
         elif section == "formatting":
             column_sizes_running = [0.7, 5.5, 1, 1, 1.2, 1.2, 1]
             column_sizes_on_hold = [0.7, 5.5, 1, 1, 1, 1.2, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 1.2, 1, 1]
-            column_sizes_completed = [0.7, 3, 1, 1.3, 1.2, 1, 1, 1, 1]
+            column_sizes_completed = [0.7, 3, 1, 1.3, 1.2, 1, 1, 1]
         elif section == "cover":
             column_sizes_running = [0.8, 5, 1.2, 1.3, 1, 1, 1, 1, 1, 1]
             column_sizes_on_hold = [0.8, 3, 1.1, 1.2, 1, 1, 1, 1, 1, 1, 1]
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 1]
-            column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3, 1, 1]
+            column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3, 1]
 
         # Initialize session state for completed table visibility
         if f"show_{section}_completed" not in st.session_state:
@@ -2633,6 +2946,12 @@ for section, config in sections.items():
             st.stop()
         # Pass holds_df to render_metrics
         render_metrics(books_df, selected_month, section, config["role"], holds_df=holds_df)
+
+        # --- Active Corrections ---
+        correction_books = fetch_correction_books(section)
+        if not correction_books.empty:
+            render_correction_table(correction_books, section, conn)
+
         render_table(running_books, f"{section.capitalize()} Running", column_sizes_running, config["color"], section, config["role"], is_running=True)
         render_table(on_hold_books, f"{section.capitalize()} Hold", column_sizes_on_hold, config["color"], section, config["role"], is_running=True)
         render_table(pending_books, f"{section.capitalize()} Pending", column_sizes_pending, config["color"], section, config["role"], is_running=False)
@@ -2643,6 +2962,14 @@ for section, config in sections.items():
         
         if st.session_state[f"show_{section}_completed"]:
             render_table(completed_books, f"{section.capitalize()} Completed", column_sizes_completed, config["color"], section, config["role"], is_running=False)
+
+
+if role_user == "user" and user_app == "operations":
+    st.empty()
+else:
+    if selected == "Correction Hub":
+        render_correction_hub(conn)
+
 
 
 ###################################################################################################################################
@@ -2838,6 +3165,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+
 if role_user == "user" and user_app == "operations":
     st.empty()
 else:
@@ -2870,14 +3198,22 @@ else:
                 st.subheader(f'📖 {book["title"]} (ID: {book_id})', anchor=False, divider="orange")
                 st.markdown("")  
                 
-                # Fetch corrections and holds
+                # Fetch corrections, requests and holds
                 corrections_query = """
                 SELECT * FROM corrections WHERE book_id = :book_id ORDER BY correction_start
+                """
+                requests_query = """
+                SELECT ac.*, a.name AS author_name 
+                FROM author_corrections ac
+                LEFT JOIN authors a ON ac.author_id = a.author_id
+                WHERE ac.book_id = :book_id 
+                ORDER BY ac.created_at
                 """
                 holds_query = """
                 SELECT * FROM holds WHERE book_id = :book_id ORDER BY hold_start
                 """
                 corrections_df = conn.query(corrections_query, params={"book_id": book_id}, ttl=3600)
+                requests_df = conn.query(requests_query, params={"book_id": book_id}, ttl=3600)
                 holds_df = conn.query(holds_query, params={"book_id": book_id}, ttl=3600)
                 
                 # Calculate total book time and active times
@@ -2909,7 +3245,20 @@ else:
                             'duration': duration
                         })
                 
-                # Add corrections
+                # Add correction requests (Author Input)
+                for _, req in requests_df.iterrows():
+                    if pd.notna(req['created_at']):
+                        all_dates.append(req['created_at'])
+                        author_name = req['author_name'] if pd.notnull(req['author_name']) else "Unknown Author"
+                        text_snippet = (req['correction_text'][:100] + '...') if req['correction_text'] and len(req['correction_text']) > 100 else (req['correction_text'] or "File uploaded")
+                        events.append({
+                            'timestamp': req['created_at'],
+                            'section': 'correction',
+                            'type': 'correction_request',
+                            'details': f"Author: {author_name} | Round {req['round_number']} Request: {text_snippet}"
+                        })
+
+                # Add corrections (Team Action)
                 for _, corr in corrections_df.iterrows():
                     if pd.notna(corr['correction_start']):
                         all_dates.append(corr['correction_start'])
@@ -2917,7 +3266,7 @@ else:
                             'timestamp': corr['correction_start'],
                             'section': corr['section'],
                             'type': 'correction_start',
-                            'details': f"Reason: {corr['notes']} | Worker: {corr['worker'] if pd.notna(corr['worker']) else 'N/A'}"
+                            'details': f"Worker: {corr['worker'] if pd.notna(corr['worker']) else 'N/A'} (Cycle: {corr['round_number']})"
                         })
                     if pd.notna(corr['correction_end']):
                         all_dates.append(corr['correction_end'])
@@ -3013,33 +3362,34 @@ else:
                 st.markdown("")    
                 
                 # Unified Timeline
-                st.markdown("##### ⏳ Timeline")
-                with st.container(border=True):
-                    if not events_df.empty:
-                        for _, event in events_df.iterrows():
-                            action_map = {
-                                'start': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Started",
-                                'end': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Completed",
-                                'correction_start': f"{get_section_emoji('correction')} {event['section'].capitalize()} Correction Started",
-                                'correction_end': f"{get_section_emoji('correction')} {event['section'].capitalize()} Correction Ended",
-                                'hold_start': f"{get_section_emoji('hold')} {event['section'].capitalize()} Paused",
-                                'hold_end': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Resumed"
-                            }
-                            details = event['details']
-                            if event.get('duration') and event['type'] in ['end', 'correction_end', 'hold_end']:
-                                details += f"<span class='duration'>(Duration: {event['duration']})</span>"
-                            st.markdown(
-                                f"""
-                                <div class="tree-item">
-                                    <div class="timestamp">{format_timestamp(event['timestamp'])}</div>
-                                    <div class="action">{action_map[event['type']]}</div>
-                                    <div class="details">{details}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True
-                            )
-                    else:
-                        st.markdown("No events found for this book.")
+                with st.expander("##### ⏳ View Full Timeline", expanded=True):
+                    with st.container(border=True):
+                        if not events_df.empty:
+                            for _, event in events_df.iterrows():
+                                action_map = {
+                                    'start': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Started",
+                                    'end': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Completed",
+                                    'correction_request': f"📩 Correction Request Received",
+                                    'correction_start': f"{get_section_emoji('correction')} {event['section'].capitalize()} Correction Started",
+                                    'correction_end': f"{get_section_emoji('correction')} {event['section'].capitalize()} Correction Ended",
+                                    'hold_start': f"{get_section_emoji('hold')} {event['section'].capitalize()} Paused",
+                                    'hold_end': f"{get_section_emoji(event['section'])} {event['section'].capitalize()} Resumed"
+                                }
+                                details = event['details']
+                                if event.get('duration') and event['type'] in ['end', 'correction_end', 'hold_end']:
+                                    details += f"<span class='duration'>(Duration: {event['duration']})</span>"
+                                st.markdown(
+                                    f"""
+                                    <div class="tree-item">
+                                        <div class="timestamp">{format_timestamp(event['timestamp'])}</div>
+                                        <div class="action">{action_map[event['type']]}</div>
+                                        <div class="details">{details}</div>
+                                    </div>
+                                    """,
+                                    unsafe_allow_html=True
+                                )
+                        else:
+                            st.markdown("No events found for this book.")
             else:
                 st.info(f"No details found for book: {selected_book}")
         else:
