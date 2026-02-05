@@ -860,8 +860,9 @@ def show_correction_audit_dialog(book_id, conn):
     """, params={"bid": book_id}, show_spinner=False)
 
     # 2. Identify unique rounds across both tables
-    all_rounds = sorted(list(set(reqs['round_number'].tolist()) if not reqs.empty else [] 
-                           | set(tasks['round_number'].tolist()) if not tasks.empty else []), reverse=True)
+    req_rounds = set(reqs['round_number'].unique()) if not reqs.empty else set()
+    task_rounds = set(tasks['round_number'].unique()) if not tasks.empty else set()
+    all_rounds = sorted(list(req_rounds | task_rounds), reverse=True)
 
     if not all_rounds:
         st.info("No correction history found for this book.")
@@ -906,62 +907,27 @@ def show_correction_audit_dialog(book_id, conn):
                         with t_col1:
                             st.caption(f"👤 {t['worker']}")
                         with t_col2:
-                            st.caption(f"⏱️ {t['correction_start'].strftime('%d %b %Y, %I:%M %p')}")
-                        
-                        if pd.notnull(t['correction_end']):
-                            st.caption(f"🏁 Ended: {t['correction_end'].strftime('%d %b %Y, %I:%M %p')}")
-                        
-                        if t['notes']:
-                            st.markdown(f"<small><b>Note:</b> {t['notes']}</small>", unsafe_allow_html=True)
+                            st.caption(f"⏱️ Started: {t['correction_start'].strftime('%d %b %Y, %I:%M %p')}")
+                            if pd.notnull(t['correction_end']):
+                                st.caption(f"🏁 Ended: {t['correction_end'].strftime('%d %b %Y, %I:%M %p')}")
+                            if t['notes']:
+                                st.markdown(f"<small><b>Note:</b> {t['notes']}</small>", unsafe_allow_html=True)
 
 def render_correction_hub(conn):
-    st.subheader("🛠️ Correction Central Hub")
+    st.subheader("🛠️ Correction Hub")
     st.caption("Overview of all books with current or past correction activity.")
-
-    # 1. Fetch Summary Metrics
-    with conn.session as s:
-        # Total unique books with corrections
-        total_books_res = s.execute(text("""
-            SELECT COUNT(DISTINCT book_id) FROM (
-                SELECT book_id FROM author_corrections
-                UNION
-                SELECT book_id FROM corrections
-            ) as combined
-        """)).scalar()
-        
-        # Ongoing corrections (Running)
-        ongoing_res = s.execute(text("""
-            SELECT COUNT(DISTINCT book_id) FROM corrections WHERE correction_end IS NULL
-        """)).scalar()
-        
-        # Pending correction start (Status != 'None' and no active task)
-        pending_res = s.execute(text("""
-            SELECT COUNT(*) FROM books 
-            WHERE correction_status != 'None' AND correction_status IS NOT NULL
-            AND book_id NOT IN (SELECT book_id FROM corrections WHERE correction_end IS NULL)
-        """)).scalar()
-
-    m_col1, m_col2, m_col3 = st.columns(3)
-    with m_col1:
-        st.metric("Total Books with Corrections", total_books_res or 0)
-    with m_col2:
-        st.metric("Currently Running", ongoing_res or 0, delta_color="inverse")
-    with m_col3:
-        st.metric("Pending Team Start", pending_res or 0)
-
-    st.write("---")
 
     # 2. Fetch Detailed List
     query = """
         SELECT 
-            b.book_id AS 'Book ID',
-            b.title AS 'Title',
-            b.date AS 'Enroll Date',
-            b.correction_status AS 'Current Lifecycle',
-            (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Total Rounds',
-            (SELECT section FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS 'Active Section',
-            (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS 'Last Request',
-            (SELECT MAX(correction_start) FROM corrections c WHERE c.book_id = b.book_id) AS 'Last Action'
+            b.book_id AS `Book ID`,
+            b.title AS `Title`,
+            b.date AS `Enroll Date`,
+            b.correction_status AS `Current Lifecycle`,
+            (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Total Rounds`,
+            (SELECT section FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS `Active Section`,
+            (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Last Request`,
+            (SELECT GREATEST(COALESCE(MAX(correction_start), '1970-01-01'), COALESCE(MAX(correction_end), '1970-01-01')) FROM corrections c WHERE c.book_id = b.book_id) AS `Last Action`
         FROM books b
         WHERE b.book_id IN (SELECT book_id FROM author_corrections)
            OR b.book_id IN (SELECT book_id FROM corrections)
@@ -976,7 +942,7 @@ def render_correction_hub(conn):
     # Search and Filter
     f_col1, f_col2 = st.columns([2, 1])
     with f_col1:
-        search = st.text_input("Search by Title or ID", placeholder="Type here...", key="hub_search", label_visibility='collapsed')
+        search = st.text_input("Search by Title or ID", placeholder="Search by Title or ID", key="hub_search", label_visibility='collapsed')
     with f_col2:
         filter_status = st.selectbox("Filter Status", ["All", "Running", "Pending Start", "Completed Cycle"], label_visibility='collapsed')
 
@@ -993,6 +959,25 @@ def render_correction_hub(conn):
         filtered_df = filtered_df[(filtered_df['Active Section'].isnull()) & (filtered_df['Current Lifecycle'] != 'None') & (filtered_df['Current Lifecycle'].notnull())]
     elif filter_status == "Completed Cycle":
         filtered_df = filtered_df[(filtered_df['Current Lifecycle'] == 'None') | (filtered_df['Current Lifecycle'].isnull())]
+
+    # Pagination
+    items_per_page = 50
+    total_pages = max(1, (len(filtered_df) + items_per_page - 1) // items_per_page)
+
+    # Initialize session state
+    if 'hub_page' not in st.session_state:
+        st.session_state.hub_page = 0
+
+    # Reset page if it exceeds total pages
+    if st.session_state.hub_page >= total_pages:
+        st.session_state.hub_page = total_pages - 1
+    elif total_pages == 0:
+        st.session_state.hub_page = 0
+
+    # Slice dataframe
+    start_idx = st.session_state.hub_page * items_per_page
+    end_idx = start_idx + items_per_page
+    paged_df = filtered_df.iloc[start_idx:end_idx]
 
     # Display Table
     cont = st.container(border=True)
@@ -1013,7 +998,7 @@ def render_correction_hub(conn):
         st.write("")
         st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
 
-        for _, row in filtered_df.iterrows():
+        for _, row in paged_df.iterrows():
             with st.container():
                 r_cols = st.columns(column_sizes, vertical_alignment="center")
                 
@@ -1039,6 +1024,39 @@ def render_correction_hub(conn):
                 with r_cols[5]:
                     if st.button("View Details", key=f"hub_view_{row['Book ID']}", use_container_width=True, type="secondary"):
                         show_correction_audit_dialog(row['Book ID'], conn)
+
+    # Pagination controls
+    if total_pages > 1:
+        st.markdown("<div style='margin-top: 20px;'></div>", unsafe_allow_html=True)
+        col1, col2, col3, col4 = st.columns([1, 2, 1, 2], vertical_alignment="center")
+        
+        with col1:
+            if st.session_state.hub_page > 0:
+                if st.button("Previous", key="hub_prev_button"):
+                    st.session_state.hub_page -= 1
+                    st.rerun()
+        
+        with col2:
+            st.write(f"Page {st.session_state.hub_page + 1} of {total_pages}", unsafe_allow_html=True)
+        
+        with col3:
+            if st.session_state.hub_page < total_pages - 1:
+                if st.button("Next", key="hub_next_button"):
+                    st.session_state.hub_page += 1
+                    st.rerun()
+        
+        with col4:
+            page_options = list(range(1, total_pages + 1))
+            selected_page = st.selectbox(
+                "Go to page",
+                options=page_options,
+                index=st.session_state.hub_page,
+                key="hub_page_selector",
+                label_visibility="collapsed"
+            )
+            if selected_page != st.session_state.hub_page + 1:
+                st.session_state.hub_page = selected_page - 1
+                st.rerun()
 
 def render_worker_completion_graph(books_df, selected_month, section, holds_df=None):
     """Render a graph and table showing completed books for a given section and month, with hold time excluded from time taken and hold time in the last column."""

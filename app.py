@@ -113,6 +113,7 @@ if "session_id" not in st.session_state:
 BASE_URL  = st.secrets["general"]["BASE_URL"]
 SYLLABUS_UPLOAD_DIR = st.secrets["general"]["SYLLABUS_UPLOAD_DIR"]
 AUTHOR_PHOTO_UPLOAD_DIR = st.secrets["general"]["AUTHOR_PHOTO_UPLOAD_DIR"]
+CORRECTION_FIL_DIR = st.secrets["general"]["CORRECTION_FIL_DIR"]
 EMAIL_ADDRESS = st.secrets["export_email"]["EMAIL_ADDRESS"]
 EMAIL_PASSWORD = st.secrets["export_email"]["EMAIL_PASSWORD"]
 GMAIL_SMTP_SERVER = st.secrets["email_servers"]["GMAIL_SMTP_SERVER"]
@@ -404,7 +405,7 @@ update_button_counts(conn)
 query = "SELECT book_id, title, date, isbn, apply_isbn, isbn_receive_date, deliver, price, is_single_author, syllabus_path, " \
 "is_publish_only, is_thesis_to_book, publisher, author_type, writing_start, writing_end, " \
 "proofreading_start, proofreading_end, formatting_start, formatting_end, cover_start, cover_end," \
-"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, google_link, images FROM books WHERE is_cancelled = 0"
+"writing_by, proofreading_by, formatting_by, cover_by, tags, subject, agph_link, amazon_link, flipkart_link, google_link, images, correction_status FROM books WHERE is_cancelled = 0"
 
 books = conn.query(query,show_spinner = False)
 
@@ -653,7 +654,20 @@ def fetch_all_author_names(book_ids, _conn):
         st.error(f"Error fetching author names: {e}")
         return {book_id: f"Database error: {str(e)}" for book_id in book_ids}
 
-
+@st.cache_data
+def fetch_active_corrections(book_ids, _conn):
+    if not book_ids:
+        return pd.DataFrame(columns=['book_id', 'section', 'worker'])
+    query = """
+    SELECT book_id, section, worker
+    FROM corrections
+    WHERE book_id IN :book_ids AND correction_end IS NULL
+    """
+    try:
+        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+    except Exception as e:
+        st.error(f"Error fetching active corrections: {e}")
+        return pd.DataFrame(columns=['book_id', 'section', 'worker'])
 
 # ------------------------------------------------------------------
 # 1.  Harmonised palette  (light bg → dark text)
@@ -717,11 +731,12 @@ def pill(text: str, colour_key: str, emoji_key: str = "") -> str:
     )
 
 
-def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
+def get_status_pill(book_id, row, authors_grouped, printeditions_grouped, corrections_grouped):
     # ---------- shortcuts ----------
     is_publish_only   = row.get("is_publish_only", 0) == 1
     is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
     skip_writing      = is_publish_only or is_thesis_to_book
+    correction_status = row.get("correction_status", "None")
 
     # ---------- operations status ----------
     operations = [
@@ -754,7 +769,22 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped):
     # Determine status based on current stage or completed stages
     required_stages = [s for s, _, _, _ in operations]
     if len(completed_stages) == len(required_stages):
-        ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
+        # Initial Operations Complete - Check for Corrections
+        if correction_status and correction_status != "None":
+            active_corr = corrections_grouped.get(book_id, pd.DataFrame())
+            if not active_corr.empty:
+                # Show active task in correction cycle
+                task = active_corr.iloc[0]
+                ops_status = f"Correction: {task['section'].capitalize()} by {task['worker']}"
+                ops_colour = "amber"
+                ops_emoji = task['section'].lower()
+            else:
+                # Pending start of correction stage
+                ops_status = f"Correction: Pending in {correction_status}"
+                ops_colour = "blue"
+                ops_emoji = correction_status.lower()
+        else:
+            ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
     elif current_stage:
         in_prog, _, col_key, stage, name = current_stage
         ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
@@ -4479,25 +4509,6 @@ MAX_EDITORS_PER_CHAPTER = 2
 @st.dialog("Edit Author Details", width='large', on_dismiss = 'rerun')
 def edit_author_dialog(book_id, conn):
 
-    # Ensure author_corrections table exists
-    try:
-        with conn.session as s:
-            s.execute(text("""
-                CREATE TABLE IF NOT EXISTS author_corrections (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    book_id VARCHAR(255),
-                    author_id INT,
-                    correction_text TEXT,
-                    correction_file VARCHAR(255),
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    INDEX (book_id),
-                    INDEX (author_id)
-                )
-            """))
-            s.commit()
-    except Exception as e:
-        st.error(f"Error creating table: {e}")
-
     # Fetch book details for title, is_single_author, num_copies, and print_status
     book_details = fetch_book_details(book_id, conn)
     if book_details.empty:
@@ -5452,40 +5463,71 @@ def edit_author_dialog(book_id, conn):
                                         active_task_for_round = next((t for t in round_tasks if t.correction_end is None), None)
                                         
                                         if active_task_for_round:
-                                            status_text = f"🚀 Running in **{active_task_for_round.section.capitalize()}**"
+                                            status_text = f"🚀 {active_task_for_round.section.capitalize()}"
                                             status_color = "#e65100" # Orange
+                                            badge_bg = "#fff3e0"
                                         elif round_tasks:
                                             if correction_status == 'None' or correction_status is None:
                                                 status_text = "✅ Completed"
                                                 status_color = "#2e7d32" # Green
+                                                badge_bg = "#e8f5e9"
                                             else:
-                                                status_text = f"⏳ Pending in **{correction_status}**"
+                                                status_text = f"⏳ {correction_status}"
                                                 status_color = "#1967d2" # Blue
+                                                badge_bg = "#e8f0fe"
                                         else:
-                                            status_text = "🕒 Pending Team Start"
+                                            status_text = "🕒 Wait for Team"
                                             status_color = "#666666" # Grey
+                                            badge_bg = "#f5f5f5"
 
                                         with st.container(border=True):
-                                            col_c1, col_c2, col_c3 = st.columns([1.2, 0.8, 1.5])
-                                            with col_c1:
-                                                st.markdown(f"**📅 Date:** {corr.created_at}")
-                                            with col_c2:
-                                                st.markdown(f"**🔄 Round:** {r_num}")
-                                            with col_c3:
-                                                st.markdown(f"<div style='text-align:right; color:{status_color}; font-size:14px;'>{status_text}</div>", unsafe_allow_html=True)
+                                            # Header row with Round and Status Badge
+                                            h_col1, h_col2 = st.columns([1, 1])
+                                            with h_col1:
+                                                st.markdown(f"**🔄 Round {r_num}**")
+                                            with h_col2:
+                                                st.markdown(
+                                                    f'<div style="text-align:right;">'
+                                                    f'<span style="background-color:{badge_bg}; color:{status_color}; '
+                                                    f'padding:2px 8px; border-radius:10px; font-size:12px; font-weight:bold; '
+                                                    f'border:1px solid {status_color}44;">{status_text}</span>'
+                                                    f'</div>', 
+                                                    unsafe_allow_html=True
+                                                )
                                             
-                                            st.markdown(f"**📝 Correction:** {corr.correction_text}")
-                                            if corr.correction_file:
-                                                if os.path.exists(corr.correction_file):
-                                                    with open(corr.correction_file, "rb") as f:
-                                                        st.download_button(
-                                                            label="⬇️ Download File",
-                                                            data=f,
-                                                            file_name=os.path.basename(corr.correction_file),
-                                                            key=f"dl_corr_{corr.id}"
-                                                        )
-                                                else:
-                                                    st.caption("⚠️ File missing from server.")
+                                            st.write("") # Spacer
+                                            
+                                            # Content Section
+                                            st.markdown(f"**📝 Request Details**")
+                                            st.info(corr.correction_text if corr.correction_text else "*No text provided*")
+                                            
+                                            # Footer with date and file
+                                            f_col1, f_col2 = st.columns([2, 1], vertical_alignment="center")
+                                            with f_col1:
+                                                st.caption(f"📅 Requested on: {corr.created_at.strftime('%d %b %Y, %I:%M %p') if hasattr(corr.created_at, 'strftime') else corr.created_at}")
+                                            
+                                            with f_col2:
+                                                if corr.correction_file:
+                                                    if os.path.exists(corr.correction_file):
+                                                        with open(corr.correction_file, "rb") as f:
+                                                            st.download_button(
+                                                                label="⬇️ Download File",
+                                                                data=f,
+                                                                file_name=os.path.basename(corr.correction_file),
+                                                                key=f"dl_corr_{corr.id}",
+                                                                use_container_width=True,
+                                                                type="secondary"
+                                                            )
+                                                    else:
+                                                        st.caption("⚠️ File missing")
+                                            
+                                            # Mini Timeline for this round if tasks exist
+                                            if round_tasks:
+                                                with st.expander("🛠️ Round Progress", expanded=False):
+                                                    for t in sorted(round_tasks, key=lambda x: x.correction_start):
+                                                        done = t.correction_end is not None
+                                                        t_status = "✅" if done else "⏳"
+                                                        st.markdown(f"<small>{t_status} **{t.section.capitalize()}**: {t.worker}</small>", unsafe_allow_html=True)
                                 else:
                                     st.info("No corrections found.")
                             except Exception as e:
@@ -5502,115 +5544,114 @@ def edit_author_dialog(book_id, conn):
                                 else:
                                     with st.form(key=f"add_correction_form_{row['id']}", border=False):
                                         correction_text = st.text_area("Correction Details", key=f"corr_text_{row['id']}")
-                                        correction_file = st.file_uploader("Upload File (Optional)", key=f"corr_file_{row['id']}")
+                                        correction_file = st.file_uploader("Upload File", key=f"corr_file_{row['id']}")
                                         
                                         if st.form_submit_button("Submit Correction", type="primary"):
                                             if not correction_text and not correction_file:
                                                 st.error("Please provide text or a file.")
-                                        else:
-                                            try:
-                                                with st.spinner("Adding correction..."):
-                                                    import time
-                                                    time.sleep(2)
-                                                    file_path = None
-                                                    if correction_file:
-                                                        # Define upload dir
-                                                        CORRECTION_DIR = os.path.join("databasedata", "corrections")
-                                                        if not os.path.exists(CORRECTION_DIR):
-                                                            os.makedirs(CORRECTION_DIR)
+                                            else:
+                                                try:
+                                                    with st.spinner("Adding correction..."):
+                                                        import time
+                                                        time.sleep(2)
+                                                        file_path = None
+                                                        if correction_file:
+                                                            # Define upload dir
+                                                            if not os.path.exists(CORRECTION_FIL_DIR):
+                                                                os.makedirs(CORRECTION_FIL_DIR)
+                                                            
+                                                            # Save file
+                                                            file_ext = os.path.splitext(correction_file.name)[1]
+                                                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                                            filename = f"corrections_{book_id}_{book_title}_{timestamp}{file_ext}"
+                                                            file_path = os.path.join(CORRECTION_FIL_DIR, filename)
+                                                            
+                                                            with open(file_path, "wb") as f:
+                                                                f.write(correction_file.getbuffer())
                                                         
-                                                        # Save file
-                                                        file_ext = os.path.splitext(correction_file.name)[1]
-                                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                                        filename = f"corr_{book_id}_{author_id}_{timestamp}{file_ext}"
-                                                        file_path = os.path.join(CORRECTION_DIR, filename)
-                                                        
-                                                        with open(file_path, "wb") as f:
-                                                            f.write(correction_file.getbuffer())
-                                                    
-                                                    # Insert DB
-                                                    with conn.session as s:
-                                                        # Determine Round Number
-                                                        book_info = s.execute(
-                                                            text("SELECT correction_status FROM books WHERE book_id = :book_id"),
-                                                            {"book_id": book_id}
-                                                        ).fetchone()
-                                                        
-                                                        # Get max round from author_corrections to ensure consistency
-                                                        max_round_res = s.execute(
-                                                            text("SELECT COALESCE(MAX(round_number), 0) FROM author_corrections WHERE book_id = :book_id"),
-                                                            {"book_id": book_id}
-                                                        ).scalar()
-                                                        
-                                                        status = book_info.correction_status if book_info else 'None'
-                                                        
-                                                        # If starting a new cycle (Status is None), the round will be incremented
-                                                        if status == 'None' or status is None:
-                                                            current_round = max_round_res + 1
-                                                        else:
-                                                            current_round = max_round_res
+                                                        # Insert DB
+                                                        with conn.session as s:
+                                                            # Determine Round Number
+                                                            book_info = s.execute(
+                                                                text("SELECT correction_status FROM books WHERE book_id = :book_id"),
+                                                                {"book_id": book_id}
+                                                            ).fetchone()
+                                                            
+                                                            # Get max round from author_corrections to ensure consistency
+                                                            max_round_res = s.execute(
+                                                                text("SELECT COALESCE(MAX(round_number), 0) FROM author_corrections WHERE book_id = :book_id"),
+                                                                {"book_id": book_id}
+                                                            ).scalar()
+                                                            
+                                                            status = book_info.correction_status if book_info else 'None'
+                                                            
+                                                            # If starting a new cycle (Status is None), the round will be incremented
+                                                            if status == 'None' or status is None:
+                                                                current_round = max_round_res + 1
+                                                            else:
+                                                                current_round = max_round_res
 
-                                                        s.execute(
-                                                            text("""
-                                                                INSERT INTO author_corrections (book_id, author_id, correction_text, correction_file, round_number)
-                                                                VALUES (:book_id, :author_id, :correction_text, :correction_file, :round_number)
-                                                            """),
-                                                            {
-                                                                "book_id": book_id,
-                                                                "author_id": author_id,
-                                                                "correction_text": correction_text,
-                                                                "correction_file": file_path,
-                                                                "round_number": current_round
-                                                            }
+                                                            s.execute(
+                                                                text("""
+                                                                    INSERT INTO author_corrections (book_id, author_id, correction_text, correction_file, round_number)
+                                                                    VALUES (:book_id, :author_id, :correction_text, :correction_file, :round_number)
+                                                                """),
+                                                                {
+                                                                    "book_id": book_id,
+                                                                    "author_id": author_id,
+                                                                    "correction_text": correction_text,
+                                                                    "correction_file": file_path,
+                                                                    "round_number": current_round
+                                                                }
+                                                            )
+                                                            
+                                                            # Uncheck digital_book_sent for ALL authors of this book
+                                                            s.execute(
+                                                                text("UPDATE book_authors SET digital_book_sent = 0 WHERE book_id = :book_id"),
+                                                                {"book_id": book_id}
+                                                            )
+                                                            
+                                                            # Trigger Correction Lifecycle
+                                                            # If not currently in a correction cycle (status is None), start new cycle (Writing)
+                                                            # If already in a cycle (Writing/Proofreading/Formatting), just leave it (new tasks added to current cycle)
+                                                            s.execute(
+                                                                text("""
+                                                                    UPDATE books 
+                                                                    SET correction_status = CASE 
+                                                                            WHEN correction_status = 'None' THEN 'Writing' 
+                                                                            ELSE correction_status 
+                                                                        END
+                                                                    WHERE book_id = :book_id
+                                                                """),
+                                                                {"book_id": book_id}
+                                                            )
+                                                            
+                                                            s.commit()
+
+                                                        # Log the correction
+                                                        log_activity(
+                                                            conn,
+                                                            st.session_state.user_id,
+                                                            st.session_state.username,
+                                                            st.session_state.session_id,
+                                                            "added correction",
+                                                            f"Book ID: {book_id}, Author ID: {author_id}, File: {os.path.basename(file_path) if file_path else 'None'}"
+                                                        )
+
+                                                        # Log the mass uncheck
+                                                        log_activity(
+                                                            conn,
+                                                            st.session_state.user_id,
+                                                            st.session_state.username,
+                                                            st.session_state.session_id,
+                                                            "updated checklist",
+                                                            f"Book ID: {book_id}, Reset Digital Book Sent to 'False' for all authors due to new correction"
                                                         )
                                                         
-                                                        # Uncheck digital_book_sent for ALL authors of this book
-                                                        s.execute(
-                                                            text("UPDATE book_authors SET digital_book_sent = 0 WHERE book_id = :book_id"),
-                                                            {"book_id": book_id}
-                                                        )
-                                                        
-                                                        # Trigger Correction Lifecycle
-                                                        # If not currently in a correction cycle (status is None), start new cycle (Writing)
-                                                        # If already in a cycle (Writing/Proofreading/Formatting), just leave it (new tasks added to current cycle)
-                                                        s.execute(
-                                                            text("""
-                                                                UPDATE books 
-                                                                SET correction_status = CASE 
-                                                                        WHEN correction_status = 'None' THEN 'Writing' 
-                                                                        ELSE correction_status 
-                                                                    END
-                                                                WHERE book_id = :book_id
-                                                            """),
-                                                            {"book_id": book_id}
-                                                        )
-                                                        
-                                                        s.commit()
-
-                                                    # Log the correction
-                                                    log_activity(
-                                                        conn,
-                                                        st.session_state.user_id,
-                                                        st.session_state.username,
-                                                        st.session_state.session_id,
-                                                        "added correction",
-                                                        f"Book ID: {book_id}, Author ID: {author_id}, File: {os.path.basename(file_path) if file_path else 'None'}"
-                                                    )
-
-                                                    # Log the mass uncheck
-                                                    log_activity(
-                                                        conn,
-                                                        st.session_state.user_id,
-                                                        st.session_state.username,
-                                                        st.session_state.session_id,
-                                                        "updated checklist",
-                                                        f"Book ID: {book_id}, Reset Digital Book Sent to 'False' for all authors due to new correction"
-                                                    )
-                                                    
-                                                    st.success("✅ Correction added successfully! Digital Book status reset for all authors.")
-                                                    st.rerun()
-                                            except Exception as e:
-                                                st.error(f"Error adding correction: {e}")
+                                                        st.success("✅ Correction added successfully! Digital Book status reset for all authors.")
+                                                        st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Error adding correction: {e}")
 
     with tab2:
         publisher = book_details['publisher'].iloc[0] if 'publisher' in book_details else None
@@ -9343,11 +9384,13 @@ with st.container(border=False):
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
+        corrections_df = fetch_active_corrections(book_ids, conn)
         author_names_dict = fetch_all_author_names(book_ids, conn)
 
         # Preprocess DataFrames to group by book_id
         authors_grouped = {book_id: group for book_id, group in authors_df.groupby('book_id')}
         printeditions_grouped = {book_id: group for book_id, group in printeditions_df.groupby('book_id')}
+        corrections_grouped = {book_id: group for book_id, group in corrections_df.groupby('book_id')}
 
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
@@ -9393,7 +9436,7 @@ with st.container(border=False):
                 with col4:
                     st.markdown(get_isbn_display(row["book_id"], row["isbn"], row["apply_isbn"]), unsafe_allow_html=True)
                 with col5:
-                    st.markdown(get_status_pill(row["book_id"], row, authors_grouped, printeditions_grouped), unsafe_allow_html=True)
+                    st.markdown(get_status_pill(row["book_id"], row, authors_grouped, printeditions_grouped, corrections_grouped), unsafe_allow_html=True)
                 with col6:
                     btn_col1, btn_col2, btn_col3, btn_col4, btn_col5, btn_col6 = st.columns([1, 1, 1, 1, 1, 1], vertical_alignment="bottom")
                     with btn_col1:

@@ -10,4 +10,4 @@ runOnSave = true
 enableCORS = false
 enableXsrfProtection = false
 headless = true
-maxUploadSize = 10
+maxUploadSize = 30
