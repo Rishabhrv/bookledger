@@ -6860,9 +6860,7 @@ def edit_operation_dialog(book_id, conn):
     cover_options = ["Select Cover Designer"] + cover_names + ["Add New..."]
 
     # --- Tabs Layout ---
-    tabs_list = ["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover", "ℹ️ About Book"]
-    if st.session_state.get("role") == "admin":
-        tabs_list.append("🔧 Corrections")
+    tabs_list = ["✍️ Writing", "🔍 Proofreading", "📏 Formatting", "🎨 Book Cover", "ℹ️ About Book", "🔧 Corrections"]
     op_tabs = st.tabs(tabs_list)
 
     # ==========================
@@ -6911,16 +6909,20 @@ def edit_operation_dialog(book_id, conn):
                 # DateTime Inputs
                 col_dt1, col_dt2 = st.columns(2)
                 with col_dt1:
+                    w_start_val = current_data.get('writing_start')
+                    if pd.isna(w_start_val): w_start_val = None
                     writing_start_dt = st.datetime_input(
                         "Start",
-                        value=current_data.get('writing_start'),
+                        value=w_start_val,
                         key=f"writing_start_dt_{book_id}",
                         disabled=is_publish_only or is_thesis_to_book
                     )
                 with col_dt2:
+                    w_end_val = current_data.get('writing_end')
+                    if pd.isna(w_end_val): w_end_val = None
                     writing_end_dt = st.datetime_input(
                         "End",
-                        value=current_data.get('writing_end'),
+                        value=w_end_val,
                         key=f"writing_end_dt_{book_id}",
                         disabled=is_publish_only or is_thesis_to_book
                     )
@@ -7046,9 +7048,13 @@ def edit_operation_dialog(book_id, conn):
 
                 col_dt1, col_dt2 = st.columns(2)
                 with col_dt1:
-                    formatting_start_dt = st.datetime_input("Start", value=current_data.get('formatting_start'), key=f"formatting_start_dt_{book_id}")
+                    f_start_val = current_data.get('formatting_start')
+                    if pd.isna(f_start_val): f_start_val = None
+                    formatting_start_dt = st.datetime_input("Start", value=f_start_val, key=f"formatting_start_dt_{book_id}")
                 with col_dt2:
-                    formatting_end_dt = st.datetime_input("End", value=current_data.get('formatting_end'), key=f"formatting_end_dt_{book_id}")
+                    f_end_val = current_data.get('formatting_end')
+                    if pd.isna(f_end_val): f_end_val = None
+                    formatting_end_dt = st.datetime_input("End", value=f_end_val, key=f"formatting_end_dt_{book_id}")
 
                 book_pages = st.number_input(
                     "Total Book Pages", min_value=0,
@@ -7101,9 +7107,13 @@ def edit_operation_dialog(book_id, conn):
 
                 col_dt1, col_dt2 = st.columns(2)
                 with col_dt1:
-                    proofreading_start_dt = st.datetime_input("Start", value=current_data.get('proofreading_start'), key=f"proofreading_start_dt_{book_id}")
+                    p_start_val = current_data.get('proofreading_start')
+                    if pd.isna(p_start_val): p_start_val = None
+                    proofreading_start_dt = st.datetime_input("Start", value=p_start_val, key=f"proofreading_start_dt_{book_id}")
                 with col_dt2:
-                    proofreading_end_dt = st.datetime_input("End", value=current_data.get('proofreading_end'), key=f"proofreading_end_dt_{book_id}")
+                    p_end_val = current_data.get('proofreading_end')
+                    if pd.isna(p_end_val): p_end_val = None
+                    proofreading_end_dt = st.datetime_input("End", value=p_end_val, key=f"proofreading_end_dt_{book_id}")
 
                 book_pages = st.number_input(
                     "Total Book Pages", min_value=0,
@@ -7156,9 +7166,13 @@ def edit_operation_dialog(book_id, conn):
 
                 col_dt1, col_dt2 = st.columns(2)
                 with col_dt1:
-                    cover_start_dt = st.datetime_input("Start", value=current_data.get('cover_start'), key=f"cover_start_dt_{book_id}")
+                    c_start_val = current_data.get('cover_start')
+                    if pd.isna(c_start_val): c_start_val = None
+                    cover_start_dt = st.datetime_input("Start", value=c_start_val, key=f"cover_start_dt_{book_id}")
                 with col_dt2:
-                    cover_end_dt = st.datetime_input("End", value=current_data.get('cover_end'), key=f"cover_end_dt_{book_id}")
+                    c_end_val = current_data.get('cover_end')
+                    if pd.isna(c_end_val): c_end_val = None
+                    cover_end_dt = st.datetime_input("End", value=c_end_val, key=f"cover_end_dt_{book_id}")
 
                 st.write("") # Spacer
                 if st.form_submit_button("💾 Save Cover", width="stretch", type="primary"):
@@ -7213,70 +7227,76 @@ def edit_operation_dialog(book_id, conn):
                         st.toast("Updated About Book details", icon="✔️")
 
     # ==========================
-    # TAB 6: Corrections (Admin Only)
+    # TAB 6: Corrections
     # ==========================
-    if st.session_state.get("role") == "admin":
-        with op_tabs[5]:
-            st.subheader("🔧 Manage Correction Tasks")
+    with op_tabs[5]:
+        st.subheader("🔧 Manage Correction Tasks")
+        
+        # Fetch all corrections for this book
+        corr_query = "SELECT * FROM corrections WHERE book_id = :book_id ORDER BY correction_start DESC"
+        corrections = conn.query(corr_query, params={"book_id": book_id}, show_spinner=False)
+        
+        if corrections.empty:
+            st.info("No correction records found for this book.")
+        else:
+            # Get unique names from corrections table too
+            corr_names_res = conn.query("SELECT DISTINCT worker FROM corrections WHERE worker IS NOT NULL AND worker != ''", show_spinner=False)
+            corr_names = corr_names_res['worker'].tolist() if not corr_names_res.empty else []
             
-            # Fetch all corrections for this book
-            corr_query = "SELECT * FROM corrections WHERE book_id = :book_id ORDER BY correction_start DESC"
-            corrections = conn.query(corr_query, params={"book_id": book_id}, show_spinner=False)
-            
-            if corrections.empty:
-                st.info("No correction records found for this book.")
-            else:
-                # Get unique names from corrections table too
-                corr_names_res = conn.query("SELECT DISTINCT worker FROM corrections WHERE worker IS NOT NULL AND worker != ''", show_spinner=False)
-                corr_names = corr_names_res['worker'].tolist() if not corr_names_res.empty else []
-                
-                # Get all unique names for assignee options
-                all_worker_names = sorted(list(set(writing_names + proofreading_names + formatting_names + cover_names + corr_names)))
-                worker_options = ["Select Assignee"] + all_worker_names + ["Add New..."]
+            # Get all unique names for assignee options
+            all_worker_names = sorted(list(set(writing_names + proofreading_names + formatting_names + cover_names + corr_names)))
+            worker_options = ["Select Assignee"] + all_worker_names + ["Add New..."]
 
-                for idx, row in corrections.iterrows():
-                    with st.container(border=True):
-                        c_id = row['correction_id']
-                        st.markdown(f"**Section:** `{row['section'].capitalize()}` | **Round:** `{row['round_number']}`")
+            for idx, row in corrections.iterrows():
+                with st.container(border=True):
+                    c_id = row['correction_id']
+                    st.markdown(f"**Section:** `{row['section'].capitalize()}` | **Round:** `{row['round_number']}`")
 
-                        with st.form(key=f"edit_corr_form_{c_id}", border=False):
-                            c_col1, c_col2 = st.columns(2)
+                    with st.form(key=f"edit_corr_form_{c_id}", border=False):
+                        c_col1, c_col2 = st.columns(2)
+                        
+                        with c_col1:
+                            current_worker = row['worker']
+                            selected_worker = st.selectbox(
+                                "Assignee",
+                                worker_options,
+                                index=worker_options.index(current_worker) if current_worker in worker_options else 0,
+                                key=f"worker_corr_{c_id}"
+                            )
                             
-                            with c_col1:
-                                current_worker = row['worker']
-                                selected_worker = st.selectbox(
-                                    "Assignee",
-                                    worker_options,
-                                    index=worker_options.index(current_worker) if current_worker in worker_options else 0,
-                                    key=f"worker_corr_{c_id}"
-                                )
+                            final_worker = current_worker
+                            if selected_worker == "Add New...":
+                                new_worker = st.text_input("New Name", key=f"new_worker_corr_{c_id}")
+                                if new_worker:
+                                    final_worker = new_worker
+                            elif selected_worker != "Select Assignee":
+                                final_worker = selected_worker
                                 
-                                final_worker = current_worker
-                                if selected_worker == "Add New...":
-                                    new_worker = st.text_input("New Name", key=f"new_worker_corr_{c_id}")
-                                    if new_worker:
-                                        final_worker = new_worker
-                                elif selected_worker != "Select Assignee":
-                                    final_worker = selected_worker
-                                    
-                                round_num = st.number_input("Round", min_value=1, value=int(row['round_number']), key=f"round_corr_{c_id}")
+                            round_num = st.number_input("Round", min_value=1, value=int(row['round_number']), key=f"round_corr_{c_id}")
 
-                            with c_col2:
-                                start_dt = st.datetime_input("Start Time", value=row['correction_start'], key=f"start_corr_{c_id}")
-                                end_dt = st.datetime_input("End Time", value=row['correction_end'], key=f"end_corr_{c_id}")
+                        with c_col2:
+                            start_val = row['correction_start']
+                            if pd.isna(start_val):
+                                start_val = None
+                            start_dt = st.datetime_input("Start Time", value=start_val, key=f"start_corr_{c_id}")
 
-                            if st.form_submit_button("💾 Update Record", use_container_width=True, type="primary"):
-                                updates = {
-                                    "worker": final_worker,
-                                    "round_number": round_num,
-                                    "correction_start": start_dt.strftime('%Y-%m-%d %H:%M:%S') if start_dt else None,
-                                    "correction_end": end_dt.strftime('%Y-%m-%d %H:%M:%S') if end_dt else None
-                                }
-                                update_correction_details(c_id, updates)
-                                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated correction record", f"Correction ID: {c_id}, Book ID: {book_id}, Worker: {final_worker}")
-                                st.success("Updated!")
-                                time.sleep(1)
-                                st.rerun()
+                            end_val = row['correction_end']
+                            if pd.isna(end_val):
+                                end_val = None
+                            end_dt = st.datetime_input("End Time", value=end_val, key=f"end_corr_{c_id}")
+
+                        if st.form_submit_button("💾 Update Record", use_container_width=True, type="primary"):
+                            updates = {
+                                "worker": final_worker,
+                                "round_number": round_num,
+                                "correction_start": start_dt.strftime('%Y-%m-%d %H:%M:%S') if start_dt else None,
+                                "correction_end": end_dt.strftime('%Y-%m-%d %H:%M:%S') if end_dt else None
+                            }
+                            update_correction_details(c_id, updates)
+                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "updated correction record", f"Correction ID: {c_id}, Book ID: {book_id}, Worker: {final_worker}")
+                            st.success("Updated!")
+                            time.sleep(1)
+                            st.rerun()
 
 def update_operation_details(book_id, updates):
     #Update operation details in the books table.
