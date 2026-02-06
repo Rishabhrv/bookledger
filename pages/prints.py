@@ -151,6 +151,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+def format_int(val):
+    if pd.isna(val) or val is None:
+        return "-"
+    try:
+        return str(int(float(val)))
+    except (ValueError, TypeError):
+        return "-"
+
 conn = connect_db()
 
 # Initialize logged_click_ids if not present
@@ -206,7 +214,9 @@ def get_batch_books(conn, batch_id):
         pe.print_color,
         pe.print_cost,
         pe.edition_number,
-        b.book_pages
+        pe.page_number,
+        pe.page_type,
+        pe.cover_type
     FROM 
         BatchDetails bd
     JOIN 
@@ -340,7 +350,9 @@ def create_batch_dialog():
             'binding': book['binding'],
             'print_color': 'Black & White',  # Default for first prints
             'print_type': book['print_type'],
-            'book_pages': book['book_pages'],
+            'page_number': book['page_number'],
+            'page_type': book['page_type'],
+            'cover_type': book['cover_type'],
             'print_id': book['print_id']  # Include print_id
         })
     for _, book in reprint_books.iterrows():
@@ -352,7 +364,9 @@ def create_batch_dialog():
             'binding': book['binding'] if book['binding'] else 'Paperback',
             'print_color': book['print_color'] if book['print_color'] else 'Black & White',
             'print_type': book['print_type'],
-            'book_pages': book['book_pages'],
+            'page_number': book['page_number'],
+            'page_type': book['page_type'],
+            'cover_type': book['cover_type'],
             'print_id': book['print_id']  # Include print_id
         })
     
@@ -365,7 +379,7 @@ def create_batch_dialog():
     selected_books = [book for book in all_books if f"{book['title']} ({book['print_type']})" in selected_titles]
     
     # Validate required fields for each selected book
-    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_id']
+    required_fields = ['num_copies', 'book_size', 'binding', 'print_color', 'print_id', 'page_number']
     invalid_books = []
     for book in selected_books:
         missing_fields = [field for field in required_fields if not book.get(field)]
@@ -452,16 +466,23 @@ def view_batch_books_dialog(batch_id, batch_name):
         total_books = len(batch_books['book_id'].unique())
         st.markdown(f"**Total Books:** {total_books}")
         
-        st.dataframe(batch_books[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'edition_number', 'book_pages']],
+        # Prepare display dataframe with formatted integers
+        display_df = batch_books.copy()
+        for col in ['copies_in_batch', 'page_number']:
+            display_df[col] = display_df[col].apply(lambda x: int(float(x)) if pd.notnull(x) else None)
+
+        st.dataframe(display_df[['book_id', 'title', 'copies_in_batch', 'book_size', 'binding', 'print_color', 'edition_number', 'page_number', 'page_type', 'cover_type']],
                      hide_index=True, column_config={
                          'book_id': st.column_config.TextColumn("Book ID"),
                          'title': st.column_config.TextColumn("Title"),
-                         'copies_in_batch': st.column_config.NumberColumn("Copies in Batch"),
+                         'copies_in_batch': st.column_config.NumberColumn("Copies in Batch", format="%d"),
                          'book_size': st.column_config.TextColumn("Book Size"),
                          'binding': st.column_config.TextColumn("Binding"),
                          'print_color': st.column_config.TextColumn("Print Color"),
-                         'edition_number': st.column_config.NumberColumn("Edition Number"),
-                         'book_pages': st.column_config.NumberColumn("Number of Pages")
+                         'edition_number': st.column_config.NumberColumn("Edition Number", format="%d"),
+                         'page_number': st.column_config.NumberColumn("Number of Pages", format="%d"),
+                         'page_type': st.column_config.TextColumn("Page Type"),
+                         'cover_type': st.column_config.TextColumn("Cover Type")
                      })
     else:
         st.info("No books found in this batch.")
@@ -494,7 +515,7 @@ def print_management_page():
                 if st.button(":material/add: New Batch", type="secondary"):
                     create_batch_dialog()
             if not first_print_books.empty:    
-                ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8]
+                ready_to_print_column = [.6, 3, 0.8, 0.8, 0.8, 0.8, 0.8, 1, 1]
                 
                 with st.container(border=True):
                     cols = st.columns(ready_to_print_column)
@@ -505,16 +526,20 @@ def print_management_page():
                     cols[4].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
                     cols[5].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
                     cols[6].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
+                    cols[7].markdown('<div class="table-header">Page Type</div>', unsafe_allow_html=True)
+                    cols[8].markdown('<div class="table-header">Cover Type</div>', unsafe_allow_html=True)
 
                     for _, book in first_print_books.iterrows():
                         cols = st.columns(ready_to_print_column)
                         cols[0].write(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                         cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
                         cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%Y-%m-%d") if book["date"] else ""}</div>', unsafe_allow_html=True)
-                        cols[3].markdown(f'<div class="table-row">{book["num_copies"]}</div>', unsafe_allow_html=True)
-                        cols[4].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
+                        cols[3].markdown(f'<div class="table-row">{format_int(book["num_copies"])}</div>', unsafe_allow_html=True)
+                        cols[4].markdown(f'<div class="table-row">{format_int(book["page_number"])}</div>', unsafe_allow_html=True)
                         cols[5].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
                         cols[6].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
+                        cols[7].markdown(f'<div class="table-row">{book["page_type"] or "-"}</div>', unsafe_allow_html=True)
+                        cols[8].markdown(f'<div class="table-row">{book["cover_type"] or "-"}</div>', unsafe_allow_html=True)
             else:
                 st.info("No books are ready for first print.")
         
@@ -527,7 +552,7 @@ def print_management_page():
         with st.container():
             st.markdown(f'<div class="status-badge-red">Books Eligible for Reprint <span class="badge-count">{len(reprint_eligible_books)}</span></div>', unsafe_allow_html=True)
             if not reprint_eligible_books.empty:
-                ready_to_reprint_column = [.7, 3, 1, 1, 1, 1]
+                ready_to_reprint_column = [.7, 3, 1, 1, 1, 1, 1, 1]
                 with st.container(border=True):
                     cols = st.columns(ready_to_reprint_column)
                     cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
@@ -536,15 +561,19 @@ def print_management_page():
                     cols[3].markdown('<div class="table-header">Pages</div>', unsafe_allow_html=True)
                     cols[4].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
                     cols[5].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
+                    cols[6].markdown('<div class="table-header">Page Type</div>', unsafe_allow_html=True)
+                    cols[7].markdown('<div class="table-header">Cover Type</div>', unsafe_allow_html=True)
                     
                     for _, book in reprint_eligible_books.iterrows():
                         cols = st.columns(ready_to_reprint_column)
                         cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                         cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
                         cols[2].markdown(f'<div class="table-row">{book["date"].strftime("%Y-%m-%d") if book["date"] else ""}</div>', unsafe_allow_html=True)
-                        cols[3].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
+                        cols[3].markdown(f'<div class="table-row">{format_int(book["page_number"])}</div>', unsafe_allow_html=True)
                         cols[4].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
                         cols[5].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
+                        cols[6].markdown(f'<div class="table-row">{book["page_type"] or "-"}</div>', unsafe_allow_html=True)
+                        cols[7].markdown(f'<div class="table-row">{book["cover_type"] or "-"}</div>', unsafe_allow_html=True)
             else:
                 st.info("No books are eligible for reprint.")
         
@@ -580,12 +609,12 @@ def print_management_page():
                                 excel_data = pd.DataFrame({
                                     'S.no.': range(1, len(batch_books) + 1),
                                     'Book Title': batch_books['title'],
-                                    'Number of Book Copies': batch_books['copies_in_batch'],
-                                    'Number of Pages': batch_books['book_pages'],
+                                    'Number of Book Copies': batch_books['copies_in_batch'].apply(lambda x: int(float(x)) if pd.notnull(x) else None),
+                                    'Number of Pages': batch_books['page_number'].apply(lambda x: int(float(x)) if pd.notnull(x) else None),
                                     'Book Size': batch_books['book_size'],
-                                    'Book Pages': 'White 70 GSM',
-                                    'Cover Page': '300 GSM Glossy',
-                                    'Binding': 'Perfect Binding',
+                                    'Book Pages': batch_books['page_type'],
+                                    'Cover Page': batch_books['cover_type'],
+                                    'Binding': batch_books['binding'],
                                 })
                                 
                                 # Convert to Excel
@@ -605,7 +634,7 @@ def print_management_page():
                             
                             # Books table
                             if not batch_books.empty:
-                                running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1.2]
+                                running_batches_column = [0.8, 4, 0.7, 0.7, 0.7, 1, 1, 1, 1, 1]
                                 with st.container(border=True):
                                     cols = st.columns(running_batches_column)
                                     cols[0].markdown('<div class="table-header">Book ID</div>', unsafe_allow_html=True)
@@ -616,17 +645,21 @@ def print_management_page():
                                     cols[5].markdown('<div class="table-header">Book Size</div>', unsafe_allow_html=True)
                                     cols[6].markdown('<div class="table-header">Binding</div>', unsafe_allow_html=True)
                                     cols[7].markdown('<div class="table-header">Print Color</div>', unsafe_allow_html=True)
+                                    cols[8].markdown('<div class="table-header">Page Type</div>', unsafe_allow_html=True)
+                                    cols[9].markdown('<div class="table-header">Cover Type</div>', unsafe_allow_html=True)
 
                                     for _, book in batch_books.iterrows():
                                         cols = st.columns(running_batches_column)
                                         cols[0].markdown(f'<div class="table-row">{book["book_id"]}</div>', unsafe_allow_html=True)
                                         cols[1].markdown(f'<div class="table-row">{book["title"]}</div>', unsafe_allow_html=True)
                                         cols[2].markdown(f'<div class="table-row">{book["edition_number"]}</div>', unsafe_allow_html=True)
-                                        cols[3].markdown(f'<div class="table-row">{book["copies_in_batch"]}</div>', unsafe_allow_html=True)
-                                        cols[4].markdown(f'<div class="table-row">{book["book_pages"]}</div>', unsafe_allow_html=True)
+                                        cols[3].markdown(f'<div class="table-row">{format_int(book["copies_in_batch"])}</div>', unsafe_allow_html=True)
+                                        cols[4].markdown(f'<div class="table-row">{format_int(book["page_number"])}</div>', unsafe_allow_html=True)
                                         cols[5].markdown(f'<div class="table-row">{book["book_size"]}</div>', unsafe_allow_html=True)
                                         cols[6].markdown(f'<div class="table-row">{book["binding"]}</div>', unsafe_allow_html=True)
                                         cols[7].markdown(f'<div class="table-row">{book["print_color"]}</div>', unsafe_allow_html=True)
+                                        cols[8].markdown(f'<div class="table-row">{book["page_type"] or "-"}</div>', unsafe_allow_html=True)
+                                        cols[9].markdown(f'<div class="table-row">{book["cover_type"] or "-"}</div>', unsafe_allow_html=True)
                                         
                             else:
                                 st.info("No books found in this batch.")
@@ -637,7 +670,7 @@ def print_management_page():
     
 
     with tab4:
-        # Section 4: Completed Batches with Custom Table
+        # Section 4: Completed Batches with Custom Table and Pagination
         completed_batches = conn.query("""
             SELECT 
                 pb.batch_id, 
@@ -657,9 +690,36 @@ def print_management_page():
             ORDER BY 
                 pb.created_at DESC
         """, ttl=0)
+        
         with st.container():
             st.markdown(f'<div class="status-badge-green">Completed Batches <span class="badge-count">{len(completed_batches)}</span></div>', unsafe_allow_html=True)
+            
             if not completed_batches.empty:
+                # --- Pagination Logic ---
+                items_per_page = 30
+                total_items = len(completed_batches)
+                total_pages = (total_items - 1) // items_per_page + 1
+                
+                # Initialize session state for current page
+                if "completed_batches_page" not in st.session_state:
+                    st.session_state.completed_batches_page = 1
+                
+                # Ensure current page is within bounds
+                if st.session_state.completed_batches_page > total_pages:
+                    st.session_state.completed_batches_page = total_pages
+                
+                # Calculate slice indices
+                start_idx = (st.session_state.completed_batches_page - 1) * items_per_page
+                end_idx = min(start_idx + items_per_page, total_items)
+                
+                # Slice the data
+                paged_batches = completed_batches.iloc[start_idx:end_idx]
+                
+                # Pagination Controls (Top)
+                page_col1, page_col2, page_col3 = st.columns([1, 2, 1])
+                with page_col2:
+                    st.markdown(f"<p style='text-align: center;'>Page {st.session_state.completed_batches_page} of {total_pages} (Showing {start_idx + 1}-{end_idx} of {total_items})</p>", unsafe_allow_html=True)
+
                 with st.container(border=True):
                     cols = st.columns([1, 2, 2, 2, 1, 1, 1])
                     cols[0].markdown('<div class="table-header">Batch ID</div>', unsafe_allow_html=True)
@@ -670,16 +730,29 @@ def print_management_page():
                     cols[5].markdown('<div class="table-header">Total Books</div>', unsafe_allow_html=True)
                     cols[6].markdown('<div class="table-header">Action</div>', unsafe_allow_html=True)
                     
-                    for _, batch in completed_batches.iterrows():
+                    for _, batch in paged_batches.iterrows():
                         cols = st.columns([1, 2, 2, 2, 1, 1, 1], vertical_alignment="bottom")
                         cols[0].markdown(f'<div class="table-row">{batch["batch_id"]}</div>', unsafe_allow_html=True)
                         cols[1].markdown(f'<div class="table-row">{batch["batch_name"]}</div>', unsafe_allow_html=True)
                         cols[2].markdown(f'<div class="table-row">{batch["created_at"].strftime("%Y-%m-%d")}</div>', unsafe_allow_html=True)
                         cols[3].markdown(f'<div class="table-row">{batch["print_receive_date"].strftime("%Y-%m-%d") if batch["print_receive_date"] else ""}</div>', unsafe_allow_html=True)
-                        cols[4].markdown(f'<div class="table-row">{batch["total_copies"]}</div>', unsafe_allow_html=True)
-                        cols[5].markdown(f'<div class="table-row">{batch["total_books"]}</div>', unsafe_allow_html=True)
+                        cols[4].markdown(f'<div class="table-row">{format_int(batch["total_copies"])}</div>', unsafe_allow_html=True)
+                        cols[5].markdown(f'<div class="table-row">{format_int(batch["total_books"])}</div>', unsafe_allow_html=True)
                         if cols[6].button(":material/visibility:", key=f"view_{batch['batch_id']}", type="secondary"):
                             view_batch_books_dialog(batch['batch_id'], batch['batch_name'])
+                
+                # Pagination Buttons (Bottom)
+                btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns([2, 1, 1, 1, 2])
+                with btn_col2:
+                    if st.button("Previous", disabled=st.session_state.completed_batches_page <= 1, use_container_width=True):
+                        st.session_state.completed_batches_page -= 1
+                        st.rerun()
+                with btn_col3:
+                    st.markdown(f"<p style='text-align: center; line-height: 2.5;'>{st.session_state.completed_batches_page} / {total_pages}</p>", unsafe_allow_html=True)
+                with btn_col4:
+                    if st.button("Next", disabled=st.session_state.completed_batches_page >= total_pages, use_container_width=True):
+                        st.session_state.completed_batches_page += 1
+                        st.rerun()
             else:
                 st.info("No completed batches found.")
 

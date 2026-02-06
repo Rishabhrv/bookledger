@@ -197,8 +197,10 @@ def get_ready_to_print_books(conn):
         COALESCE(pe.book_size, '6x9') AS book_size,
         COALESCE(pe.binding, 'Paperback') AS binding,
         COALESCE(pe.print_cost, 00.00) AS print_cost,
-        b.book_pages,
-        pe.print_id  # Added to fetch existing print_id
+        pe.page_number,
+        pe.page_type,
+        pe.cover_type,
+        pe.print_id
     FROM 
         books b
     LEFT JOIN 
@@ -208,6 +210,8 @@ def get_ready_to_print_books(conn):
         b.print_status = 0
         AND (
             (b.is_publish_only = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
+            OR
+            (b.is_thesis_to_book = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
             OR
             (b.writing_complete = 1 AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1)
         )
@@ -233,7 +237,7 @@ def get_ready_to_print_books(conn):
             AND pb.status = 'Sent'
         )
     GROUP BY 
-        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost, b.book_pages, pe.print_id;
+        b.book_id, b.title, b.date, pe.copies_planned, pe.book_size, pe.binding, pe.print_cost, pe.page_number, pe.page_type, pe.cover_type, pe.print_id;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df
@@ -251,8 +255,10 @@ def get_reprint_eligible_books(conn):
             COALESCE(pe.print_cost, 0.00) AS print_cost,
             pe.print_color,
             pe.copies_planned,
-            b.book_pages,
-            pe.print_id  # Ensure print_id is fetched
+            pe.page_number,
+            pe.page_type,
+            pe.cover_type,
+            pe.print_id
         FROM 
             books b
         JOIN (
@@ -263,6 +269,9 @@ def get_reprint_eligible_books(conn):
                 pe2.print_color,
                 COALESCE(pe2.print_cost, 0.00) AS print_cost,
                 pe2.copies_planned,
+                pe2.page_number,
+                pe2.page_type,
+                pe2.cover_type,
                 pe2.print_id,
                 ROW_NUMBER() OVER (PARTITION BY pe2.book_id ORDER BY pe2.edition_number DESC, pe2.print_date DESC) AS rn
             FROM 
@@ -274,7 +283,7 @@ def get_reprint_eligible_books(conn):
             b.print_status = 1
             AND bd.print_id IS NULL
         GROUP BY 
-            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, b.book_pages, pe.print_id;
+            b.book_id, b.title, b.isbn, pe.book_size, pe.binding, pe.print_color, pe.print_cost, pe.copies_planned, pe.page_number, pe.page_type, pe.cover_type, pe.print_id;
     """
     df = conn.query(query, ttl=0)  # Disable caching
     return df

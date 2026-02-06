@@ -3904,7 +3904,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 ###################################################################################################################################
 
 
-@st.dialog("Manage Book Price and Author Payments", width="large", on_dismiss="rerun")
+@st.dialog("Manage Book Price and Author Payments", width="large", on_dismiss="ignore")
 def manage_price_dialog(book_id, conn):
     # Fetch book details for title and price
     book_details = fetch_book_details(book_id, conn)
@@ -4062,6 +4062,16 @@ def manage_price_dialog(book_id, conn):
                                     {"price": price, "book_id": book_id}
                                 )
                                 s.commit()
+                            
+                            log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "updated book price",
+                                f"Book ID: {book_id}, New Price: {price}"
+                            )
+                            
                             st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
                             st.cache_data.clear()
                         except ValueError:
@@ -4116,6 +4126,15 @@ def manage_price_dialog(book_id, conn):
                             placeholder="Enter whole amount"
                         )
 
+                        # Remark field
+                        remark_val = st.text_area(
+                            "Payment Remark",
+                            value=row.get('remark', '') or "",
+                            key=f"remark_{row['id']}",
+                            placeholder="Add any details about payment here...",
+                            height=100
+                        )
+
                         # EMI Payments with Dates, Payment Mode, and Transaction ID
                         payment_modes = ["Cash", "UPI", "Bank Deposit"]
                         
@@ -4125,7 +4144,7 @@ def manage_price_dialog(book_id, conn):
 
                         # EMI 1 (always shown)
                         st.markdown("**EMI 1**")
-                        col1, col2, col3 = st.columns([1, 1, 1])
+                        col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
                         with col1:
                             emi1_str = st.text_input(
                                 "Amount (₹)",
@@ -4146,6 +4165,27 @@ def manage_price_dialog(book_id, conn):
                                 index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
                                 key=f"emi1_mode_{row['id']}"
                             )
+                        with col4:
+                            if emi1 > 0:
+                                if st.button(":material/delete:", key=f"del_emi1_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 1", ):
+                                    updates = {
+                                        "emi1": 0,
+                                        "emi1_date": None,
+                                        "emi1_payment_mode": None,
+                                        "emi1_transaction_id": None
+                                    }
+                                    update_book_authors(row['id'], updates, conn)
+                                    log_activity(
+                                        conn,
+                                        st.session_state.user_id,
+                                        st.session_state.username,
+                                        st.session_state.session_id,
+                                        "deleted EMI 1",
+                                        f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
+                                    )
+                                    st.success("EMI 1 deleted successfully")
+                                    st.rerun()
+                                    
                         emi1_txn_id = ""
                         if emi1_mode in ["UPI", "Bank Deposit"]:
                             emi1_txn_id = st.text_input(
@@ -4158,7 +4198,7 @@ def manage_price_dialog(book_id, conn):
                         # EMI 2 (shown only if EMI 1 is saved)
                         if show_emi2:
                             st.markdown("**EMI 2**")
-                            col1, col2, col3 = st.columns([1, 1, 1])
+                            col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
                             with col1:
                                 emi2_str = st.text_input(
                                     "Amount (₹)",
@@ -4179,6 +4219,27 @@ def manage_price_dialog(book_id, conn):
                                     index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
                                     key=f"emi2_mode_{row['id']}"
                                 )
+                            with col4:
+                                if emi2 > 0:
+                                    if st.button(":material/delete:", key=f"del_emi2_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 2"):
+                                        updates = {
+                                            "emi2": 0,
+                                            "emi2_date": None,
+                                            "emi2_payment_mode": None,
+                                            "emi2_transaction_id": None
+                                        }
+                                        update_book_authors(row['id'], updates, conn)
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "deleted EMI 2",
+                                            f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
+                                        )
+                                        st.success("EMI 2 deleted successfully")
+                                        st.rerun()
+                                        
                             emi2_txn_id = ""
                             if emi2_mode in ["UPI", "Bank Deposit"]:
                                 emi2_txn_id = st.text_input(
@@ -4196,7 +4257,7 @@ def manage_price_dialog(book_id, conn):
                         # EMI 3 (shown only if EMI 1 and 2 are saved)
                         if show_emi3:
                             st.markdown("**EMI 3**")
-                            col1, col2, col3 = st.columns([1, 1, 1])
+                            col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
                             with col1:
                                 emi3_str = st.text_input(
                                     "Amount (₹)",
@@ -4217,6 +4278,27 @@ def manage_price_dialog(book_id, conn):
                                     index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
                                     key=f"emi3_mode_{row['id']}"
                                 )
+                            with col4:
+                                if emi3 > 0:
+                                    if st.button(":material/delete:", key=f"del_emi3_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 3"):
+                                        updates = {
+                                            "emi3": 0,
+                                            "emi3_date": None,
+                                            "emi3_payment_mode": None,
+                                            "emi3_transaction_id": None
+                                        }
+                                        update_book_authors(row['id'], updates, conn)
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "deleted EMI 3",
+                                            f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
+                                        )
+                                        st.success("EMI 3 deleted successfully")
+                                        st.rerun()
+                                        
                             emi3_txn_id = ""
                             if emi3_mode in ["UPI", "Bank Deposit"]:
                                 emi3_txn_id = st.text_input(
@@ -4251,7 +4333,7 @@ def manage_price_dialog(book_id, conn):
                         st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
 
                         # Save button
-                        if st.button("Save Payment", key=f"save_payment_{row['id']}"):
+                        if st.button("Save Payment", key=f"save_payment_{row['id']}", type="primary", use_container_width=True):
                             with st.spinner("Saving Payment..."):
                                 import time
                                 time.sleep(1)
@@ -4281,9 +4363,20 @@ def manage_price_dialog(book_id, conn):
                                         "emi3_payment_mode": emi3_mode,
                                         "emi1_transaction_id": emi1_txn_id,
                                         "emi2_transaction_id": emi2_txn_id,
-                                        "emi3_transaction_id": emi3_txn_id
+                                        "emi3_transaction_id": emi3_txn_id,
+                                        "remark": remark_val
                                     }
                                     update_book_authors(row['id'], updates, conn)
+                                    
+                                    log_activity(
+                                        conn,
+                                        st.session_state.user_id,
+                                        st.session_state.username,
+                                        st.session_state.session_id,
+                                        "updated author payment",
+                                        f"Author: {row['name']} (ID: {row['id']}), Total: {new_total}, Paid: {new_paid}, Remark: {remark_val}"
+                                    )
+                                    
                                     st.success(f"Payment updated for {row['name']}", icon="✔️")
                                     st.toast(f"Payment updated for {row['name']}", icon="✔️", duration="long")
                                     st.cache_data.clear()
@@ -4310,7 +4403,8 @@ def fetch_book_authors(book_id, conn):
            ba.emi1_date, ba.emi2_date, ba.emi3_date,
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
            ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id,
+           ba.remark
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
@@ -5196,18 +5290,20 @@ def edit_author_dialog(book_id, conn):
                                         key=f"number_of_books_{row['id']}"
                                     )
                                 with col4:
-                                    updates['corresponding_agent'] = st.text_input(
-                                        "Corresponding Agent",
-                                        value=row['corresponding_agent'] or "",
-                                        help="Enter the name of the corresponding agent.",
-                                        key=f"corresponding_agent_{row['id']}"
-                                    )
                                     updates['publishing_consultant'] = st.text_input(
                                         "Publishing Consultant",
                                         value=row['publishing_consultant'] or "",
                                         help="Enter the name of the publishing consultant.",
                                         key=f"publishing_consultant_{row['id']}"
                                     )
+
+                                    updates['corresponding_agent'] = st.text_input(
+                                        "Corresponding Author/Agent",
+                                        value=row['corresponding_agent'] or "",
+                                        help="Enter the name of the corresponding agent.",
+                                        key=f"corresponding_agent_{row['id']}"
+                                    )
+
                             
                                 # New Fields for Author Table (collected separately as they belong to authors table)
                                 author_updates = {}
@@ -7438,19 +7534,20 @@ def edit_inventory_delivery_dialog(book_id, conn):
 
         .print-run-table-header,
         .print-run-table-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 4px 6px;
+            display: grid;
+            grid-template-columns: 0.5fr 0.7fr 1fr 1fr 0.8fr 1fr 1fr 0.7fr 1fr 1fr;
+            gap: 5px;
+            padding: 5px 7px;
             align-items: center;
-            font-size: 11px;
+            font-size: 12px;
             box-sizing: border-box;
-            min-width: 100%;
+            min-width: 800px;
         }
 
         .print-run-table-header {
             background-color: #f1f3f5;
             font-weight: 600;
-            font-size: 12px;
+            font-size: 11px;
             color: #2c3e50;
             border-bottom: 1px solid #dcdcdc;
             border-radius: 5px 5px 0 0;
@@ -7521,368 +7618,433 @@ def edit_inventory_delivery_dialog(book_id, conn):
     # Printing Tab
     with tab1:
 
-        print_col1, print_col2 = st.columns(2)
+        st.write("### Existing Print Edition")
 
-        with print_col1:
-            # Check ready_to_print conditions
-            is_ready_to_print = check_ready_to_print(book_id, conn)
-            
-            # Update database if computed ready_to_print differs from current value
-            current_ready_to_print = current_data.get('ready_to_print', 0) == 1
-            if is_ready_to_print != current_ready_to_print:
-                updates = {"ready_to_print": 1 if is_ready_to_print else 0}
-                update_inventory_delivery_details(book_id, updates, conn)
-                st.cache_data.clear()
-                current_data['ready_to_print'] = 1 if is_ready_to_print else 0
+        # Check ready_to_print conditions
+        is_ready_to_print = check_ready_to_print(book_id, conn)
+        
+        # Update database if computed ready_to_print differs from current value
+        current_ready_to_print = current_data.get('ready_to_print', 0) == 1
+        if is_ready_to_print != current_ready_to_print:
+            updates = {"ready_to_print": 1 if is_ready_to_print else 0}
+            update_inventory_delivery_details(book_id, updates, conn)
+            st.cache_data.clear()
+            current_data['ready_to_print'] = 1 if is_ready_to_print else 0
 
-            # Get print status
-            print_status = get_print_status(book_id, conn)
+        # Get print status
+        print_status = get_print_status(book_id, conn)
 
-            st.checkbox(
-                label="Ready to Print?",
-                value=is_ready_to_print,
-                key=f"ready_to_print_{book_id}",
-                help="Automatically checked when all conditions are met.",
-                disabled=True
-            )
+        st.checkbox(
+            label="Ready to Print?",
+            value=is_ready_to_print,
+            key=f"ready_to_print_{book_id}",
+            help="Automatically checked when all conditions are met.",
+            disabled=True
+        )
 
-            # Fetch print editions data with batch details
-            print_editions_query = f"""
-                SELECT 
-                    pe.print_id, 
-                    pe.copies_planned, 
-                    pe.print_color, 
-                    pe.binding, 
-                    pe.book_size, 
-                    pe.edition_number, 
-                    pe.status,
-                    pe.color_pages,
-                    bd.batch_id,
-                    pb.batch_name
-                FROM 
-                    PrintEditions pe
-                LEFT JOIN 
-                    BatchDetails bd ON pe.print_id = bd.print_id
-                LEFT JOIN 
-                    PrintBatches pb ON bd.batch_id = pb.batch_id
-                WHERE 
-                    pe.book_id = {book_id}
-                ORDER BY 
-                    pe.edition_number DESC
-            """
-            print_editions_data = conn.query(print_editions_query, show_spinner=False)
+        # Fetch print editions data with batch details
+        print_editions_query = f"""
+            SELECT 
+                pe.print_id, 
+                pe.copies_planned, 
+                pe.print_color, 
+                pe.binding, 
+                pe.book_size, 
+                pe.edition_number, 
+                pe.status,
+                pe.color_pages,
+                pe.page_type,
+                pe.cover_type,
+                pe.page_number,
+                bd.batch_id,
+                pb.batch_name
+            FROM 
+                PrintEditions pe
+            LEFT JOIN 
+                BatchDetails bd ON pe.print_id = bd.print_id
+            LEFT JOIN 
+                PrintBatches pb ON bd.batch_id = pb.batch_id
+            WHERE 
+                pe.book_id = {book_id}
+            ORDER BY 
+                pe.edition_number DESC
+        """
+        print_editions_data = conn.query(print_editions_query, show_spinner=False)
 
-            # 1. Print Editions Table Expander
-            with st.container(border = True):
-                if not print_editions_data.empty:
-                    st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
-                    st.markdown("""
-                        <div class="print-run-table-header">
-                            <div>ID</div>
-                            <div>Copies</div>
-                            <div>Color</div>
-                            <div>Binding</div>
-                            <div>Size</div>
-                            <div>Edition</div>
-                            <div>Batch</div>
-                            <div>Status</div>
+        # 1. Print Editions Table Expander
+        with st.container(border = True):
+            if not print_editions_data.empty:
+                st.markdown('<div class="print-run-table">', unsafe_allow_html=True)
+                st.markdown("""
+                    <div class="print-run-table-header">
+                        <div>ID</div>
+                        <div>Copies</div>
+                        <div>Color</div>
+                        <div>Binding</div>
+                        <div>Size</div>
+                        <div>Page Type</div>
+                        <div>Cover Type</div>
+                        <div>Pages</div>
+                        <div>Batch</div>
+                        <div>Status</div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                for idx, row in print_editions_data.iterrows():
+                    # Determine status badge style
+                    if row['status'] == 'Pending':
+                        status_badge = "<span style='background-color: #fff3e0; color: #f57c00; padding: 3px 6px; border-radius: 4px; font-size: 11px;'>Pending</span>"
+                    elif row['status'] == 'In Printing':
+                        status_badge = "<span style='background-color: #e3f2fd; color: #1976d2; padding: 3px 6px; border-radius: 4px; font-size: 11px;'>In Print</span>"
+                    else:  # Received
+                        status_badge = "<span style='background-color: #e6ffe6; color: green; padding: 3px 6px; border-radius: 4px; font-size: 11px;'>Received</span>"
+                    
+                    # Format batch information
+                    batch_info = f"{row['batch_name']} (ID: {row['batch_id']})" if row['batch_id'] else "Not Assigned"
+                    
+                    st.markdown(f"""
+                        <div class="print-run-table-row">
+                            <div>{row['print_id']}</div>
+                            <div>{int(row['copies_planned'])}</div>
+                            <div>{row['print_color']}</div>
+                            <div>{row['binding']}</div>
+                            <div>{row['book_size']}</div>
+                            <div>{row['page_type'] or '-'}</div>
+                            <div>{row['cover_type'] or '-'}</div>
+                            <div>{row['page_number'] or '-'}</div>
+                            <div>{batch_info}</div>
+                            <div>{status_badge}</div>
                         </div>
                     """, unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("No print editions found. Add a new print edition below if ready.")
+
+        # 2. Edit Existing Print Edition Expander (only if ready_to_print and data exists)
+        if is_ready_to_print and not print_editions_data.empty:
+            with st.expander("Edit Existing Print Edition", expanded=False):
+                selected_print_id = st.selectbox(
+                    "Select Print Edition to Edit",
+                    options=print_editions_data['print_id'].tolist(),
+                    format_func=lambda x: f"ID {x} - Edition {print_editions_data[print_editions_data['print_id'] == x]['edition_number'].iloc[0]}",
+                    key=f"select_print_edition_{book_id}"
+                )
+
+                if selected_print_id:
+                    edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
                     
-                    for idx, row in print_editions_data.iterrows():
-                        # Determine status badge style
-                        if row['status'] == 'Pending':
-                            status_badge = "<span style='background-color: #fff3e0; color: #f57c00; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>Pending</span>"
-                        elif row['status'] == 'In Printing':
-                            status_badge = "<span style='background-color: #e3f2fd; color: #1976d2; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>In Printing</span>"
-                        else:  # Received
-                            status_badge = "<span style='background-color: #e6ffe6; color: green; padding: 3px 6px; border-radius: 4px; font-size: 12px;'>Received</span>"
-                        
-                        # Format batch information
-                        batch_info = f"{row['batch_name']} (ID: {row['batch_id']})" if row['batch_id'] else "Not Assigned"
-                        
-                        st.markdown(f"""
-                            <div class="print-run-table-row">
-                                <div>{row['print_id']}</div>
-                                <div>{int(row['copies_planned'])}</div>
-                                <div>{row['print_color']}</div>
-                                <div>{row['binding']}</div>
-                                <div>{row['book_size']}</div>
-                                <div>{row['edition_number']}</div>
-                                <div>{batch_info}</div>
-                                <div>{status_badge}</div>
-                            </div>
-                        """, unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-                else:
-                    st.info("No print editions found. Add a new print edition below if ready.")
+                    # Only allow editing if status is 'Pending'
+                    if edit_row['status'] == 'Pending':
+                        with st.container():
+                            # Compact layout: Use multiple rows for all fields
+                            col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+                            with col1:
+                                edit_num_copies = st.number_input(
+                                    "Copies",
+                                    min_value=0,
+                                    step=1,
+                                    value=int(edit_row['copies_planned']),
+                                    key=f"edit_num_copies_{book_id}_{selected_print_id}",
+                                    label_visibility="visible"
+                                )
+                            with col2:
+                                edit_print_color = st.selectbox(
+                                    "Color",
+                                    options=["Black & White", "Full Color"],
+                                    index=["Black & White", "Full Color"].index(edit_row['print_color']),
+                                    key=f"edit_print_color_{book_id}_{selected_print_id}",
+                                    label_visibility="visible"
+                                )
+                            with col3:
+                                edit_binding = st.selectbox(
+                                    "Binding",
+                                    options=["Paperback", "Hardcover"],
+                                    index=["Paperback", "Hardcover"].index(edit_row['binding']),
+                                    key=f"edit_binding_{book_id}_{selected_print_id}",
+                                    label_visibility="visible"
+                                )
+                            with col4:
+                                edit_book_size = st.selectbox(
+                                    "Size",
+                                    options=["6x9", "8.5x11"],
+                                    index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
+                                    key=f"edit_book_size_{book_id}_{selected_print_id}",
+                                    label_visibility="visible"
+                                )
 
-            # 2. Edit Existing Print Edition Expander (only if ready_to_print and data exists)
-            if is_ready_to_print and not print_editions_data.empty:
-                with st.expander("Edit Existing Print Edition", expanded=False):
-                    selected_print_id = st.selectbox(
-                        "Select Print Edition to Edit",
-                        options=print_editions_data['print_id'].tolist(),
-                        format_func=lambda x: f"ID {x} - Edition {print_editions_data[print_editions_data['print_id'] == x]['edition_number'].iloc[0]}",
-                        key=f"select_print_edition_{book_id}"
-                    )
+                            col5, col6, col7 = st.columns([1.2, 1.2, 1])
+                            with col5:
+                                edit_page_type = st.selectbox(
+                                    "Page Type",
+                                    options=["White 70 GSM", "Natural Shade 70 GSM", "Cream 70 GSM", "Maplitho 80 GSM", "Art Paper 100 GSM"],
+                                    index=["White 70 GSM", "Natural Shade 70 GSM", "Cream 70 GSM", "Maplitho 80 GSM", "Art Paper 100 GSM"].index(edit_row['page_type']) if edit_row['page_type'] in ["White 70 GSM", "Natural Shade 70 GSM", "Cream 70 GSM", "Maplitho 80 GSM", "Art Paper 100 GSM"] else 0,
+                                    key=f"edit_page_type_{book_id}_{selected_print_id}"
+                                )
+                            with col6:
+                                edit_cover_type = st.selectbox(
+                                    "Cover Type",
+                                    options=["300 GSM Glossy", "300 GSM Matte", "250 GSM Glossy", "250 GSM Matte"],
+                                    index=["300 GSM Glossy", "300 GSM Matte", "250 GSM Glossy", "250 GSM Matte"].index(edit_row['cover_type']) if edit_row['cover_type'] in ["300 GSM Glossy", "300 GSM Matte", "250 GSM Glossy", "250 GSM Matte"] else 0,
+                                    key=f"edit_cover_type_{book_id}_{selected_print_id}"
+                                )
+                            with col7:
+                                edit_page_number = st.number_input(
+                                    "Total Pages",
+                                    min_value=0,
+                                    step=1,
+                                    value=int(edit_row['page_number']) if pd.notnull(edit_row['page_number']) else 0,
+                                    key=f"edit_page_number_{book_id}_{selected_print_id}"
+                                )
 
-                    if selected_print_id:
-                        edit_row = print_editions_data[print_editions_data['print_id'] == selected_print_id].iloc[0]
-                        
-                        # Only allow editing if status is 'Pending'
-                        if edit_row['status'] == 'Pending':
-                            with st.container():
-                                # Compact layout: Use a single row with 5 columns
-                                col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
-                                with col1:
-                                    edit_num_copies = st.number_input(
-                                        "Copies",
-                                        min_value=0,
-                                        step=1,
-                                        value=int(edit_row['copies_planned']),
-                                        key=f"edit_num_copies_{book_id}_{selected_print_id}",
-                                        label_visibility="visible"
-                                    )
-                                with col3:
-                                    edit_print_color = st.selectbox(
-                                        "Color",
-                                        options=["Black & White", "Full Color"],
-                                        index=["Black & White", "Full Color"].index(edit_row['print_color']),
-                                        key=f"edit_print_color_{book_id}_{selected_print_id}",
-                                        label_visibility="visible"
-                                    )
-                                with col4:
-                                    edit_binding = st.selectbox(
-                                        "Binding",
-                                        options=["Paperback", "Hardcover"],
-                                        index=["Paperback", "Hardcover"].index(edit_row['binding']),
-                                        key=f"edit_binding_{book_id}_{selected_print_id}",
-                                        label_visibility="visible"
-                                    )
-                                with col5:
-                                    edit_book_size = st.selectbox(
-                                        "Size",
-                                        options=["6x9", "8.5x11"],
-                                        index=["6x9", "8.5x11"].index(edit_row['book_size']) if edit_row['book_size'] in ["6x9", "8.5x11"] else 0,
-                                        key=f"edit_book_size_{book_id}_{selected_print_id}",
-                                        label_visibility="visible"
-                                    )
+                            # Conditional input for color pages
+                            edit_color_pages = None
+                            if edit_print_color == "Full Color":
+                                edit_color_pages = st.number_input(
+                                    "Number of Color Pages",
+                                    min_value=0,
+                                    step=1,
+                                    value=int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0,
+                                    key=f"edit_color_pages_{book_id}_{selected_print_id}",
+                                    label_visibility="visible"
+                                )
 
-                                # Conditional input for color pages
-                                edit_color_pages = None
-                                if edit_print_color == "Full Color":
-                                    edit_color_pages = st.number_input(
-                                        "Number of Color Pages",
-                                        min_value=0,
-                                        step=1,
-                                        value=int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0,
-                                        key=f"edit_color_pages_{book_id}_{selected_print_id}",
-                                        label_visibility="visible"
-                                    )
+                            save_edit = st.button("💾 Save Edited Print Edition", width="stretch", key=f"save_edit_print_{book_id}_{selected_print_id}")
 
-                                save_edit = st.button("💾 Save Edited Print Edition", width="stretch", key=f"save_edit_print_{book_id}_{selected_print_id}")
-
-                                if save_edit:
-                                    with st.spinner("Saving edited print edition..."):
-                                        import time
-                                        time.sleep(1)
-                                        try:
-                                            if edit_num_copies <= 0:
-                                                st.error("Copies must be greater than 0.")
-                                                return
-                                            if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
-                                                st.error("Number of Color Pages must be greater than 0 for Full Color.")
-                                                return
-
-                                            # Track changes for logging
-                                            changes = []
-                                            if edit_num_copies != int(edit_row['copies_planned']):
-                                                changes.append(f"Copies Planned changed from '{int(edit_row['copies_planned'])}' to '{edit_num_copies}'")
-                                            if edit_print_color != edit_row['print_color']:
-                                                changes.append(f"Print Color changed from '{edit_row['print_color']}' to '{edit_print_color}'")
-                                            if edit_binding != edit_row['binding']:
-                                                changes.append(f"Binding changed from '{edit_row['binding']}' to '{edit_binding}'")
-                                            if edit_book_size != edit_row['book_size']:
-                                                changes.append(f"Book Size changed from '{edit_row['book_size']}' to '{edit_book_size}'")
-                                            if edit_print_color == "Full Color" and edit_color_pages != (int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0):
-                                                changes.append(f"Color Pages changed from '{int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 'None'}' to '{edit_color_pages}'")
-
-                                            with conn.session as session:
-                                                session.execute(
-                                                    text("""
-                                                        UPDATE PrintEditions 
-                                                        SET copies_planned = :copies_planned,
-                                                            print_color = :print_color, 
-                                                            binding = :binding, 
-                                                            book_size = :book_size,
-                                                            color_pages = :color_pages
-                                                        WHERE print_id = :print_id
-                                                    """),
-                                                    {
-                                                        "print_id": selected_print_id,
-                                                        "copies_planned": edit_num_copies,
-                                                        "print_color": edit_print_color,
-                                                        "binding": edit_binding,
-                                                        "book_size": edit_book_size,
-                                                        "color_pages": edit_color_pages if edit_print_color == "Full Color" else None
-                                                    }
-                                                )
-                                                session.commit()
-                                            # Log edit action
-                                            if changes:
-                                                log_activity(
-                                                    conn,
-                                                    st.session_state.user_id,
-                                                    st.session_state.username,
-                                                    st.session_state.session_id,
-                                                    "edited print edition",
-                                                    f"Book ID: {book_id}, Print ID: {selected_print_id}, Edition Number: {edit_row['edition_number']}, {', '.join(changes)}"
-                                                )
-                                            st.success("✔️ Updated Print Edition")
-                                            st.toast("Updated Print Edition", icon="✔️", duration="long")
-                                            st.cache_data.clear()
-                                        except Exception as e:
-                                            st.error(f"❌ Error saving print edition: {str(e)}")
-                                            st.toast(f"Error saving print edition: {str(e)}", duration="long")
-
-                                # Delete Option
-                                if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
-                                    with st.spinner("Deleting print edition..."):
-                                        import time
-                                        time.sleep(3)
-                                        try:
-                                            with conn.session as session:
-                                                session.execute(
-                                                    text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
-                                                    {"print_id": selected_print_id}
-                                                )
-                                                session.commit()
-                                            st.success("Print edition deleted successfully!")
-                                            st.toast("Print edition deleted!", icon="🗑️")
-                                            log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
-                                            st.cache_data.clear()
-                                        except Exception as e:
-                                            st.error(f"Error deleting print edition: {e}")
-                                            with conn.session as session:
-                                                session.rollback()
-                        
-                        else:
-                            st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
-                            st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
-
-        with print_col2:
-
-            with st.container(border = False, height=32):
-                st.empty()
-
-            # 3. Add New Print Edition Expander (only if ready_to_print is True)
-            if is_ready_to_print:
-                with st.container(border = True):
-                    with st.container():
-                        # Compact layout: Use a single row with 5 columns
-                        col1, col3, col4, col5 = st.columns([1, 1.2, 1.2, 0.7])
-                        with col1:
-                            new_num_copies = st.number_input(
-                                label="Copies",
-                                min_value=0,
-                                step=1,
-                                value=0,
-                                key=f"new_num_copies_{book_id}",
-                                label_visibility="visible"
-                            )
-                        with col3:
-                            print_color = st.selectbox(
-                                "Color",
-                                options=["Black & White", "Full Color"],
-                                key=f"print_color_{book_id}",
-                                label_visibility="visible"
-                            )
-                        with col4:
-                            binding = st.selectbox(
-                                "Binding",
-                                options=["Paperback", "Hardcover"],
-                                key=f"binding_{book_id}",
-                                label_visibility="visible"
-                            )
-                        with col5:
-                            book_size = st.selectbox(
-                                "Size",
-                                options=["6x9", "8.5x11"],
-                                key=f"book_size_{book_id}",
-                                label_visibility="visible"
-                            )
-
-                        # Conditional input for color pages
-                        color_pages = None
-                        if print_color == "Full Color":
-                            color_pages = st.number_input(
-                                "Number of Color Pages",
-                                min_value=0,
-                                step=1,
-                                value=0,
-                                key=f"color_pages_{book_id}",
-                                label_visibility="visible"
-                            )
-
-                        save_new_print = st.button("💾 Save New Print Edition", width="stretch", key=f"save_print_{book_id}")
-
-                        if save_new_print:
-                            with st.spinner("Saving new print edition..."):
-                                import time
-                                time.sleep(1)
-                                try:
-                                    if new_num_copies > 0:
-                                        if print_color == "Full Color" and (color_pages is None or color_pages <= 0):
+                            if save_edit:
+                                with st.spinner("Saving edited print edition..."):
+                                    import time
+                                    time.sleep(1)
+                                    try:
+                                        if edit_num_copies <= 0:
+                                            st.error("Copies must be greater than 0.")
+                                            return
+                                        if edit_print_color == "Full Color" and (edit_color_pages is None or edit_color_pages <= 0):
                                             st.error("Number of Color Pages must be greater than 0 for Full Color.")
                                             return
 
+                                        # Track changes for logging
+                                        changes = []
+                                        if edit_num_copies != int(edit_row['copies_planned']):
+                                            changes.append(f"Copies Planned changed from '{int(edit_row['copies_planned'])}' to '{edit_num_copies}'")
+                                        if edit_print_color != edit_row['print_color']:
+                                            changes.append(f"Print Color changed from '{edit_row['print_color']}' to '{edit_print_color}'")
+                                        if edit_binding != edit_row['binding']:
+                                            changes.append(f"Binding changed from '{edit_row['binding']}' to '{edit_binding}'")
+                                        if edit_book_size != edit_row['book_size']:
+                                            changes.append(f"Book Size changed from '{edit_row['book_size']}' to '{edit_book_size}'")
+                                        if edit_page_type != edit_row['page_type']:
+                                            changes.append(f"Page Type changed from '{edit_row['page_type']}' to '{edit_page_type}'")
+                                        if edit_cover_type != edit_row['cover_type']:
+                                            changes.append(f"Cover Type changed from '{edit_row['cover_type']}' to '{edit_cover_type}'")
+                                        if edit_page_number != edit_row['page_number']:
+                                            changes.append(f"Page Number changed from '{edit_row['page_number']}' to '{edit_page_number}'")
+                                        if edit_print_color == "Full Color" and edit_color_pages != (int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 0):
+                                            changes.append(f"Color Pages changed from '{int(edit_row['color_pages']) if pd.notnull(edit_row['color_pages']) else 'None'}' to '{edit_color_pages}'")
+
                                         with conn.session as session:
-                                            # Calculate edition_number
-                                            result = session.execute(
-                                                text("SELECT COALESCE(MAX(edition_number), 0) + 1 AS next_edition FROM PrintEditions WHERE book_id = :book_id"),
-                                                {"book_id": book_id}
-                                            )
-                                            edition_number = result.fetchone()[0]
-                                            
-                                            # Insert into PrintEditions table with status 'Pending'
                                             session.execute(
                                                 text("""
-                                                    INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
-                                                        print_color, binding, book_size, status, color_pages)
-                                                    VALUES (:book_id, :edition_number, :copies_planned, 
-                                                    :print_color, :binding, :book_size, 'Pending', :color_pages)
+                                                    UPDATE PrintEditions 
+                                                    SET copies_planned = :copies_planned,
+                                                        print_color = :print_color, 
+                                                        binding = :binding, 
+                                                        book_size = :book_size,
+                                                        page_type = :page_type,
+                                                        cover_type = :cover_type,
+                                                        page_number = :page_number,
+                                                        color_pages = :color_pages
+                                                    WHERE print_id = :print_id
                                                 """),
                                                 {
-                                                    "book_id": book_id,
-                                                    "edition_number": edition_number,
-                                                    "copies_planned": new_num_copies,
-                                                    "print_color": print_color,
-                                                    "binding": binding,
-                                                    "book_size": book_size,
-                                                    "color_pages": color_pages if print_color == "Full Color" else None
+                                                    "print_id": selected_print_id,
+                                                    "copies_planned": edit_num_copies,
+                                                    "print_color": edit_print_color,
+                                                    "binding": edit_binding,
+                                                    "book_size": edit_book_size,
+                                                    "page_type": edit_page_type,
+                                                    "cover_type": edit_cover_type,
+                                                    "page_number": edit_page_number,
+                                                    "color_pages": edit_color_pages if edit_print_color == "Full Color" else None
                                                 }
                                             )
-                                            # Get the newly inserted print_id
-                                            print_id = session.execute(text("SELECT LAST_INSERT_ID()")).scalar()
                                             session.commit()
-                                            # Log add action
+                                        # Log edit action
+                                        if changes:
                                             log_activity(
                                                 conn,
                                                 st.session_state.user_id,
                                                 st.session_state.username,
                                                 st.session_state.session_id,
-                                                "added print edition",
-                                                f"Book ID: {book_id}, Print ID: {print_id}, Edition Number: {edition_number}, Copies Planned: {new_num_copies}, Print Color: {print_color}, Binding: {binding}, Book Size: {book_size}, Color Pages: {color_pages if print_color == 'Full Color' else 'None'}, Status: Pending"
+                                                "edited print edition",
+                                                f"Book ID: {book_id}, Print ID: {selected_print_id}, Edition Number: {edit_row['edition_number']}, {', '.join(changes)}"
                                             )
-                                        st.success("✔️ Added New Print Edition")
-                                        st.toast("Added New Print Edition", icon="✔️", duration="long")
+                                        st.success("✔️ Updated Print Edition")
+                                        st.toast("Updated Print Edition", icon="✔️", duration="long")
                                         st.cache_data.clear()
-                                    else:
-                                        st.warning("Please enter a number of copies greater than 0.")
-                                except Exception as e:
-                                    st.error(f"❌ Error saving new print edition: {str(e)}")
-                                    st.toast(f"Error saving new print edition: {str(e)}", icon="❌", duration="long")
+                                    except Exception as e:
+                                        st.error(f"❌ Error saving print edition: {str(e)}")
+                                        st.toast(f"Error saving print edition: {str(e)}", duration="long")
+
+                            # Delete Option
+                            if st.button("🗑️ Delete Print Edition", key=f"delete_print_{book_id}_{selected_print_id}", type="tertiary",width="stretch"):
+                                with st.spinner("Deleting print edition..."):
+                                    import time
+                                    time.sleep(3)
+                                    try:
+                                        with conn.session as session:
+                                            session.execute(
+                                                text("DELETE FROM PrintEditions WHERE print_id = :print_id"),
+                                                {"print_id": selected_print_id}
+                                            )
+                                            session.commit()
+                                        st.success("Print edition deleted successfully!")
+                                        st.toast("Print edition deleted!", icon="🗑️")
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted print edition", f"Print ID: {selected_print_id}")
+                                        st.cache_data.clear()
+                                    except Exception as e:
+                                        st.error(f"Error deleting print edition: {e}")
+                                        with conn.session as session:
+                                            session.rollback()
+                    
+                    else:
+                        st.info(f"🔒 **Locked**: Print Edition can't be deleted once it is sent to the printer.")
+                        st.write(f"**Copies:** {int(edit_row['copies_planned'])} | **Color:** {edit_row['print_color']} | **Binding:** {edit_row['binding']} | **Size:** {edit_row['book_size']}")
+
+
+        st.write("### Add New Print Edition")
+
+        # 3. Add New Print Edition Expander (only if ready_to_print is True)
+        if is_ready_to_print:
+            with st.container(border = True):
+                with st.container():
+                    # Compact layout: Use multiple rows for all fields
+                    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+                    with col1:
+                        new_num_copies = st.number_input(
+                            label="Copies",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"new_num_copies_{book_id}",
+                            label_visibility="visible"
+                        )
+                    with col2:
+                        print_color = st.selectbox(
+                            "Color",
+                            options=["Black & White", "Full Color"],
+                            key=f"print_color_{book_id}",
+                            label_visibility="visible"
+                        )
+                    with col3:
+                        binding = st.selectbox(
+                            "Binding",
+                            options=["Paperback", "Hardcover"],
+                            key=f"binding_{book_id}",
+                            label_visibility="visible"
+                        )
+                    with col4:
+                        book_size = st.selectbox(
+                            "Size",
+                            options=["6x9", "8.5x11"],
+                            key=f"book_size_{book_id}",
+                            label_visibility="visible"
+                        )
+
+                    col5, col6, col7 = st.columns([1.2, 1.2, 1])
+                    with col5:
+                        page_type = st.selectbox(
+                            "Page Type",
+                            options=["White 70 GSM", "Natural Shade 70 GSM", "Cream 70 GSM", "Maplitho 80 GSM", "Art Paper 100 GSM"],
+                            key=f"page_type_{book_id}"
+                        )
+                    with col6:
+                        cover_type = st.selectbox(
+                            "Cover Type",
+                            options=["300 GSM Glossy", "300 GSM Matte", "250 GSM Glossy", "250 GSM Matte"],
+                            key=f"cover_type_{book_id}"
+                        )
+                    with col7:
+                        page_number = st.number_input(
+                            "Total Pages",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"page_number_{book_id}"
+                        )
+
+                    # Conditional input for color pages
+                    color_pages = None
+                    if print_color == "Full Color":
+                        color_pages = st.number_input(
+                            "Number of Color Pages",
+                            min_value=0,
+                            step=1,
+                            value=0,
+                            key=f"color_pages_{book_id}",
+                            label_visibility="visible"
+                        )
+
+                    save_new_print = st.button("💾 Save New Print Edition", width="stretch", key=f"save_print_{book_id}")
+
+                    if save_new_print:
+                        with st.spinner("Saving new print edition..."):
+                            import time
+                            time.sleep(1)
+                            try:
+                                if new_num_copies > 0:
+                                    if print_color == "Full Color" and (color_pages is None or color_pages <= 0):
+                                        st.error("Number of Color Pages must be greater than 0 for Full Color.")
+                                        return
+
+                                    with conn.session as session:
+                                        # Calculate edition_number
+                                        result = session.execute(
+                                            text("SELECT COALESCE(MAX(edition_number), 0) + 1 AS next_edition FROM PrintEditions WHERE book_id = :book_id"),
+                                            {"book_id": book_id}
+                                        )
+                                        edition_number = result.fetchone()[0]
+                                        
+                                        # Insert into PrintEditions table with status 'Pending'
+                                        session.execute(
+                                            text("""
+                                                INSERT INTO PrintEditions (book_id, edition_number, copies_planned, 
+                                                    print_color, binding, book_size, status, color_pages, page_type, cover_type, page_number)
+                                                VALUES (:book_id, :edition_number, :copies_planned, 
+                                                :print_color, :binding, :book_size, 'Pending', :color_pages, :page_type, :cover_type, :page_number)
+                                            """),
+                                            {
+                                                "book_id": book_id,
+                                                "edition_number": edition_number,
+                                                "copies_planned": new_num_copies,
+                                                "print_color": print_color,
+                                                "binding": binding,
+                                                "book_size": book_size,
+                                                "color_pages": color_pages if print_color == "Full Color" else None,
+                                                "page_type": page_type,
+                                                "cover_type": cover_type,
+                                                "page_number": page_number
+                                            }
+                                        )
+                                        # Get the newly inserted print_id
+                                        print_id = session.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+                                        session.commit()
+                                        # Log add action
+                                        log_activity(
+                                            conn,
+                                            st.session_state.user_id,
+                                            st.session_state.username,
+                                            st.session_state.session_id,
+                                            "added print edition",
+                                            f"Book ID: {book_id}, Print ID: {print_id}, Edition Number: {edition_number}, Copies Planned: {new_num_copies}, Print Color: {print_color}, Binding: {binding}, Book Size: {book_size}, Color Pages: {color_pages if print_color == 'Full Color' else 'None'}, Page Type: {page_type}, Cover Type: {cover_type}, Pages: {page_number}, Status: Pending"
+                                        )
+                                    st.success("✔️ Added New Print Edition")
+                                    st.toast("Added New Print Edition", icon="✔️", duration="long")
+                                    st.cache_data.clear()
+                                else:
+                                    st.warning("Please enter a number of copies greater than 0.")
+                            except Exception as e:
+                                st.error(f"❌ Error saving new print edition: {str(e)}")
+                                st.toast(f"Error saving new print edition: {str(e)}", icon="❌", duration="long")
 
         # Inventory Tab
     with tab2:
