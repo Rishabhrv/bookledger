@@ -261,11 +261,8 @@ def fetch_all_book_authors(book_ids, _conn):
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
             'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
-            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
-            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
-            'emi2_transaction_id', 'emi3_transaction_id'
+            'number_of_books', 'total_amount', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'amount_paid'
         ])
     query = """
     SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
@@ -273,11 +270,9 @@ def fetch_all_book_authors(book_ids, _conn):
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, ba.printing_confirmation, ba.delivery_address, 
-           ba.delivery_charge, ba.number_of_books, ba.total_amount, ba.emi1, 
-           ba.emi2, ba.emi3, ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.delivery_charge, ba.number_of_books, ba.total_amount,
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) as amount_paid
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id IN :book_ids
@@ -292,11 +287,8 @@ def fetch_all_book_authors(book_ids, _conn):
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
             'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
-            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
-            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
-            'emi2_transaction_id', 'emi3_transaction_id'
+            'number_of_books', 'total_amount', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'amount_paid'
         ])
 
 
@@ -366,11 +358,9 @@ def fetch_book_authors(book_id, conn):
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, 
            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
-           ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
-           ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.number_of_books, ba.total_amount, 
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) as amount_paid
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
@@ -513,10 +503,7 @@ def generate_badge(content, color, background, extra_styles=None):
 def get_payment_status(row):
     # Ensure numeric conversion to avoid string comparison errors
     total = float(row.get('total_amount', 0) or 0)
-    emi1 = float(row.get('emi1', 0) or 0)
-    emi2 = float(row.get('emi2', 0) or 0)
-    emi3 = float(row.get('emi3', 0) or 0)
-    amount_paid = emi1 + emi2 + emi3
+    amount_paid = float(row.get('amount_paid', 0) or 0)
 
     # Logic for determining status
     if total <= 0:
@@ -680,10 +667,7 @@ def manage_price_dialog(book_id, conn):
         cols = st.columns(len(book_authors), gap="small")
         for i, (_, row) in enumerate(book_authors.iterrows()):
             total_amount = int(row.get('total_amount', 0) or 0)
-            emi1 = int(row.get('emi1', 0) or 0)
-            emi2 = int(row.get('emi2', 0) or 0)
-            emi3 = int(row.get('emi3', 0) or 0)
-            amount_paid = emi1 + emi2 + emi3
+            amount_paid = float(row.get('amount_paid', 0) or 0)
             agent = row.get('publishing_consultant', 'Unknown Agent')
 
             # Determine payment status
@@ -761,26 +745,15 @@ def manage_price_dialog(book_id, conn):
                 tabs = st.tabs(tab_titles)
 
                 for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-                    # Inside the `for tab, (_, row) in zip(tabs, book_authors.iterrows()):` loop
                     with tab:
-                        # Fetch existing payment details
+                        ba_id = row['id']
                         total_amount = int(row.get('total_amount', 0) or 0)
-                        emi1 = int(row.get('emi1', 0) or 0)
-                        emi2 = int(row.get('emi2', 0) or 0)
-                        emi3 = int(row.get('emi3', 0) or 0)
-                        emi1_date = row.get('emi1_date', None)
-                        emi2_date = row.get('emi2_date', None)
-                        emi3_date = row.get('emi3_date', None)
-                        # New fields for payment mode and transaction ID (now nullable in DB)
-                        emi1_payment_mode = row.get('emi1_payment_mode', None)  # Could be None
-                        emi2_payment_mode = row.get('emi2_payment_mode', None)  # Could be None
-                        emi3_payment_mode = row.get('emi3_payment_mode', None)  # Could be None
-                        emi1_transaction_id = row.get('emi1_transaction_id', '')
-                        emi2_transaction_id = row.get('emi2_transaction_id', '')
-                        emi3_transaction_id = row.get('emi3_transaction_id', '')
-                        amount_paid = emi1 + emi2 + emi3
-
-                        # Payment status (unchanged)
+                        remark_val = row.get('remark', '') or ""
+                        
+                        # Calculate amount_paid from the new table
+                        amount_paid = float(row.get('amount_paid', 0) or 0)
+                        
+                        # Payment status
                         if amount_paid >= total_amount and total_amount > 0:
                             status = '<span class="payment-status status-paid">Fully Paid</span>'
                         elif amount_paid > 0:
@@ -789,185 +762,103 @@ def manage_price_dialog(book_id, conn):
                             status = '<span class="payment-status status-pending">Pending</span>'
                         st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
 
-                        # Total Amount Due (unchanged)
-                        total_str = st.text_input(
-                            "Total Amount Due (₹)",
-                            value=str(total_amount) if total_amount > 0 else "",
-                            key=f"total_{row['id']}",
-                            placeholder="Enter whole amount"
-                        )
-
-                        # EMI Payments with Dates, Payment Mode, and Transaction ID
-                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
+                        # --- Section: Author Metadata ---
+                        col_m1, col_m2 = st.columns([1, 2])
+                        with col_m1:
+                            new_total_str = st.text_input(
+                                "Total Amount Due (₹)",
+                                value=str(total_amount) if total_amount > 0 else "",
+                                key=f"total_{ba_id}",
+                                placeholder="Enter whole amount"
+                            )
+                        with col_m2:
+                            new_remark = st.text_input(
+                                "Payment Remark",
+                                value=remark_val,
+                                key=f"remark_{ba_id}",
+                                placeholder="General notes about author payment..."
+                            )
                         
-                        # Determine visibility for progressive EMI display
-                        show_emi2 = emi1 > 0
-                        show_emi3 = emi1 > 0 and emi2 > 0
+                        if st.button("Update Total & Remark", key=f"update_meta_{ba_id}"):
+                            try:
+                                nt = int(new_total_str) if new_total_str.strip() else 0
+                                # Use the function from app.py or local if available
+                                # Here we use raw query since update_book_authors might not be imported or available same way
+                                with conn.session as s:
+                                    s.execute(text("UPDATE book_authors SET total_amount = :total, remark = :remark WHERE id = :id"), 
+                                              {"total": nt, "remark": new_remark, "id": ba_id})
+                                    s.commit()
+                                st.success("Updated successfully!")
+                                st.rerun()
+                            except ValueError:
+                                st.error("Invalid amount")
 
-                        # EMI 1 (always shown)
-                        st.markdown("**EMI 1**")
-                        col1, col2, col3 = st.columns([1, 1, 1])
-                        with col1:
-                            emi1_str = st.text_input(
-                                "Amount (₹)",
-                                value=str(emi1) if emi1 > 0 else "",
-                                key=f"emi1_{row['id']}",
-                                placeholder="Enter EMI amount"
-                            )
-                        with col2:
-                            emi1_date_new = st.date_input(
-                                "Date",
-                                value=pd.to_datetime(emi1_date) if emi1_date else None,
-                                key=f"emi1_date_{row['id']}"
-                            )
-                        with col3:
-                            emi1_mode = st.selectbox(
-                                "Payment Mode",
-                                payment_modes,
-                                index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
-                                key=f"emi1_mode_{row['id']}"
-                            )
-                        emi1_txn_id = ""
-                        if emi1_mode in ["UPI", "Bank Deposit"]:
-                            emi1_txn_id = st.text_input(
-                                "Transaction ID",
-                                value=emi1_transaction_id,
-                                key=f"emi1_txn_{row['id']}",
-                                placeholder="Enter Transaction ID"
-                            )
+                        st.write("---")
 
-                        # EMI 2 (shown only if EMI 1 is saved)
-                        if show_emi2:
-                            st.markdown("**EMI 2**")
-                            col1, col2, col3 = st.columns([1, 1, 1])
-                            with col1:
-                                emi2_str = st.text_input(
-                                    "Amount (₹)",
-                                    value=str(emi2) if emi2 > 0 else "",
-                                    key=f"emi2_{row['id']}",
-                                    placeholder="Enter EMI amount"
-                                )
-                            with col2:
-                                emi2_date_new = st.date_input(
-                                    "Date",
-                                    value=pd.to_datetime(emi2_date) if emi2_date else None,
-                                    key=f"emi2_date_{row['id']}"
-                                )
-                            with col3:
-                                emi2_mode = st.selectbox(
-                                    "Payment Mode",
-                                    payment_modes,
-                                    index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
-                                    key=f"emi2_mode_{row['id']}"
-                                )
-                            emi2_txn_id = ""
-                            if emi2_mode in ["UPI", "Bank Deposit"]:
-                                emi2_txn_id = st.text_input(
-                                    "Transaction ID",
-                                    value=emi2_transaction_id,
-                                    key=f"emi2_txn_{row['id']}",
-                                    placeholder="Enter Transaction ID"
-                                )
+                        # --- Section: Payment History ---
+                        st.markdown("##### 🧾 Payment History")
+                        history_query = "SELECT * FROM author_payments WHERE book_author_id = :ba_id ORDER BY payment_date DESC"
+                        history = conn.query(history_query, params={"ba_id": ba_id}, ttl=0, show_spinner=False)
+                        
+                        if not history.empty:
+                            for _, p in history.iterrows():
+                                hcol1, hcol2, hcol3, hcol4, hcol5 = st.columns([1, 1, 1, 1.5, 0.4])
+                                with hcol1:
+                                    st.write(f"₹{p['amount']}")
+                                with hcol2:
+                                    st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
+                                with hcol3:
+                                    st.write(f"**{p['payment_mode']}**")
+                                with hcol4:
+                                    st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
+                                with hcol5:
+                                    if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
+                                        with conn.session as s:
+                                            s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
+                                            s.commit()
+                                        st.rerun()
                         else:
-                            emi2_str = str(emi2) if emi2 > 0 else ""
-                            emi2_date_new = pd.to_datetime(emi2_date) if emi2_date else None
-                            emi2_mode = emi2_payment_mode
-                            emi2_txn_id = emi2_transaction_id
+                            st.info("No individual payment records found.")
 
-                        # EMI 3 (shown only if EMI 1 and 2 are saved)
-                        if show_emi3:
-                            st.markdown("**EMI 3**")
-                            col1, col2, col3 = st.columns([1, 1, 1])
-                            with col1:
-                                emi3_str = st.text_input(
-                                    "Amount (₹)",
-                                    value=str(emi3) if emi3 > 0 else "",
-                                    key=f"emi3_{row['id']}",
-                                    placeholder="Enter EMI amount"
-                                )
-                            with col2:
-                                emi3_date_new = st.date_input(
-                                    "Date",
-                                    value=pd.to_datetime(emi3_date) if emi3_date else None,
-                                    key=f"emi3_date_{row['id']}"
-                                )
-                            with col3:
-                                emi3_mode = st.selectbox(
-                                    "Payment Mode",
-                                    payment_modes,
-                                    index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
-                                    key=f"emi3_mode_{row['id']}"
-                                )
-                            emi3_txn_id = ""
-                            if emi3_mode in ["UPI", "Bank Deposit"]:
-                                emi3_txn_id = st.text_input(
-                                    "Transaction ID",
-                                    value=emi3_transaction_id,
-                                    key=f"emi3_txn_{row['id']}",
-                                    placeholder="Enter Transaction ID"
-                                )
-                        else:
-                            emi3_str = str(emi3) if emi3 > 0 else ""
-                            emi3_date_new = pd.to_datetime(emi3_date) if emi3_date else None
-                            emi3_mode = emi3_payment_mode
-                            emi3_txn_id = emi3_transaction_id
+                        st.write("---")
+                        
+                        # --- Section: Add New Payment ---
+                        st.markdown("##### ➕ Add New Payment")
+                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
+                        acol1, acol2, acol3 = st.columns([1, 1, 1])
+                        with acol1:
+                            add_amt = st.text_input("Amount (₹)", key=f"add_amt_{ba_id}", placeholder="0")
+                        with acol2:
+                            add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_{ba_id}")
+                        with acol3:
+                            add_mode = st.selectbox("Mode", payment_modes, key=f"add_mode_{ba_id}")
+                        
+                        add_txn = ""
+                        if add_mode in ["UPI", "Bank Deposit"]:
+                            add_txn = st.text_input("Transaction ID", key=f"add_txn_{ba_id}", placeholder="Ref No.")
+                        
+                        add_rem = st.text_input("Payment Specific Note", key=f"add_rem_{ba_id}", placeholder="e.g. Received via WhatsApp")
 
-                        # Calculate remaining balance
-                        try:
-                            new_total = int(total_str) if total_str.strip() else 0
-                            new_emi1 = int(emi1_str) if emi1_str.strip() else 0
-                            new_emi2 = int(emi2_str) if emi2_str.strip() else 0
-                            new_emi3 = int(emi3_str) if emi3_str.strip() else 0
-                            new_paid = new_emi1 + new_emi2 + new_emi3
-                            remaining = new_total - new_paid
-                            total_author_amounts += new_total
-                            updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
-                                                    emi1_date_new, emi2_date_new, emi3_date_new,
-                                                    emi1_mode, emi2_mode, emi3_mode,
-                                                    emi1_txn_id, emi2_txn_id, emi3_txn_id))
-                        except ValueError:
-                            st.error("Please enter valid whole numbers for all fields")
-                            return
-
-                        st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
-
-                        # Save button
-                        if st.button("Save Payment", key=f"save_payment_{row['id']}"):
-                            with st.spinner("Saving Payment..."):
-                                import time
-                                time.sleep(1)
-                                if new_paid > new_total:
-                                    st.error("Total EMI payments cannot exceed total amount")
-                                elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
-                                    st.error("Amounts cannot be negative")
+                        if st.button("➕ Register Payment", key=f"btn_add_{ba_id}", type="primary", use_container_width=True):
+                            try:
+                                amt = float(add_amt) if add_amt.strip() else 0
+                                if amt <= 0:
+                                    st.error("Enter a valid amount")
                                 else:
-                                    book_price = int(price_str) if price_str.strip() else current_price
-                                    if pd.isna(book_price):
-                                        st.error("Please set a book price first")
-                                        return
-                                    if total_author_amounts > book_price:
-                                        st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
-                                        return
+                                    with conn.session as s:
+                                        s.execute(text("""
+                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark)
+                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark)
+                                        """), {"ba_id": ba_id, "amt": amt, "date": add_date, "mode": add_mode, "txn": add_txn, "remark": add_rem})
+                                        s.commit()
+                                    st.success("Payment registered!")
+                                    st.rerun()
+                            except ValueError:
+                                st.error("Invalid amount")
 
-                                    updates = {
-                                        "total_amount": new_total,
-                                        "emi1": new_emi1,
-                                        "emi2": new_emi2,
-                                        "emi3": new_emi3,
-                                        "emi1_date": emi1_date_new,
-                                        "emi2_date": emi2_date_new,
-                                        "emi3_date": emi3_date_new,
-                                        "emi1_payment_mode": emi1_mode,
-                                        "emi2_payment_mode": emi2_mode,
-                                        "emi3_payment_mode": emi3_mode,
-                                        "emi1_transaction_id": emi1_txn_id,
-                                        "emi2_transaction_id": emi2_txn_id,
-                                        "emi3_transaction_id": emi3_txn_id
-                                    }
-                                    update_book_authors(row['id'], updates, conn)
-                                    st.success(f"Payment updated for {row['name']}", icon="✔️")
-                                    st.toast(f"Payment updated for {row['name']}", icon="✔️", duration="long")
-                                    st.cache_data.clear()
+                        remaining = total_amount - amount_paid
+                        st.markdown(f"<div style='text-align:right;'><span style='color:green'>**Total Paid:** ₹{amount_paid}</span> | <span style='color:red'>**Remaining:** ₹{remaining}</span></div>", unsafe_allow_html=True)
+
 
 # New function to fetch detailed print information for a specific book_id
 def fetch_print_details(book_id, conn):
@@ -1406,11 +1297,9 @@ query = """
     b.apply_isbn,
     b.isbn,
     b.price,
-    -- Aggregate EMI values to avoid duplicates
+    -- Aggregate total_amount and amount_paid
     MAX(ba.total_amount) as total_amount,
-    MAX(ba.emi1) as emi1,
-    MAX(ba.emi2) as emi2,
-    MAX(ba.emi3) as emi3,
+    COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) as amount_paid,
     ba.publishing_consultant
 FROM books b
 INNER JOIN book_authors ba ON b.book_id = ba.book_id
@@ -1719,10 +1608,10 @@ with srcol2:
     if st.session_state.status_filter:
         if st.session_state.status_filter == "Pending Payment":
             pending_payment_query = """
-                SELECT DISTINCT book_id
-                FROM book_authors
-                WHERE total_amount > 0 
-                AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
+                SELECT DISTINCT ba.book_id
+                FROM book_authors ba
+                WHERE ba.total_amount > 0 
+                AND COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) < ba.total_amount
             """
             pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
             matching_book_ids = pending_book_ids['book_id'].tolist()

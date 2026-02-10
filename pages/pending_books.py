@@ -660,7 +660,7 @@ def show_stuck_reason_sequence(is_publish_only=False):
 
 
 #@st.dialog("Book Stuck Reason Summary", width="large")
-def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
+def show_stuck_reason_summary(books_df, authors_df, printeditions_df, key_suffix=""):
 
     # Prepare data for table and export
     today = date.today()
@@ -742,10 +742,11 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df):
                     file_name=f"stuck_reason_details_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="tertiary",
-                    help="Export the detailed stuck reason data to an Excel file."
+                    help="Export the detailed stuck reason data to an Excel file.",
+                    key=f"export_btn_{key_suffix}"
                 )
             with col2:
-                if st.button(":material/auto_awesome_motion: Show Stuck Reason Sequence", help="This is the order in which stuck reasons are evaluated for books in the publishing proces", type="tertiary"):
+                if st.button(":material/auto_awesome_motion: Show Stuck Reason Sequence", help="This is the order in which stuck reasons are evaluated for books in the publishing proces", type="tertiary", key=f"sequence_btn_{key_suffix}"):
                     show_stuck_reason_sequence(is_publish_only=False)
 
     # Display the pie chart in the right column
@@ -801,9 +802,15 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
                 try:
                     conn = connect_db()
                     with conn.session as s:
+                        # If unarchiving, set ignore_auto_archive to 1
+                        ignore_val = 1 if not new_archive_status else 0
                         s.execute(
-                            text("UPDATE books SET is_archived = :is_archived WHERE book_id = :book_id"),
-                            {"is_archived": 1 if new_archive_status else 0, "book_id": book_id}
+                            text("UPDATE books SET is_archived = :is_archived, ignore_auto_archive = :ignore_auto_archive WHERE book_id = :book_id"),
+                            {
+                                "is_archived": 1 if new_archive_status else 0, 
+                                "book_id": book_id,
+                                "ignore_auto_archive": ignore_val if not new_archive_status else 0 # Reset if manually archived? Or keep?
+                            }
                         )
                         s.commit()
                     # Log the change
@@ -967,7 +974,7 @@ cutoff_date = date.today() - timedelta(days=250)
 archive_query = """
 UPDATE books
 SET is_archived = 1
-WHERE deliver = 0 AND is_archived = 0 AND is_cancelled = 0 AND date <= :cutoff_date
+WHERE deliver = 0 AND is_archived = 0 AND is_cancelled = 0 AND date <= :cutoff_date AND ignore_auto_archive = 0
 """
 with conn.session as s:
     s.execute(text(archive_query), {"cutoff_date": cutoff_date})
@@ -977,7 +984,7 @@ with conn.session as s:
 query = """
 SELECT book_id, title, date, writing_start, writing_end, proofreading_start, 
        proofreading_end, formatting_start, formatting_end, cover_start, cover_end, publisher, is_thesis_to_book ,author_type, is_publish_only,
-         apply_isbn, isbn, is_archived
+         apply_isbn, isbn, is_archived, ignore_auto_archive
 FROM books
 WHERE deliver = 0 AND is_cancelled = 0
 """
@@ -1199,7 +1206,7 @@ with st.container():
 
 with st.expander("⚠️ Pending Books Summary", expanded=False):
     if not filtered_pending_data.empty:
-        show_stuck_reason_summary(filtered_pending_data, authors_data, printeditions_data)
+        show_stuck_reason_summary(filtered_pending_data, authors_data, printeditions_data, key_suffix="pending")
     else:
         st.info("No Pending Books Found")
 
@@ -1220,7 +1227,7 @@ with tab1:
                 cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
                 cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
                 cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
-                cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
+                cols[6].markdown('<div class="table-header">View</div>', unsafe_allow_html=True)
 
                 for _, book in filtered_pending_data.iterrows():
                     book_id = book['book_id']
@@ -1258,7 +1265,7 @@ with tab1:
                     cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
                     cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
                     with cols[6]:
-                        if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
+                        if st.button(":material/visibility:", key=f"action_pending_{book['book_id']}", help="View Details"):
                             show_book_details(book_id, book, authors_data, printeditions_data)
         else:
             st.info("No Pending Books Found")
@@ -1268,6 +1275,13 @@ with tab2:
     # Display Archived Books
     st.markdown(f'<div class="status-badge-red">Archived Books<span class="badge-count">{len(filtered_archived_data)}</span></div>', unsafe_allow_html=True)
     st.caption("Books that have been archived automatically after being pending for over 250 days or manually by the user.")
+    
+    with st.expander("⚠️ Archived Books Summary", expanded=False):
+        if not filtered_archived_data.empty:
+            show_stuck_reason_summary(filtered_archived_data, authors_data, printeditions_data, key_suffix="archived")
+        else:
+            st.info("No Archived Books Found")
+
     #st.subheader(f"Archived Books ({len(filtered_archived_data)})")
     with st.container():
         if not filtered_archived_data.empty:
@@ -1280,7 +1294,7 @@ with tab2:
                 cols[3].markdown('<div class="table-header">Publisher</div>', unsafe_allow_html=True)
                 cols[4].markdown('<div class="table-header">Since Enrolled</div>', unsafe_allow_html=True)
                 cols[5].markdown('<div class="table-header">Stuck Reason</div>', unsafe_allow_html=True)
-                cols[6].markdown('<div class="table-header">Actions</div>', unsafe_allow_html=True)
+                cols[6].markdown('<div class="table-header">View</div>', unsafe_allow_html=True)
 
                 for _, book in filtered_archived_data.iterrows():
                     book_id = book['book_id']
@@ -1318,7 +1332,7 @@ with tab2:
                     cols[4].markdown(f'<div class="table-row"><span class="{days_badge_class}">{days_since if days_since is not None else "N/A"} days</span></div>', unsafe_allow_html=True)
                     cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
                     with cols[6]:
-                        if st.button(":material/visibility:", key=f"action_{book['book_id']}", help="View Details"):
+                        if st.button(":material/visibility:", key=f"action_archived_{book['book_id']}", help="View Details"):
                             show_book_details(book_id, book, authors_data, printeditions_data)
         else:
             st.info("No Archived Books Found")

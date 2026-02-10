@@ -223,6 +223,14 @@ BUTTON_CONFIG = {
         "permission": "team_dashboard",
         "type": "new_tab",
     },
+    "payments": {
+        "label": "Payments",
+        "icon": "💰",
+        "page_path": "payments",
+        "permission": None, # Admin only via admin_only flag
+        "type": "new_tab",
+        "admin_only": True,
+    },
     "pending_books": {
         "label": "Pending Work",
         "icon": "⚠️",
@@ -353,6 +361,12 @@ def update_button_counts(conn):
         ops_count = conn.query("SELECT COUNT(*) AS count FROM books WHERE writing_start IS NULL AND is_publish_only = 0 AND is_thesis_to_book = 0 AND is_cancelled = 0", ttl=0,show_spinner = False).iloc[0]["count"]
         if "team_dashboard" in BUTTON_CONFIG and ops_count > 0:
             BUTTON_CONFIG["team_dashboard"]["label"] += f" 🔴 ({ops_count})"
+
+        # 3.1 Payments (Pending Approval)
+        if "payments" in BUTTON_CONFIG:
+            pay_count = conn.query("SELECT COUNT(*) AS count FROM author_payments WHERE status = 'Pending'", ttl=0, show_spinner=False).iloc[0]["count"]
+            if pay_count > 0:
+                BUTTON_CONFIG["payments"]["label"] += f" 🔴 ({pay_count})"
 
         # 4. Open Positions
         open_pos_query = """
@@ -543,28 +557,23 @@ def has_open_author_position(conn, book_id):
 def fetch_all_book_authors(book_ids, _conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'city', 'state', 'author_position',
             'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
             'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
-            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
-            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
-            'emi2_transaction_id', 'emi3_transaction_id'
+            'number_of_books', 'total_amount', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'amount_paid'
         ])
     query = """
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.city, a.state,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, ba.printing_confirmation, ba.delivery_address, 
-           ba.delivery_charge, ba.number_of_books, ba.total_amount, ba.emi1, 
-           ba.emi2, ba.emi3, ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.delivery_charge, ba.number_of_books, ba.total_amount,
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id
+           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id IN :book_ids
@@ -574,16 +583,13 @@ def fetch_all_book_authors(book_ids, _conn):
     except Exception as e:
         st.error(f"Error fetching book authors: {e}")
         return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'city', 'state', 'author_position',
             'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
             'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'emi1', 'emi2', 'emi3',
-            'emi1_date', 'emi2_date', 'emi3_date', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'emi1_payment_mode',
-            'emi2_payment_mode', 'emi3_payment_mode', 'emi1_transaction_id',
-            'emi2_transaction_id', 'emi3_transaction_id'
+            'number_of_books', 'total_amount', 'delivery_date',
+            'tracking_id', 'delivery_vendor', 'amount_paid'
         ])
 
 # New function to fetch detailed print information for a specific book_id
@@ -2021,7 +2027,7 @@ def edit_author_detail(conn):
     # Ensure columns exist
     try:
         with conn.session as s:
-            s.execute(text("SELECT about_author, author_photo FROM authors LIMIT 1"))
+            s.execute(text("SELECT about_author, author_photo, city, state FROM authors LIMIT 1"))
     except Exception:
         # Columns likely missing, add them
         try:
@@ -2034,6 +2040,14 @@ def edit_author_detail(conn):
                     s.execute(text("ALTER TABLE authors ADD COLUMN author_photo TEXT"))
                 except Exception:
                     pass
+                try:
+                    s.execute(text("ALTER TABLE authors ADD COLUMN city VARCHAR(255)"))
+                except Exception:
+                    pass
+                try:
+                    s.execute(text("ALTER TABLE authors ADD COLUMN state VARCHAR(255)"))
+                except Exception:
+                    pass
                 s.commit()
         except Exception as e:
              st.error(f"Error updating database schema: {e}")
@@ -2041,7 +2055,7 @@ def edit_author_detail(conn):
     # Fetch all authors from database
     with conn.session as s:
         authors = s.execute(
-            text("SELECT author_id, name, email, phone, about_author, author_photo FROM authors ORDER BY name")
+            text("SELECT author_id, name, email, phone, about_author, author_photo, city, state FROM authors ORDER BY name")
         ).fetchall()
     
     if not authors:
@@ -2081,16 +2095,33 @@ def edit_author_detail(conn):
             value=selected_author.name,
             key=f"name_{selected_author.author_id}"
         )
-        new_email = st.text_input(
-            "Email",
-            value=selected_author.email if selected_author.email is not None else "",
-            key=f"email_{selected_author.author_id}"
-        )
-        new_phone = st.text_input(
-            "Phone",
-            value=selected_author.phone if selected_author.phone is not None else "",
-            key=f"phone_{selected_author.author_id}"
-        )
+        col_e1, col_e2 = st.columns(2)
+        with col_e1:
+            new_email = st.text_input(
+                "Email",
+                value=selected_author.email if selected_author.email is not None else "",
+                key=f"email_{selected_author.author_id}"
+            )
+        with col_e2:
+            new_phone = st.text_input(
+                "Phone",
+                value=selected_author.phone if selected_author.phone is not None else "",
+                key=f"phone_{selected_author.author_id}"
+            )
+        
+        col_e3, col_e4 = st.columns(2)
+        with col_e3:
+            new_city = st.text_input(
+                "City",
+                value=selected_author.city if selected_author.city is not None else "",
+                key=f"city_{selected_author.author_id}"
+            )
+        with col_e4:
+            new_state = st.text_input(
+                "State",
+                value=selected_author.state if selected_author.state is not None else "",
+                key=f"state_{selected_author.author_id}"
+            )
         
         # New Fields
         new_about_author = st.text_area(
@@ -2136,6 +2167,10 @@ def edit_author_detail(conn):
                             changes.append(f"Email changed from '{selected_author.email or ''}' to '{new_email}'")
                         if new_phone != (selected_author.phone or ''):
                             changes.append(f"Phone changed from '{selected_author.phone or ''}' to '{new_phone}'")
+                        if new_city != (selected_author.city or ''):
+                            changes.append(f"City changed from '{selected_author.city or ''}' to '{new_city}'")
+                        if new_state != (selected_author.state or ''):
+                            changes.append(f"State changed from '{selected_author.state or ''}' to '{new_state}'")
                         if new_about_author != (selected_author.about_author or ''):
                              changes.append("Updated About Author")
                         
@@ -2169,6 +2204,8 @@ def edit_author_detail(conn):
                                         SET name = :name, 
                                             email = :email, 
                                             phone = :phone,
+                                            city = :city,
+                                            state = :state,
                                             about_author = :about_author,
                                             author_photo = :author_photo
                                         WHERE author_id = :author_id
@@ -2177,6 +2214,8 @@ def edit_author_detail(conn):
                                         "name": new_name,
                                         "email": new_email if new_email else None,
                                         "phone": new_phone if new_phone else None,
+                                        "city": new_city if new_city else None,
+                                        "state": new_state if new_state else None,
                                         "about_author": new_about_author if new_about_author else None,
                                         "author_photo": photo_path,
                                         "author_id": selected_author.author_id
@@ -2551,6 +2590,8 @@ def add_book_dialog(conn):
             "name": "",
             "email": "",
             "phone": "",
+            "city": "",
+            "state": "",
             "author_id": None,
             "author_position": "1st",
             "corresponding_agent": "",
@@ -2669,7 +2710,7 @@ def add_book_dialog(conn):
 
         if "authors" not in st.session_state:
             st.session_state.authors = [
-                {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
+                {"name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                 for i in range(4)
             ]
         else:
@@ -2786,11 +2827,15 @@ def add_book_dialog(conn):
                             col3, col4 = st.columns(2)
                             st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..", disabled=disabled)
                             st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
+                            
+                            col_c1, col_c2 = st.columns(2)
+                            st.session_state.authors[i]["city"] = col_c1.text_input(f"City {i+1}", st.session_state.authors[i]["city"], key=f"city_{i}", placeholder="Enter city..", disabled=disabled)
+                            st.session_state.authors[i]["state"] = col_c2.text_input(f"State {i+1}", st.session_state.authors[i]["state"], key=f"state_{i}", placeholder="Enter state..", disabled=disabled)
                         
                         col5, col6 = st.columns(2)
 
                         selected_agent = col5.selectbox(
-                            f"Corresponding Agent {i+1}",
+                            f"Corresponding Author/Agent {i+1}",
                             agent_options,
                             index=agent_options.index(st.session_state.authors[i]["corresponding_agent"]) if st.session_state.authors[i]["corresponding_agent"] in unique_agents else 0,
                             key=f"agent_select_{i}",
@@ -2884,10 +2929,10 @@ def add_book_dialog(conn):
                 publisher in ["AGPH", "Cipher", "AG Volumes", "AG Classics"]
             )
             book_data["syllabus_file"] = syllabus_file
-        with col2:
-            author_data = author_details_section(conn, book_data["author_type"], publisher)
             book_note = book_note_section()
             book_data["book_note"] = book_note
+        with col2:
+            author_data = author_details_section(conn, book_data["author_type"], publisher)
             
             send_welcome = st.checkbox("Send welcome email to authors", 
                                        value=False, 
@@ -2961,10 +3006,16 @@ def add_book_dialog(conn):
                                         author_id_to_link = author["author_id"]
                                     else:
                                         s.execute(text("""
-                                            INSERT INTO authors (name, email, phone)
-                                            VALUES (:name, :email, :phone)
+                                            INSERT INTO authors (name, email, phone, city, state)
+                                            VALUES (:name, :email, :phone, :city, :state)
                                             ON DUPLICATE KEY UPDATE name=name
-                                        """), params={"name": author["name"], "email": author["email"], "phone": author["phone"]})
+                                        """), params={
+                                            "name": author["name"], 
+                                            "email": author["email"], 
+                                            "phone": author["phone"],
+                                            "city": author["city"],
+                                            "state": author["state"]
+                                        })
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
                                         author["author_id"] = author_id_to_link
                                     
@@ -3999,10 +4050,7 @@ def manage_price_dialog(book_id, conn):
         cols = st.columns(len(book_authors), gap="small")
         for i, (_, row) in enumerate(book_authors.iterrows()):
             total_amount = int(row.get('total_amount', 0) or 0)
-            emi1 = int(row.get('emi1', 0) or 0)
-            emi2 = int(row.get('emi2', 0) or 0)
-            emi3 = int(row.get('emi3', 0) or 0)
-            amount_paid = emi1 + emi2 + emi3
+            amount_paid = float(row.get('amount_paid', 0) or 0)
             agent = row.get('publishing_consultant', 'Unknown Agent')
 
             # Determine payment status
@@ -4090,26 +4138,15 @@ def manage_price_dialog(book_id, conn):
                 tabs = st.tabs(tab_titles)
 
                 for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-                    # Inside the `for tab, (_, row) in zip(tabs, book_authors.iterrows()):` loop
                     with tab:
-                        # Fetch existing payment details
+                        ba_id = row['id']
                         total_amount = int(row.get('total_amount', 0) or 0)
-                        emi1 = int(row.get('emi1', 0) or 0)
-                        emi2 = int(row.get('emi2', 0) or 0)
-                        emi3 = int(row.get('emi3', 0) or 0)
-                        emi1_date = row.get('emi1_date', None)
-                        emi2_date = row.get('emi2_date', None)
-                        emi3_date = row.get('emi3_date', None)
-                        # New fields for payment mode and transaction ID (now nullable in DB)
-                        emi1_payment_mode = row.get('emi1_payment_mode', None)  # Could be None
-                        emi2_payment_mode = row.get('emi2_payment_mode', None)  # Could be None
-                        emi3_payment_mode = row.get('emi3_payment_mode', None)  # Could be None
-                        emi1_transaction_id = row.get('emi1_transaction_id', '')
-                        emi2_transaction_id = row.get('emi2_transaction_id', '')
-                        emi3_transaction_id = row.get('emi3_transaction_id', '')
-                        amount_paid = emi1 + emi2 + emi3
-
-                        # Payment status (unchanged)
+                        remark_val = row.get('remark', '') or ""
+                        
+                        # Calculate amount paid from the new table
+                        amount_paid = float(row.get('amount_paid', 0) or 0)
+                        
+                        # Payment status
                         if amount_paid >= total_amount and total_amount > 0:
                             status = '<span class="payment-status status-paid">Fully Paid</span>'
                         elif amount_paid > 0:
@@ -4118,268 +4155,127 @@ def manage_price_dialog(book_id, conn):
                             status = '<span class="payment-status status-pending">Pending</span>'
                         st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
 
-                        # Total Amount Due (unchanged)
-                        total_str = st.text_input(
-                            "Total Amount Due (₹)",
-                            value=str(total_amount) if total_amount > 0 else "",
-                            key=f"total_{row['id']}",
-                            placeholder="Enter whole amount"
-                        )
-
-                        # Remark field
-                        remark_val = st.text_area(
-                            "Payment Remark",
-                            value=row.get('remark', '') or "",
-                            key=f"remark_{row['id']}",
-                            placeholder="Add any details about payment here...",
-                            height=100
-                        )
-
-                        # EMI Payments with Dates, Payment Mode, and Transaction ID
-                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
+                        # --- Section: Author Metadata ---
+                        col_m1, col_m2 = st.columns([1, 2])
+                        with col_m1:
+                            new_total_str = st.text_input(
+                                "Total Amount Due (₹)",
+                                value=str(total_amount) if total_amount > 0 else "",
+                                key=f"total_{ba_id}",
+                                placeholder="Enter whole amount"
+                            )
+                        with col_m2:
+                            new_remark = st.text_input(
+                                "Payment Remark",
+                                value=remark_val,
+                                key=f"remark_{ba_id}",
+                                placeholder="General notes about author payment..."
+                            )
                         
-                        # Determine visibility for progressive EMI display
-                        show_emi2 = emi1 > 0
-                        show_emi3 = emi1 > 0 and emi2 > 0
+                        if st.button("Update Total & Remark", key=f"update_meta_{ba_id}"):
+                            try:
+                                nt = int(new_total_str) if new_total_str.strip() else 0
+                                update_book_authors(ba_id, {"total_amount": nt, "remark": new_remark}, conn)
+                                st.success("Updated successfully!")
+                                st.rerun()
+                            except ValueError:
+                                st.error("Invalid amount")
 
-                        # EMI 1 (always shown)
-                        st.markdown("**EMI 1**")
-                        col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
-                        with col1:
-                            emi1_str = st.text_input(
-                                "Amount (₹)",
-                                value=str(emi1) if emi1 > 0 else "",
-                                key=f"emi1_{row['id']}",
-                                placeholder="Enter EMI amount"
-                            )
-                        with col2:
-                            emi1_date_new = st.date_input(
-                                "Date",
-                                value=pd.to_datetime(emi1_date) if emi1_date else None,
-                                key=f"emi1_date_{row['id']}"
-                            )
-                        with col3:
-                            emi1_mode = st.selectbox(
-                                "Payment Mode",
-                                payment_modes,
-                                index=payment_modes.index(emi1_payment_mode) if emi1_payment_mode in payment_modes else 0,
-                                key=f"emi1_mode_{row['id']}"
-                            )
-                        with col4:
-                            if emi1 > 0:
-                                if st.button(":material/delete:", key=f"del_emi1_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 1", ):
-                                    updates = {
-                                        "emi1": 0,
-                                        "emi1_date": None,
-                                        "emi1_payment_mode": None,
-                                        "emi1_transaction_id": None
-                                    }
-                                    update_book_authors(row['id'], updates, conn)
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        "deleted EMI 1",
-                                        f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
-                                    )
-                                    st.success("EMI 1 deleted successfully")
-                                    st.rerun()
-                                    
-                        emi1_txn_id = ""
-                        if emi1_mode in ["UPI", "Bank Deposit"]:
-                            emi1_txn_id = st.text_input(
-                                "Transaction ID",
-                                value=emi1_transaction_id,
-                                key=f"emi1_txn_{row['id']}",
-                                placeholder="Enter Transaction ID"
-                            )
+                        st.write("---")
 
-                        # EMI 2 (shown only if EMI 1 is saved)
-                        if show_emi2:
-                            st.markdown("**EMI 2**")
-                            col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
-                            with col1:
-                                emi2_str = st.text_input(
-                                    "Amount (₹)",
-                                    value=str(emi2) if emi2 > 0 else "",
-                                    key=f"emi2_{row['id']}",
-                                    placeholder="Enter EMI amount"
-                                )
-                            with col2:
-                                emi2_date_new = st.date_input(
-                                    "Date",
-                                    value=pd.to_datetime(emi2_date) if emi2_date else None,
-                                    key=f"emi2_date_{row['id']}"
-                                )
-                            with col3:
-                                emi2_mode = st.selectbox(
-                                    "Payment Mode",
-                                    payment_modes,
-                                    index=payment_modes.index(emi2_payment_mode) if emi2_payment_mode in payment_modes else 0,
-                                    key=f"emi2_mode_{row['id']}"
-                                )
-                            with col4:
-                                if emi2 > 0:
-                                    if st.button(":material/delete:", key=f"del_emi2_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 2"):
-                                        updates = {
-                                            "emi2": 0,
-                                            "emi2_date": None,
-                                            "emi2_payment_mode": None,
-                                            "emi2_transaction_id": None
-                                        }
-                                        update_book_authors(row['id'], updates, conn)
-                                        log_activity(
-                                            conn,
-                                            st.session_state.user_id,
-                                            st.session_state.username,
-                                            st.session_state.session_id,
-                                            "deleted EMI 2",
-                                            f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
-                                        )
-                                        st.success("EMI 2 deleted successfully")
+                        # --- Section: Payment History ---
+                        st.markdown("##### 🧾 Payment History")
+                        history_query = "SELECT * FROM author_payments WHERE book_author_id = :ba_id ORDER BY payment_date DESC"
+                        history = conn.query(history_query, params={"ba_id": ba_id}, ttl=0, show_spinner=False)
+                        
+                        if not history.empty:
+                            for _, p in history.iterrows():
+                                hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
+                                with hcol1:
+                                    st.write(f"₹{p['amount']}")
+                                with hcol2:
+                                    st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
+                                with hcol3:
+                                    st.write(f"**{p['payment_mode']}**")
+                                with hcol4:
+                                    st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
+                                with hcol5:
+                                    status = p.get('status', 'Pending')
+                                    status_color = "green" if status == 'Approved' else "red" if status == 'Rejected' else "orange"
+                                    st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
+                                    if status == 'Rejected' and p.get('rejection_reason'):
+                                        st.caption(f"Reason: {p['rejection_reason']}")
+                                with hcol6:
+                                    if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
+                                        with conn.session as s:
+                                            s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
+                                            s.commit()
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Payment ID: {p['id']}, Author: {row['name']}")
                                         st.rerun()
-                                        
-                            emi2_txn_id = ""
-                            if emi2_mode in ["UPI", "Bank Deposit"]:
-                                emi2_txn_id = st.text_input(
-                                    "Transaction ID",
-                                    value=emi2_transaction_id,
-                                    key=f"emi2_txn_{row['id']}",
-                                    placeholder="Enter Transaction ID"
-                                )
                         else:
-                            emi2_str = str(emi2) if emi2 > 0 else ""
-                            emi2_date_new = pd.to_datetime(emi2_date) if emi2_date else None
-                            emi2_mode = emi2_payment_mode
-                            emi2_txn_id = emi2_transaction_id
+                            st.info("No individual payment records found.")
 
-                        # EMI 3 (shown only if EMI 1 and 2 are saved)
-                        if show_emi3:
-                            st.markdown("**EMI 3**")
-                            col1, col2, col3, col4 = st.columns([1, 1, 1.2, 0.4], vertical_alignment="bottom")
-                            with col1:
-                                emi3_str = st.text_input(
-                                    "Amount (₹)",
-                                    value=str(emi3) if emi3 > 0 else "",
-                                    key=f"emi3_{row['id']}",
-                                    placeholder="Enter EMI amount"
-                                )
-                            with col2:
-                                emi3_date_new = st.date_input(
-                                    "Date",
-                                    value=pd.to_datetime(emi3_date) if emi3_date else None,
-                                    key=f"emi3_date_{row['id']}"
-                                )
-                            with col3:
-                                emi3_mode = st.selectbox(
-                                    "Payment Mode",
-                                    payment_modes,
-                                    index=payment_modes.index(emi3_payment_mode) if emi3_payment_mode in payment_modes else 0,
-                                    key=f"emi3_mode_{row['id']}"
-                                )
-                            with col4:
-                                if emi3 > 0:
-                                    if st.button(":material/delete:", key=f"del_emi3_{row['id']}", type="secondary", use_container_width=True, help="Delete EMI 3"):
-                                        updates = {
-                                            "emi3": 0,
-                                            "emi3_date": None,
-                                            "emi3_payment_mode": None,
-                                            "emi3_transaction_id": None
-                                        }
-                                        update_book_authors(row['id'], updates, conn)
-                                        log_activity(
-                                            conn,
-                                            st.session_state.user_id,
-                                            st.session_state.username,
-                                            st.session_state.session_id,
-                                            "deleted EMI 3",
-                                            f"Author: {row['name']} (ID: {row['id']}), Book ID: {book_id}"
-                                        )
-                                        st.success("EMI 3 deleted successfully")
-                                        st.rerun()
-                                        
-                            emi3_txn_id = ""
-                            if emi3_mode in ["UPI", "Bank Deposit"]:
-                                emi3_txn_id = st.text_input(
-                                    "Transaction ID",
-                                    value=emi3_transaction_id,
-                                    key=f"emi3_txn_{row['id']}",
-                                    placeholder="Enter Transaction ID"
-                                )
-                        else:
-                            emi3_str = str(emi3) if emi3 > 0 else ""
-                            emi3_date_new = pd.to_datetime(emi3_date) if emi3_date else None
-                            emi3_mode = emi3_payment_mode
-                            emi3_txn_id = emi3_transaction_id
+                        st.write("---")
+                        
+                        # --- Section: Add New Payment ---
+                        st.markdown("##### ➕ Add New Payment")
+                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
+                        acol1, acol2, acol3 = st.columns([1, 1, 1])
+                        with acol1:
+                            add_amt = st.text_input("Amount (₹)", key=f"add_amt_{ba_id}", placeholder="0")
+                        with acol2:
+                            add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_{ba_id}")
+                        with acol3:
+                            add_mode = st.selectbox("Mode", payment_modes, key=f"add_mode_{ba_id}")
+                        
+                        add_txn = ""
+                        if add_mode in ["UPI", "Bank Deposit"]:
+                            add_txn = st.text_input("Transaction ID", key=f"add_txn_{ba_id}", placeholder="Ref No.")
+                        
+                        add_rem = st.text_input("Payment Specific Note", key=f"add_rem_{ba_id}", placeholder="e.g. Received via WhatsApp")
 
-                        # Calculate remaining balance
-                        try:
-                            new_total = int(total_str) if total_str.strip() else 0
-                            new_emi1 = int(emi1_str) if emi1_str.strip() else 0
-                            new_emi2 = int(emi2_str) if emi2_str.strip() else 0
-                            new_emi3 = int(emi3_str) if emi3_str.strip() else 0
-                            new_paid = new_emi1 + new_emi2 + new_emi3
-                            remaining = new_total - new_paid
-                            total_author_amounts += new_total
-                            updated_authors.append((row['id'], new_total, new_emi1, new_emi2, new_emi3, 
-                                                    emi1_date_new, emi2_date_new, emi3_date_new,
-                                                    emi1_mode, emi2_mode, emi3_mode,
-                                                    emi1_txn_id, emi2_txn_id, emi3_txn_id))
-                        except ValueError:
-                            st.error("Please enter valid whole numbers for all fields")
-                            return
-
-                        st.markdown(f"<span style='color:green'>**Total Paid:** ₹{new_paid}</span> | <span style='color:red'>**Remaining Balance:** ₹{remaining}</span>", unsafe_allow_html=True)
-
-                        # Save button
-                        if st.button("Save Payment", key=f"save_payment_{row['id']}", type="primary", use_container_width=True):
-                            with st.spinner("Saving Payment..."):
-                                import time
-                                time.sleep(1)
-                                if new_paid > new_total:
-                                    st.error("Total EMI payments cannot exceed total amount")
-                                elif new_total < 0 or new_emi1 < 0 or new_emi2 < 0 or new_emi3 < 0:
-                                    st.error("Amounts cannot be negative")
+                        if st.button("➕ Register Payment", key=f"btn_add_{ba_id}", type="primary", use_container_width=True):
+                            try:
+                                amt = float(add_amt) if add_amt.strip() else 0
+                                if amt <= 0:
+                                    st.error("Enter a valid amount")
                                 else:
-                                    book_price = int(price_str) if price_str.strip() else current_price
-                                    if pd.isna(book_price):
-                                        st.error("Please set a book price first")
-                                        return
-                                    if total_author_amounts > book_price:
-                                        st.error(f"Total author amounts (₹{total_author_amounts}) cannot exceed book price (₹{book_price})")
-                                        return
+                                    # Determine status based on role
+                                    is_admin = st.session_state.get("role") == "admin"
+                                    initial_status = 'Approved' if is_admin else 'Pending'
+                                    
+                                    with conn.session as s:
+                                        s.execute(text("""
+                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
+                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
+                                        """), {
+                                            "ba_id": ba_id, 
+                                            "amt": amt, 
+                                            "date": add_date, 
+                                            "mode": add_mode, 
+                                            "txn": add_txn, 
+                                            "remark": add_rem,
+                                            "status": initial_status,
+                                            "created_by": st.session_state.get("user_id"),
+                                            "requested_by": st.session_state.get("username", "Unknown"),
+                                            "approved_by": st.session_state.get("username") if is_admin else None,
+                                            "approved_at": datetime.now() if is_admin else None
+                                        })
+                                        s.commit()
+                                    
+                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added payment", f"Amount: {amt}, Author: {row['name']}, Status: {initial_status}")
+                                    
+                                    if is_admin:
+                                        st.success("Payment registered and approved!")
+                                    else:
+                                        st.success("Payment registered! Waiting for Admin Approval.")
+                                    st.rerun()
+                            except ValueError:
+                                st.error("Invalid amount")
 
-                                    updates = {
-                                        "total_amount": new_total,
-                                        "emi1": new_emi1,
-                                        "emi2": new_emi2,
-                                        "emi3": new_emi3,
-                                        "emi1_date": emi1_date_new,
-                                        "emi2_date": emi2_date_new,
-                                        "emi3_date": emi3_date_new,
-                                        "emi1_payment_mode": emi1_mode,
-                                        "emi2_payment_mode": emi2_mode,
-                                        "emi3_payment_mode": emi3_mode,
-                                        "emi1_transaction_id": emi1_txn_id,
-                                        "emi2_transaction_id": emi2_txn_id,
-                                        "emi3_transaction_id": emi3_txn_id,
-                                        "remark": remark_val
-                                    }
-                                    update_book_authors(row['id'], updates, conn)
-                                    
-                                    log_activity(
-                                        conn,
-                                        st.session_state.user_id,
-                                        st.session_state.username,
-                                        st.session_state.session_id,
-                                        "updated author payment",
-                                        f"Author: {row['name']} (ID: {row['id']}), Total: {new_total}, Paid: {new_paid}, Remark: {remark_val}"
-                                    )
-                                    
-                                    st.success(f"Payment updated for {row['name']}", icon="✔️")
-                                    st.toast(f"Payment updated for {row['name']}", icon="✔️", duration="long")
-                                    st.cache_data.clear()
+                        remaining = total_amount - amount_paid
+                        st.markdown(f"<div style='text-align:right;'><span style='color:green'>**Total Paid:** ₹{amount_paid}</span> | <span style='color:red'>**Remaining:** ₹{remaining}</span></div>", unsafe_allow_html=True)
+
 
 
 
@@ -4393,25 +4289,23 @@ def manage_price_dialog(book_id, conn):
 # Function to fetch book_author details along with author details for a given book_id
 def fetch_book_authors(book_id, conn):
     query = f"""
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo,
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo, a.city, a.state,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, 
            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
-           ba.number_of_books, ba.total_amount, ba.emi1, ba.emi2, ba.emi3,
-           ba.emi1_date, ba.emi2_date, ba.emi3_date,
+           ba.number_of_books, ba.total_amount, 
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-           ba.emi1_payment_mode, ba.emi2_payment_mode, ba.emi3_payment_mode,
-           ba.emi1_transaction_id, ba.emi2_transaction_id, ba.emi3_transaction_id,
-           ba.remark
+           ba.remark,
+           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
     """
     return conn.query(query, show_spinner = False)
 
-def insert_author(conn, name, email, phone):
+def insert_author(conn, name, email, phone, city=None, state=None):
     """Insert a new author into the database and return the author_id."""
     try:
         # Validate inputs
@@ -4430,10 +4324,10 @@ def insert_author(conn, name, email, phone):
             # Insert the author
             result = s.execute(
                 text("""
-                    INSERT INTO authors (name, email, phone)
-                    VALUES (:name, :email, :phone)
+                    INSERT INTO authors (name, email, phone, city, state)
+                    VALUES (:name, :email, :phone, :city, :state)
                 """),
-                params={"name": name, "email": email, "phone": phone}
+                params={"name": name, "email": email, "phone": phone, "city": city, "state": state}
             )
             # Check if the insert was successful
             if result.rowcount != 1:
@@ -4502,13 +4396,13 @@ def initialize_new_authors(slots):
     """Initialize new author entries."""
     return [
         {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
-         "corresponding_agent": "", "publishing_consultant": ""}
+         "corresponding_agent": "", "publishing_consultant": "", "city": "", "state": ""}
         for _ in range(slots)
     ]
 
 def initialize_new_editors(slots):
     return [
-        {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None}
+        {"name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": None}
         for _ in range(slots)
     ]
 
@@ -4527,7 +4421,7 @@ def fetch_chapters(book_id, conn):
 def fetch_chapter_editors(chapter_id, conn):
     with conn.session as s:
         query = text("""
-            SELECT ce.author_id, ce.author_position, a.name, a.email, a.phone,
+            SELECT ce.author_id, ce.author_position, a.name, a.email, a.phone, a.city, a.state,
                    ce.corresponding_agent, ce.publishing_consultant
             FROM chapter_editors ce
             JOIN authors a ON ce.author_id = a.author_id
@@ -4536,7 +4430,7 @@ def fetch_chapter_editors(chapter_id, conn):
         """)
         result = s.execute(query, {"chapter_id": chapter_id}).fetchall()
         return pd.DataFrame(result, columns=[
-            'author_id', 'author_position', 'name', 'email', 'phone',
+            'author_id', 'author_position', 'name', 'email', 'phone', 'city', 'state',
             'corresponding_agent', 'publishing_consultant'
         ])
 
@@ -4868,6 +4762,16 @@ def edit_author_dialog(book_id, conn):
                             disabled=disabled
                         )
 
+                        col_city, col_state = st.columns(2)
+                        st.session_state.new_authors[i]["city"] = col_city.text_input(
+                            f"City {i+1}", st.session_state.new_authors[i]["city"], key=f"new_city_{i}",
+                            disabled=disabled
+                        )
+                        st.session_state.new_authors[i]["state"] = col_state.text_input(
+                            f"State {i+1}", st.session_state.new_authors[i]["state"], key=f"new_state_{i}",
+                            disabled=disabled
+                        )
+
                     col5, col6 = st.columns(2)
                     selected_agent = col5.selectbox(
                         f"Corresponding Agent {i+1}",
@@ -4928,7 +4832,7 @@ def edit_author_dialog(book_id, conn):
                                 if author["name"]:
                                     author_id_to_link = author["author_id"]
                                     if not author_id_to_link:  # New author
-                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"], author["city"], author["state"])
                                         if not author_id_to_link:
                                             st.error(f"Failed to insert author {author['name']}")
                                             continue
@@ -5307,6 +5211,20 @@ def edit_author_dialog(book_id, conn):
                             
                                 # New Fields for Author Table (collected separately as they belong to authors table)
                                 author_updates = {}
+                                col_city, col_state = st.columns(2)
+                                with col_city:
+                                    author_updates['city'] = st.text_input(
+                                        "City",
+                                        value=row['city'] if row['city'] is not None else "",
+                                        key=f"city_{row['id']}"
+                                    )
+                                with col_state:
+                                    author_updates['state'] = st.text_input(
+                                        "State",
+                                        value=row['state'] if row['state'] is not None else "",
+                                        key=f"state_{row['id']}"
+                                    )
+
                                 author_updates['about_author'] = st.text_area(
                                     "About The Author",
                                     value=row['about_author'] if row['about_author'] is not None else "",
@@ -5415,6 +5333,12 @@ def edit_author_dialog(book_id, conn):
                                 
                                     if author_updates.get('about_author') != row['about_author']:
                                         author_changes.append("Updated About Author")
+
+                                    if author_updates.get('city') != row['city']:
+                                        author_changes.append("Updated City")
+                                    
+                                    if author_updates.get('state') != row['state']:
+                                        author_changes.append("Updated State")
                                         
                                     # Determine if auto-checkboxes need to be updated (separate from main changes)
                                     auto_check_author_details = False
@@ -5445,8 +5369,13 @@ def edit_author_dialog(book_id, conn):
                                             # Update authors table if needed
                                             if author_changes:
                                                 with conn.session as s:
-                                                    update_query = "UPDATE authors SET about_author = :about_author"
-                                                    params = {"about_author": author_updates['about_author'], "author_id": author_id}
+                                                    update_query = "UPDATE authors SET about_author = :about_author, city = :city, state = :state"
+                                                    params = {
+                                                        "about_author": author_updates['about_author'], 
+                                                        "city": author_updates['city'],
+                                                        "state": author_updates['state'],
+                                                        "author_id": author_id
+                                                    }
                                                 
                                                     if 'author_photo' in author_updates:
                                                         update_query += ", author_photo = :author_photo"
@@ -5782,6 +5711,8 @@ def edit_author_dialog(book_id, conn):
                             "name": editor['name'],
                             "email": editor['email'],
                             "phone": editor['phone'],
+                            "city": editor['city'],
+                            "state": editor['state'],
                             "corresponding_agent": editor['corresponding_agent'] or "",
                             "publishing_consultant": editor['publishing_consultant'] or ""
                         }
@@ -5795,6 +5726,8 @@ def edit_author_dialog(book_id, conn):
                             "name": "",
                             "email": "",
                             "phone": "",
+                            "city": "",
+                            "state": "",
                             "corresponding_agent": "",
                             "publishing_consultant": ""
                         })
@@ -5840,6 +5773,8 @@ def edit_author_dialog(book_id, conn):
                                                 "name": selected_editor_details.name,
                                                 "email": selected_editor_details.email,
                                                 "phone": selected_editor_details.phone,
+                                                "city": selected_editor_details.city,
+                                                "state": selected_editor_details.state,
                                                 "author_id": selected_editor_id
                                             })
                                             
@@ -5848,7 +5783,9 @@ def edit_author_dialog(book_id, conn):
                                                 <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
                                                     <strong>👤 Name:</strong> {selected_editor_details.name}<br>
                                                     <strong>📧 Email:</strong> {selected_editor_details.email}<br>
-                                                    <strong>📱 Phone:</strong> {selected_editor_details.phone}
+                                                    <strong>📱 Phone:</strong> {selected_editor_details.phone}<br>
+                                                    <strong>🏙️ City:</strong> {selected_editor_details.city or 'N/A'}<br>
+                                                    <strong>🗺️ State:</strong> {selected_editor_details.state or 'N/A'}
                                                 </div>
                                             """, unsafe_allow_html=True)
                                             
@@ -5899,6 +5836,18 @@ def edit_author_dialog(book_id, conn):
                                             "Phone",
                                             value=editor["phone"],
                                             key=f"edit_chapter_{chapter_id}_editor_phone_{j}"
+                                        )
+
+                                        col_c1, col_c2 = st.columns(2)
+                                        editor["city"] = col_c1.text_input(
+                                            "City",
+                                            value=editor["city"],
+                                            key=f"edit_chapter_{chapter_id}_editor_city_{j}"
+                                        )
+                                        editor["state"] = col_c2.text_input(
+                                            "State",
+                                            value=editor["state"],
+                                            key=f"edit_chapter_{chapter_id}_editor_state_{j}"
                                         )
 
                                     col5, col6 = st.columns(2)
@@ -5997,13 +5946,15 @@ def edit_author_dialog(book_id, conn):
                                                             # Insert new author if needed
                                                             s.execute(
                                                                 text("""
-                                                                    INSERT INTO authors (name, email, phone)
-                                                                    VALUES (:name, :email, :phone)
+                                                                    INSERT INTO authors (name, email, phone, city, state)
+                                                                    VALUES (:name, :email, :phone, :city, :state)
                                                                 """),
                                                                 {
                                                                     "name": editor["name"],
                                                                     "email": editor["email"] or None,
-                                                                    "phone": editor["phone"] or None
+                                                                    "phone": editor["phone"] or None,
+                                                                    "city": editor["city"] or None,
+                                                                    "state": editor["state"] or None
                                                                 }
                                                             )
                                                             editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
@@ -6082,6 +6033,8 @@ def edit_author_dialog(book_id, conn):
                                     "name": "",
                                     "email": "",
                                     "phone": "",
+                                    "city": "",
+                                    "state": "",
                                     "corresponding_agent": "",
                                     "publishing_consultant": ""
                                 }
@@ -6093,7 +6046,7 @@ def edit_author_dialog(book_id, conn):
                 # Ensure new_chapters always has four editors
                 def ensure_editor_fields(editor):
                     default_editor = {
-                        "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
+                        "name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": None,
                         "corresponding_agent": "", "publishing_consultant": ""
                     }
                     for key, default_value in default_editor.items():
@@ -6150,23 +6103,27 @@ def edit_author_dialog(book_id, conn):
                                 selected_editor_id = int(selected_editor.split('(ID: ')[1][:-1])
                                 selected_editor_details = next((a for a in all_authors if a.author_id == selected_editor_id), None)
                                 if selected_editor_details:
-                                    editor.update({
-                                        "name": selected_editor_details.name,
-                                        "email": selected_editor_details.email,
-                                        "phone": selected_editor_details.phone,
-                                        "author_id": selected_editor_id,
-                                        "corresponding_agent": "",
-                                        "publishing_consultant": ""
-                                    })
-                                    
-                                    # Display Read-Only Details
-                                    st.markdown(f"""
-                                        <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
-                                            <strong>👤 Name:</strong> {selected_editor_details.name}<br>
-                                            <strong>📧 Email:</strong> {selected_editor_details.email}<br>
-                                            <strong>📱 Phone:</strong> {selected_editor_details.phone}
-                                        </div>
-                                    """, unsafe_allow_html=True)
+                                        editor.update({
+                                            "name": selected_editor_details.name,
+                                            "email": selected_editor_details.email,
+                                            "phone": selected_editor_details.phone,
+                                            "city": selected_editor_details.city,
+                                            "state": selected_editor_details.state,
+                                            "author_id": selected_editor_id,
+                                            "corresponding_agent": "",
+                                            "publishing_consultant": ""
+                                        })
+                                        
+                                        # Display Read-Only Details
+                                        st.markdown(f"""
+                                            <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 10px; font-size: 14px;">
+                                                <strong>👤 Name:</strong> {selected_editor_details.name}<br>
+                                                <strong>📧 Email:</strong> {selected_editor_details.email}<br>
+                                                <strong>📱 Phone:</strong> {selected_editor_details.phone}<br>
+                                                <strong>🏙️ City:</strong> {selected_editor_details.city or 'N/A'}<br>
+                                                <strong>🗺️ State:</strong> {selected_editor_details.state or 'N/A'}
+                                            </div>
+                                        """, unsafe_allow_html=True)
                                     
                             elif selected_editor == "Add New Editor":
                                 editor["author_id"] = None
@@ -6215,6 +6172,18 @@ def edit_author_dialog(book_id, conn):
                                     "Phone",
                                     editor["phone"],
                                     key=f"new_chapter_editor_phone_{j}"
+                                )
+
+                                col_nc1, col_nc2 = st.columns(2)
+                                editor["city"] = col_nc1.text_input(
+                                    "City",
+                                    editor["city"],
+                                    key=f"new_chapter_editor_city_{j}"
+                                )
+                                editor["state"] = col_nc2.text_input(
+                                    "State",
+                                    editor["state"],
+                                    key=f"new_chapter_editor_state_{j}"
                                 )
 
                             col5, col6 = st.columns(2)
@@ -6321,13 +6290,15 @@ def edit_author_dialog(book_id, conn):
                                             if not editor_id:
                                                 s.execute(
                                                     text("""
-                                                        INSERT INTO authors (name, email, phone)
-                                                        VALUES (:name, :email, :phone)
+                                                        INSERT INTO authors (name, email, phone, city, state)
+                                                        VALUES (:name, :email, :phone, :city, :state)
                                                     """),
                                                     {
                                                         "name": editor["name"],
                                                         "email": editor["email"] or None,
-                                                        "phone": editor["phone"] or None
+                                                        "phone": editor["phone"] or None,
+                                                        "city": editor["city"] or None,
+                                                        "state": editor["state"] or None
                                                     }
                                                 )
                                                 editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
@@ -6576,6 +6547,16 @@ def edit_author_dialog(book_id, conn):
                                     disabled=disabled
                                 )
 
+                                col_city, col_state = st.columns(2)
+                                st.session_state.new_authors[i]["city"] = col_city.text_input(
+                                    f"City {i+1}", st.session_state.new_authors[i]["city"], key=f"new_city_{i}",
+                                    disabled=disabled
+                                )
+                                st.session_state.new_authors[i]["state"] = col_state.text_input(
+                                    f"State {i+1}", st.session_state.new_authors[i]["state"], key=f"new_state_{i}",
+                                    disabled=disabled
+                                )
+
                             col5, col6 = st.columns(2)
                             selected_agent = col5.selectbox(
                                 f"Corresponding Agent {i+1}",
@@ -6637,7 +6618,7 @@ def edit_author_dialog(book_id, conn):
                                         if author["name"]:  # Only process non-empty authors
                                             author_id_to_link = author["author_id"]
                                             if not author_id_to_link:  # New author
-                                                author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
+                                                author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"], author["city"], author["state"])
                                                 if not author_id_to_link:
                                                     st.error(f"Failed to insert author {author['name']}")
                                                     continue
@@ -9279,8 +9260,9 @@ with srcol3:
             if st.session_state.status_filter:
                 if st.session_state.status_filter == "Pending Payment":
                     pending_payment_query = """
-                        SELECT DISTINCT book_id FROM book_authors
-                        WHERE total_amount > 0 AND COALESCE(emi1, 0) + COALESCE(emi2, 0) + COALESCE(emi3, 0) < total_amount
+                        SELECT DISTINCT ba.book_id FROM book_authors ba
+                        WHERE ba.total_amount > 0 AND 
+                        COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) < ba.total_amount
                     """
                     pending_book_ids = conn.query(pending_payment_query, show_spinner=False)
                     filtered_books = filtered_books[filtered_books['book_id'].isin(pending_book_ids['book_id'].tolist())]
