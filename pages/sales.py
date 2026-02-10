@@ -3,6 +3,7 @@ from constants import log_activity , get_total_unread_count, connect_ict_db, con
 import re
 import uuid
 import pandas as pd
+import time
 from urllib.parse import urlencode, quote
 from urllib.parse import urlencode
 from sqlalchemy import text
@@ -352,7 +353,7 @@ def fetch_all_author_names(book_ids, _conn):
 # Function to fetch book_author details along with author details for a given book_id
 def fetch_book_authors(book_id, conn):
     query = f"""
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, 
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo, a.city, a.state,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
@@ -360,7 +361,8 @@ def fetch_book_authors(book_id, conn):
            ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
            ba.number_of_books, ba.total_amount, 
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
-           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) as amount_paid
+           ba.remark,
+           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid
     FROM book_authors ba
     JOIN authors a ON ba.author_id = a.author_id
     WHERE ba.book_id = '{book_id}'
@@ -572,7 +574,7 @@ def has_open_author_position(conn, book_id):
     df = conn.query(query)
     return book_id in df['book_id'].values
 
-@st.dialog("Manage Book Price and Author Payments", width="large", on_dismiss="rerun")
+@st.dialog("Manage Book Payments", width="large")
 def manage_price_dialog(book_id, conn):
     # Fetch book details for title and price
     book_details = fetch_book_details(book_id, conn)
@@ -727,6 +729,16 @@ def manage_price_dialog(book_id, conn):
                                     {"price": price, "book_id": book_id}
                                 )
                                 s.commit()
+                            
+                            log_activity(
+                                conn,
+                                st.session_state.user_id,
+                                st.session_state.username,
+                                st.session_state.session_id,
+                                "updated book price",
+                                f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+                            )
+                            
                             st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
                             st.cache_data.clear()
                         except ValueError:
@@ -750,7 +762,7 @@ def manage_price_dialog(book_id, conn):
                         total_amount = int(row.get('total_amount', 0) or 0)
                         remark_val = row.get('remark', '') or ""
                         
-                        # Calculate amount_paid from the new table
+                        # Calculate amount paid from the new table
                         amount_paid = float(row.get('amount_paid', 0) or 0)
                         
                         # Payment status
@@ -782,12 +794,15 @@ def manage_price_dialog(book_id, conn):
                         if st.button("Update Total & Remark", key=f"update_meta_{ba_id}"):
                             try:
                                 nt = int(new_total_str) if new_total_str.strip() else 0
-                                # Use the function from app.py or local if available
-                                # Here we use raw query since update_book_authors might not be imported or available same way
-                                with conn.session as s:
-                                    s.execute(text("UPDATE book_authors SET total_amount = :total, remark = :remark WHERE id = :id"), 
-                                              {"total": nt, "remark": new_remark, "id": ba_id})
-                                    s.commit()
+                                update_book_authors(ba_id, {"total_amount": nt, "remark": new_remark}, conn)
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "updated author total & remark",
+                                    f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Total: ₹{nt}, Remark: {new_remark}"
+                                )
                                 st.success("Updated successfully!")
                                 st.rerun()
                             except ValueError:
@@ -802,7 +817,7 @@ def manage_price_dialog(book_id, conn):
                         
                         if not history.empty:
                             for _, p in history.iterrows():
-                                hcol1, hcol2, hcol3, hcol4, hcol5 = st.columns([1, 1, 1, 1.5, 0.4])
+                                hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
                                 with hcol1:
                                     st.write(f"₹{p['amount']}")
                                 with hcol2:
@@ -812,10 +827,14 @@ def manage_price_dialog(book_id, conn):
                                 with hcol4:
                                     st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
                                 with hcol5:
+                                    status_color = "green" if p.get('status') == 'Approved' else "orange"
+                                    st.markdown(f"<span style='color:{status_color}'>{p.get('status', 'Pending')}</span>", unsafe_allow_html=True)
+                                with hcol6:
                                     if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
                                         with conn.session as s:
                                             s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
                                             s.commit()
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{p['amount']} ({p['payment_mode']})")
                                         st.rerun()
                         else:
                             st.info("No individual payment records found.")
@@ -845,20 +864,35 @@ def manage_price_dialog(book_id, conn):
                                 if amt <= 0:
                                     st.error("Enter a valid amount")
                                 else:
+                                    # Determine status based on role
+                                    is_admin = st.session_state.get("role") == "admin"
+                                    initial_status = 'Approved' if is_admin else 'Pending'
+                                    
                                     with conn.session as s:
                                         s.execute(text("""
-                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark)
-                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark)
-                                        """), {"ba_id": ba_id, "amt": amt, "date": add_date, "mode": add_mode, "txn": add_txn, "remark": add_rem})
+                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
+                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
+                                        """), {
+                                            "ba_id": ba_id, 
+                                            "amt": amt, 
+                                            "date": add_date, 
+                                            "mode": add_mode, 
+                                            "txn": add_txn, 
+                                            "remark": add_rem,
+                                            "status": initial_status,
+                                            "created_by": st.session_state.get("user_id"),
+                                            "requested_by": st.session_state.get("username", "Unknown"),
+                                            "approved_by": st.session_state.get("username") if is_admin else None,
+                                            "approved_at": datetime.now() if is_admin else None
+                                        })
                                         s.commit()
-                                    st.success("Payment registered!")
+                                    
+                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "registered payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}")
+                                    st.toast(f"Registered ₹{amt} for {row['name']}", icon="✅")
+                                    time.sleep(1)
                                     st.rerun()
                             except ValueError:
                                 st.error("Invalid amount")
-
-                        remaining = total_amount - amount_paid
-                        st.markdown(f"<div style='text-align:right;'><span style='color:green'>**Total Paid:** ₹{amount_paid}</span> | <span style='color:red'>**Remaining:** ₹{remaining}</span></div>", unsafe_allow_html=True)
-
 
 # New function to fetch detailed print information for a specific book_id
 def fetch_print_details(book_id, conn):
@@ -977,14 +1011,26 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             }
         </style>
         <table class='compact-table'>
-            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th>
+            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th><th>Payment</th>
         """
         for label in checklist_labels:
             table_html += f"<th>{label}</th>"
         table_html += "</tr>"
         
         for _, author in book_authors_df.iterrows():
-            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
+            # Payment status logic
+            total = float(author.get('total_amount', 0) or 0)
+            paid = float(author.get('amount_paid', 0) or 0)
+            if total <= 0:
+                p_status = '<span style="color:#666; font-size:10px;">⚪ Pending</span>'
+            elif paid >= total:
+                p_status = '<span style="color:#166534; font-size:10px;">✅ Paid</span>'
+            elif paid > 0:
+                p_status = '<span style="color:#854d0e; font-size:10px;">🟠 Partial</span>'
+            else:
+                p_status = '<span style="color:#b91c1c; font-size:10px;">🔴 Unpaid</span>'
+
+            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td><td>{p_status}</td>"
             for col, label in zip(checklist_columns, checklist_labels):
                 status = '✅' if author[col] else '❌'
                 table_html += f"<td>{status}</td>"
@@ -1298,11 +1344,17 @@ query = """
     b.isbn,
     b.price,
     -- Aggregate total_amount and amount_paid
-    MAX(ba.total_amount) as total_amount,
-    COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id), 0) as amount_paid,
+    SUM(ba.total_amount) as total_amount,
+    COALESCE(SUM(ap_agg.paid), 0) as amount_paid,
     ba.publishing_consultant
 FROM books b
 INNER JOIN book_authors ba ON b.book_id = ba.book_id
+LEFT JOIN (
+    SELECT book_author_id, SUM(amount) as paid
+    FROM author_payments
+    WHERE status = 'Approved'
+    GROUP BY book_author_id
+) ap_agg ON ba.id = ap_agg.book_author_id
 WHERE ba.publishing_consultant = :user_name AND b.is_cancelled = 0
 GROUP BY 
     b.book_id, b.title, b.date, b.writing_start, b.writing_end,

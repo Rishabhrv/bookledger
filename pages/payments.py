@@ -150,7 +150,12 @@ if st.session_state.get("role") != "admin":
     st.error("⛔ Access Denied: This page is for Administrators only.")
     st.stop()
 
-st.title("Payments")
+col1, col2 = st.columns([10, 1], vertical_alignment="bottom")
+with col1:
+    st.title("Payments")
+with col2:
+    if st.button(":material/refresh: Refresh Data", key="refresh_main", type="tertiary"):
+        st.cache_data.clear()
 
 # --- Helper Functions ---
 
@@ -392,7 +397,7 @@ def manage_price_dialog(book_id, conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "updated book price",
-                                f"Book ID: {book_id}, New Price: {price}"
+                                f"Book: {book_title} ({book_id}), New Price: ₹{price}"
                             )
                             
                             st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
@@ -457,7 +462,7 @@ def manage_price_dialog(book_id, conn):
                                     st.session_state.username,
                                     st.session_state.session_id,
                                     "updated author total & remark",
-                                    f"Author: {row['name']}, Total: {nt}, Remark: {new_remark}"
+                                    f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Total: ₹{nt}, Remark: {new_remark}"
                                 )
                                 st.success("Updated successfully!")
                                 st.rerun()
@@ -490,7 +495,7 @@ def manage_price_dialog(book_id, conn):
                                         with conn.session as s:
                                             s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
                                             s.commit()
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Payment ID: {p['id']}, Author: {row['name']}")
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{p['amount']} ({p['payment_mode']})")
                                         st.rerun()
                         else:
                             st.info("No individual payment records found.")
@@ -543,7 +548,7 @@ def manage_price_dialog(book_id, conn):
                                         })
                                         s.commit()
                                     
-                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "registered payment", f"Author: {row['name']}, Amount: {amt}")
+                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "registered payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}")
                                     st.toast(f"Registered ₹{amt} for {row['name']}", icon="✅")
                                     time.sleep(1)
                                     st.rerun()
@@ -599,57 +604,113 @@ def update_payment_status(payment_id, new_status, approved_by, conn, rejection_r
 
 @st.dialog("Review Payment Request", width="large")
 def show_approval_dialog(row, conn):
-    # Header row: Requested by and Date
-    h_col1, h_col2 = st.columns([3, 1])
-    with h_col1:
-        st.markdown(f"👤 **Requested by:** `{row['requested_by'] or 'Unknown'}`")
-    with h_col2:
-        st.markdown(f"📅 `{row['payment_date'].strftime('%d %b %Y')}`")
+    # Fetch Author Summary
+    summary_query = """
+    SELECT 
+        total_amount as amount_due,
+        COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = :ba_id AND status = 'Approved'), 0) as amount_paid,
+        COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = :ba_id AND status = 'Pending'), 0) as amount_pending
+    FROM book_authors
+    WHERE id = :ba_id
+    """
+    summary_df = conn.query(summary_query, params={"ba_id": row['book_author_id']}, ttl=0)
+    summary = summary_df.iloc[0] if not summary_df.empty else {"amount_due": 0, "amount_paid": 0, "amount_pending": 0}
     
-    st.divider()
-    
-    # Content row
-    c1, c2, c3 = st.columns([2, 2, 2])
-    with c1:
-        st.markdown("##### 📖 Book Details")
-        st.markdown(f"**ID:** `{row['book_id']}`")
-        st.markdown(f"**Title:** {row['title']}")
-        st.caption(f"Consultant: {row['publishing_consultant']}")
-    
-    with c2:
-        st.markdown("##### 👤 Author Details")
-        st.markdown(f"**Name:** {row['author_name']}")
-        st.markdown(f"**Payment Mode:** {row['payment_mode']}")
-        if row['transaction_id']:
-            st.markdown(f"**Txn ID:** `{row['transaction_id']}`")
-    
-    with c3:
-        st.markdown("##### 💰 Payment")
-        st.markdown(f"<h3 style='margin:0; color:#2e7d32;'>₹{row['amount']:,.2f}</h3>", unsafe_allow_html=True)
-        if row['remark']:
-            st.info(f"**Note:** {row['remark']}")
+    # Fetch History
+    history_query = """
+    SELECT payment_date, amount, payment_mode, transaction_id, status, remark, requested_by
+    FROM author_payments 
+    WHERE book_author_id = :ba_id 
+    ORDER BY payment_date DESC
+    """
+    history = conn.query(history_query, params={"ba_id": row['book_author_id']}, ttl=0)
 
-    # Rejection Reason Input
-    st.write("")
-    rej_reason = st.text_input("Reason for Rejection (Optional)", placeholder="e.g. Transaction ID mismatch, Incorrect amount...", key=f"rej_reason_{row['id']}")
+    # Header section (Compact)
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        st.markdown(f"<h3 style='margin-bottom:0;'>{row['author_name']}</h3>", unsafe_allow_html=True)
+        st.markdown(f"<span style='color:#666; font-size:14px;'>Book: <b>{row['title']}</b> ({row['book_id']})</span>", unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"<div style='text-align: right; font-size: 13px; color: #888;'>Requested: {row['payment_date'].strftime('%d %b %Y')} by {row['requested_by'] or 'Unknown'}</div>", unsafe_allow_html=True)
+
+    # Financial Summary (Custom Compact HTML)
+    amount_due = float(summary['amount_due'] or 0)
+    amount_paid = float(summary['amount_paid'] or 0)
+    amount_pending = float(summary['amount_pending'] or 0)
+    balance = max(0.0, amount_due - amount_paid)
+
+    st.markdown(f"""
+    <div style="display: flex; justify-content: space-between; background-color: #fcfcfc; padding: 12px; border: 1px solid #eee; border-radius: 8px; margin: 10px 0;">
+        <div style="text-align: center; flex: 1;">
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Total Due</div>
+            <div style="font-weight: bold; font-size: 16px;">₹{amount_due:,.0f}</div>
+        </div>
+        <div style="text-align: center; flex: 1; border-left: 1px solid #eee;">
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Paid</div>
+            <div style="font-weight: bold; font-size: 16px; color: #2e7d32;">₹{amount_paid:,.0f}</div>
+        </div>
+        <div style="text-align: center; flex: 1; border-left: 1px solid #eee;">
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Pending Appr.</div>
+            <div style="font-weight: bold; font-size: 16px; color: #f57c00;">₹{amount_pending:,.0f}</div>
+        </div>
+        <div style="text-align: center; flex: 1; border-left: 1px solid #eee;">
+            <div style="font-size: 11px; color: #666; text-transform: uppercase;">Balance</div>
+            <div style="font-weight: bold; font-size: 16px; color: #d32f2f;">₹{balance:,.0f}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Current Request Details (Compact Grid)
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns([1.2, 0.8, 1.2, 1.8])
+        with c1:
+            st.markdown(f"<small style='color:#666;'>AMOUNT TO APPROVE</small><br><h4 style='color: #2e7d32; margin-top:0;'>₹{row['amount']:,.2f}</h4>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<small style='color:#666;'>MODE</small><br><b>{row['payment_mode']}</b>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<small style='color:#666;'>TXN ID</small><br><code>{row['transaction_id'] or '-'}</code>", unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"<small style='color:#666;'>REMARK</small><br><span style='font-size: 14px;'>{row['remark'] or '-'}</span>", unsafe_allow_html=True)
+
+    # History & Actions in one row to save vertical space
+    hist_col, act_col = st.columns([3, 2])
     
-    # Action row
-    st.write("")
-    btn_c1, btn_c2, _ = st.columns([1, 1, 4])
-    with btn_c1:
-        if st.button("✅ Approve", key=f"dlg_app_{row['id']}", type="primary"):
-            if update_payment_status(row['id'], "Approved", st.session_state.username, conn):
-                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "approved payment", f"Payment ID: {row['id']}, Amount: {row['amount']}")
-                st.toast(f"Approved ₹{row['amount']} for {row['author_name']}", icon="✅")
-                time.sleep(1)
-                st.rerun()
-    with btn_c2:
-        if st.button("❌ Reject", key=f"dlg_rej_{row['id']}", type="secondary"):
-            if update_payment_status(row['id'], "Rejected", st.session_state.username, conn, rej_reason):
-                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "rejected payment", f"Payment ID: {row['id']}, Amount: {row['amount']}, Reason: {rej_reason}")
-                st.toast(f"Rejected ₹{row['amount']} for {row['author_name']}", icon="🚫")
-                time.sleep(1)
-                st.rerun()
+    with hist_col:
+        with st.expander(f"📜 History ({len(history)})", expanded=False):
+            if not history.empty:
+                st.dataframe(
+                    history[['payment_date', 'amount', 'status']],
+                    column_config={
+                        "payment_date": st.column_config.DateColumn("Date", format="DD MMM"),
+                        "amount": st.column_config.NumberColumn("Amount", format="₹%.0f"),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    height=150
+                )
+            else:
+                st.caption("No previous records.")
+
+    with act_col:
+        st.write("") # Alignment
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("✅ Approve", key=f"dlg_app_{row['id']}", type="primary", use_container_width=True):
+                if update_payment_status(row['id'], "Approved", st.session_state.username, conn):
+                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "approved payment", f"Book: {row['title']} ({row['book_id']}), Author: {row['author_name']}, Amount: ₹{row['amount']}, Mode: {row['payment_mode']}")
+                    st.toast(f"Approved ₹{row['amount']} for {row['author_name']}", icon="✅")
+                    time.sleep(1)
+                    st.rerun()
+        with b2:
+            with st.popover("❌ Reject", use_container_width=True):
+                st.markdown("##### Confirm Rejection")
+                reason = st.text_input("Reason", placeholder="e.g. Txn mismatch...", key=f"rej_reason_{row['id']}")
+                if st.button("Confirm Reject", key=f"btn_rej_{row['id']}", type="secondary", use_container_width=True):
+                    if update_payment_status(row['id'], "Rejected", st.session_state.username, conn, reason):
+                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "rejected payment", f"Book: {row['title']} ({row['book_id']}), Author: {row['author_name']}, Amount: ₹{row['amount']}, Reason: {reason}")
+                        st.toast(f"Rejected ₹{row['amount']}", icon="🚫")
+                        time.sleep(1)
+                        st.rerun()
 
 @st.dialog("Book Payment Details", width="large")
 def show_book_payment_details(book_id, title, price, group, all_transactions, conn):
@@ -747,11 +808,24 @@ if current_filters != st.session_state.prev_filters:
     st.session_state.prev_filters = current_filters
 
 # --- Fetch Data ---
+def fetch_activity_logs(conn):
+    query = """
+    SELECT timestamp, username, action, details 
+    FROM activity_log 
+    WHERE action LIKE '%payment%' 
+       OR action LIKE '%price%' 
+       OR action LIKE '%approved%' 
+       OR action LIKE '%rejected%'
+    ORDER BY timestamp DESC 
+    LIMIT 1000
+    """
+    return conn.query(query)
+
 all_transactions = fetch_all_transactions(conn, start_date_filter)
 overview_df = fetch_payment_overview(conn, start_date_filter)
 
 # Define Tabs
-tab_overview, tab_history = st.tabs(["📊 Payment Overview", "🧾 Recent Transactions"])
+tab_overview, tab_history, tab_logs = st.tabs(["📊 Payment Overview", "🧾 Recent Transactions", "📜 Payment Logs"])
 
 with tab_overview:
     if not overview_df.empty:
@@ -795,11 +869,9 @@ with tab_overview:
                         with row_cols[5]:
                             if st.button("Review", key=f"rev_{p_row['id']}", help="View Details & Approve/Reject", type="secondary"):
                                 show_approval_dialog(p_row, conn)
-                    st.markdown("<hr style='margin: 5px 0; border: 0.1px solid #f8f9fa;'>", unsafe_allow_html=True)
             st.write("")
 
         # --- Payment Overview (Hierarchical View) ---
-        #st.subheader("📚 Payment Overview")
         
         # Filter Logic
         filtered_overview = overview_df.copy()
@@ -840,7 +912,7 @@ with tab_overview:
             st.info("No records match your search or filter.")
         else:
             # Pagination Logic
-            items_per_page = 15
+            items_per_page = 40
             total_books = len(book_groups)
             total_pages = max(1, (total_books + items_per_page - 1) // items_per_page)
 
@@ -985,7 +1057,7 @@ with tab_history:
             ]
 
         # History Pagination Logic
-        items_per_page_hist = 20
+        items_per_page_hist = 40
         total_hist = len(filtered_hist)
         total_pages_hist = max(1, (total_hist + items_per_page_hist - 1) // items_per_page_hist)
 
@@ -1082,7 +1154,79 @@ with tab_history:
                     label_visibility="collapsed"
                 )
                 if h_selected_page != st.session_state.hist_page + 1:
-                    st.session_state.hist_page = h_selected_page - 1
+                        st.session_state.hist_page = h_selected_page - 1
+                        st.rerun()
+                else:
+                    st.info("No transactions found for the selected period.")
+                
+with tab_logs:
+    logs_df = fetch_activity_logs(conn)
+    if not logs_df.empty:
+        log_search = st.text_input("🔍 Search Logs", placeholder="Search by user, activity or details...", key="log_search_input")
+        
+        filtered_logs = logs_df.copy()
+        if log_search:
+            ls = log_search.lower()
+            filtered_logs = filtered_logs[
+                filtered_logs['username'].astype(str).str.lower().str.contains(ls) |
+                filtered_logs['action'].astype(str).str.lower().str.contains(ls) |
+                filtered_logs['details'].astype(str).str.lower().str.contains(ls)
+            ]
+
+        # Logs Pagination
+        items_per_page_logs = 50
+        total_logs = len(filtered_logs)
+        total_pages_logs = max(1, (total_logs + items_per_page_logs - 1) // items_per_page_logs)
+
+        if 'log_page' not in st.session_state:
+            st.session_state.log_page = 0
+        
+        if log_search != st.session_state.get('prev_log_search', ''):
+            st.session_state.log_page = 0
+            st.session_state.prev_log_search = log_search
+
+        if st.session_state.log_page >= total_pages_logs:
+            st.session_state.log_page = total_pages_logs - 1
+        
+        start_idx_l = st.session_state.log_page * items_per_page_logs
+        end_idx_l = start_idx_l + items_per_page_logs
+        paged_logs = filtered_logs.iloc[start_idx_l:end_idx_l]
+
+        with st.container(border=True):
+            st.markdown(f"<h5><span class='header-status-badge-green'>Payment Logs <span class='badge-count'>{len(filtered_logs)}</span></span></h5>", 
+                        unsafe_allow_html=True)
+            
+            st.markdown('<div class="header-row">', unsafe_allow_html=True)
+            l_cols_h = st.columns([1.5, 1.5, 2, 5])
+            l_headers = ["Timestamp", "User", "Action", "Details"]
+            for i, h in enumerate(l_headers):
+                l_cols_h[i].markdown(f'<div class="header">{h}</div>', unsafe_allow_html=True)
+            st.markdown('</div><div class="header-line"></div>', unsafe_allow_html=True)
+
+            for _, row in paged_logs.iterrows():
+                r_cols = st.columns([1.5, 1.5, 2, 5], vertical_alignment="center")
+                with r_cols[0]: 
+                    st.write(pd.to_datetime(row['timestamp']).strftime('%d %b, %H:%M'))
+                with r_cols[1]: 
+                    st.markdown(f"**{row['username']}**")
+                with r_cols[2]: 
+                    st.markdown(f"*{row['action']}*")
+                with r_cols[3]: 
+                    st.write(row['details'])
+
+        if total_pages_logs > 1:
+            st.divider()
+            l_col1, l_col2, l_col3 = st.columns([1, 4, 1], vertical_alignment="center")
+            with l_col1:
+                if st.button("Previous", key="prev_log_btn", disabled=st.session_state.log_page == 0):
+                    st.session_state.log_page -= 1
+                    st.rerun()
+            with l_col2:
+                st.write(f"<div style='text-align:center;'>Page {st.session_state.log_page + 1} of {total_pages_logs}</div>", unsafe_allow_html=True)
+            with l_col3:
+                if st.button("Next", key="next_log_btn", disabled=st.session_state.log_page == total_pages_logs - 1):
+                    st.session_state.log_page += 1
                     st.rerun()
     else:
-        st.info("No transactions found for the selected period.")
+        st.info("No activity logs found.")
+                

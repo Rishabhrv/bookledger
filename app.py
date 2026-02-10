@@ -4117,7 +4117,7 @@ def manage_price_dialog(book_id, conn):
                                 st.session_state.username,
                                 st.session_state.session_id,
                                 "updated book price",
-                                f"Book ID: {book_id}, New Price: {price}"
+                                f"Book: {book_title} ({book_id}), New Price: ₹{price}"
                             )
                             
                             st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
@@ -4176,6 +4176,14 @@ def manage_price_dialog(book_id, conn):
                             try:
                                 nt = int(new_total_str) if new_total_str.strip() else 0
                                 update_book_authors(ba_id, {"total_amount": nt, "remark": new_remark}, conn)
+                                log_activity(
+                                    conn,
+                                    st.session_state.user_id,
+                                    st.session_state.username,
+                                    st.session_state.session_id,
+                                    "updated author total & remark",
+                                    f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Total: ₹{nt}, Remark: {new_remark}"
+                                )
                                 st.success("Updated successfully!")
                                 st.rerun()
                             except ValueError:
@@ -4210,7 +4218,7 @@ def manage_price_dialog(book_id, conn):
                                         with conn.session as s:
                                             s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
                                             s.commit()
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Payment ID: {p['id']}, Author: {row['name']}")
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{p['amount']} ({p['payment_mode']})")
                                         st.rerun()
                         else:
                             st.info("No individual payment records found.")
@@ -4263,7 +4271,7 @@ def manage_price_dialog(book_id, conn):
                                         })
                                         s.commit()
                                     
-                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added payment", f"Amount: {amt}, Author: {row['name']}, Status: {initial_status}")
+                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}, Status: {initial_status}")
                                     
                                     if is_admin:
                                         st.success("Payment registered and approved!")
@@ -4726,8 +4734,6 @@ def edit_author_dialog(book_id, conn):
                             f"Author Name {i+1}", st.session_state.new_authors[i]["name"], key=f"new_name_{i}",
                             disabled=disabled
                         )
-                        # Position handled below in shared block if new, or adjusted if needed.
-                        # Original code had Position in col2.
 
                     # --- Common Editable Fields (Position) ---
                     available_positions = [pos for pos in ["1st", "2nd", "3rd", "4th"] if pos not in 
@@ -5012,6 +5018,7 @@ def edit_author_dialog(book_id, conn):
                         #         st.markdown(f"**📧 Email:** {row['email'] or 'N/A'}")
                         #         st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")
 
+
                         if row['author_photo']:
 
                             col1, col2, col3 = st.columns([0.3,0.6,1], gap="small")
@@ -5042,6 +5049,20 @@ def edit_author_dialog(book_id, conn):
                     
                         # Checklists tab (no form, no save button)
                         with tab_objects[0]:
+                            # Payment status logic
+                            total = float(row.get('total_amount', 0) or 0)
+                            paid = float(row.get('amount_paid', 0) or 0)
+                            if total <= 0:
+                                p_status_html = '<div style="background-color:#f1f3f4; color:#5f6368; padding:4px; border-radius:5px; text-align:center; font-weight:bold; font-size:13px; margin-bottom:10px;">⚪ Payment Status: Pending</div>'
+                            elif paid >= total:
+                                p_status_html = '<div style="background-color:#e6f4ea; color:#137333; padding:4px; border-radius:5px; text-align:center; font-weight:bold; font-size:13px; margin-bottom:10px;">✅ Payment Status: Paid</div>'
+                            elif paid > 0:
+                                p_status_html = '<div style="background-color:#fef7e0; color:#b06000; padding:4px; border-radius:5px; text-align:center; font-weight:bold; font-size:13px; margin-bottom:10px;">🟠 Payment Status: Partially Paid</div>'
+                            else:
+                                p_status_html = '<div style="background-color:#fce8e6; color:#c5221f; padding:4px; border-radius:5px; text-align:center; font-weight:bold; font-size:13px; margin-bottom:10px;">🔴 Payment Status: Unpaid</div>'
+                            
+                            st.markdown(p_status_html, unsafe_allow_html=True)
+                            
                             col5, col6 = st.columns(2)
                             with col5:
                                 updates_checklist = {}
@@ -8463,14 +8484,26 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
             }
         </style>
         <table class='compact-table'>
-            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th>
+            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th><th>Payment</th>
         """
         for label in checklist_labels:
             table_html += f"<th>{label}</th>"
         table_html += "</tr>"
         
         for _, author in book_authors_df.iterrows():
-            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
+            # Payment status logic
+            total = float(author.get('total_amount', 0) or 0)
+            paid = float(author.get('amount_paid', 0) or 0)
+            if total <= 0:
+                p_status = '<span style="color:#666; font-size:10px;">⚪ Pending</span>'
+            elif paid >= total:
+                p_status = '<span style="color:#166534; font-size:10px;">✅ Paid</span>'
+            elif paid > 0:
+                p_status = '<span style="color:#854d0e; font-size:10px;">🟠 Partial</span>'
+            else:
+                p_status = '<span style="color:#b91c1c; font-size:10px;">🔴 Unpaid</span>'
+
+            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td><td>{p_status}</td>"
             for col, label in zip(checklist_columns, checklist_labels):
                 status = '✅' if author[col] else '❌'
                 table_html += f"<td>{status}</td>"
