@@ -575,9 +575,12 @@ def fetch_correction_books(section: str) -> pd.DataFrame:
             (SELECT correction_file FROM author_corrections ac WHERE ac.book_id = b.book_id ORDER BY round_number DESC, created_at DESC LIMIT 1) AS 'Correction File',
             (SELECT correction_text FROM author_corrections ac WHERE ac.book_id = b.book_id ORDER BY round_number DESC, created_at DESC LIMIT 1) AS 'Correction Text',
             (SELECT worker FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'Correction By',
-            (SELECT correction_start FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'Correction Start'
+            (SELECT correction_start FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'Correction Start',
+            (SELECT is_internal FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}' ORDER BY correction_start DESC LIMIT 1) AS 'is_internal'
         FROM books b
-        WHERE b.correction_status = '{target_status}' AND b.is_cancelled = 0
+        WHERE (b.correction_status = '{target_status}' OR 
+               EXISTS (SELECT 1 FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL AND c.section = '{section}'))
+          AND b.is_cancelled = 0
         ORDER BY b.date DESC
     """
     return conn.query(query, show_spinner=False)
@@ -849,9 +852,9 @@ def show_correction_audit_dialog(book_id, conn):
 
     # 1. Fetch all data
     reqs = conn.query("""
-        SELECT ac.*, a.name as author_name 
+        SELECT ac.*, COALESCE(a.name, 'Internal Team') as author_name 
         FROM author_corrections ac 
-        JOIN authors a ON ac.author_id = a.author_id 
+        LEFT JOIN authors a ON ac.author_id = a.author_id 
         WHERE ac.book_id = :bid ORDER BY ac.created_at DESC
     """, params={"bid": book_id}, show_spinner=False)
     
@@ -879,15 +882,32 @@ def show_correction_audit_dialog(book_id, conn):
             col_req, col_task = st.columns([1, 1], gap="medium")
             
             with col_req:
-                st.markdown("##### 📝 Author Request")
+                st.markdown("##### 📝 Request Source")
                 r_reqs = reqs[reqs['round_number'] == r_num]
                 if r_reqs.empty:
                     st.info("No request logged for this round.")
                 for _, r in r_reqs.iterrows():
+                    is_internal = pd.isnull(r['author_id'])
+                    # Visual styling based on source
+                    if is_internal:
+                        badge_html = '<span style="background-color:#F3E5F5; color:#8E24AA; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:bold; border:1px solid #8E24AA44;">🏢 INTERNAL TEAM</span>'
+                        border_color = "#8E24AA"
+                    else:
+                        badge_html = '<span style="background-color:#E3F2FD; color:#1976D2; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:bold; border:1px solid #1976D244;">👤 AUTHOR REQUEST</span>'
+                        border_color = "#1976D2"
+
                     with st.container(border=True):
+                        st.markdown(badge_html, unsafe_allow_html=True)
                         st.caption(f"📅 {r['created_at'].strftime('%d %b %Y, %I:%M %p')}")
                         st.markdown(f"**From:** {r['author_name']}")
-                        st.write(r['correction_text'] or "*File only submission*")
+                        
+                        # Use a colored box for the text to make it stand out
+                        st.markdown(f"""
+                            <div style="background-color:#f8f9fa; border-left: 4px solid {border_color}; padding: 10px; border-radius: 4px; margin: 10px 0;">
+                                {r['correction_text'] or "<i>File only submission</i>"}
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
                         if r['correction_file']:
                             # Using a button or link-like display for files
                             st.markdown(f"📎 **File:** `{os.path.basename(r['correction_file'])}`")
@@ -901,7 +921,12 @@ def show_correction_audit_dialog(book_id, conn):
                     with st.container(border=True):
                         # Action Header with Status Pill
                         status_pill = '<span class="pill status-completed">Done</span>' if pd.notnull(t['correction_end']) else '<span class="pill status-running">Running</span>'
-                        st.markdown(f"**{t['section'].capitalize()}** {status_pill}", unsafe_allow_html=True)
+                        
+                        internal_badge = ""
+                        if t.get('is_internal') == 1:
+                            internal_badge = '<span style="background-color:#F3E5F5; color:#8E24AA; padding:1px 6px; border-radius:8px; font-size:10px; font-weight:bold; margin-left:5px;">INTERNAL</span>'
+                        
+                        st.markdown(f"**{t['section'].capitalize()}** {status_pill}{internal_badge}", unsafe_allow_html=True)
                         
                         t_col1, t_col2 = st.columns(2)
                         with t_col1:
@@ -926,6 +951,7 @@ def render_correction_hub(conn):
             b.correction_status AS `Current Lifecycle`,
             (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Total Rounds`,
             (SELECT section FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS `Active Section`,
+            (SELECT is_internal FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS `Is Internal`,
             (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Last Request`,
             (SELECT GREATEST(COALESCE(MAX(correction_start), '1970-01-01'), COALESCE(MAX(correction_end), '1970-01-01')) FROM corrections c WHERE c.book_id = b.book_id) AS `Last Action`
         FROM books b
@@ -1004,7 +1030,11 @@ def render_correction_hub(conn):
                 
                 with r_cols[0]: st.write(int(row['Book ID']))
                 with r_cols[1]: st.markdown(f"**{row['Title']}**")
-                with r_cols[2]: st.markdown(f"<span class='pill worker-by-1'>Round {row['Total Rounds']}</span>", unsafe_allow_html=True)
+                with r_cols[2]: 
+                    round_text = f"<span class='pill worker-by-1'>Round {row['Total Rounds']}</span>"
+                    if row.get('Is Internal') == 1:
+                        round_text += ' <span class="pill status-on-hold" style="background-color:#F3E5F5; color:#8E24AA; font-weight:bold; font-size:10px;">INTERNAL</span>'
+                    st.markdown(round_text, unsafe_allow_html=True)
                 
                 with r_cols[3]:
                     lc = row['Current Lifecycle']
@@ -1449,7 +1479,7 @@ def correction_dialog(book_id, conn, section):
 
     # Fetch ongoing correction
     query = """
-        SELECT correction_id, correction_start, worker, notes
+        SELECT correction_id, correction_start, worker, notes, is_internal
         FROM corrections
         WHERE book_id = :book_id AND section = :section AND correction_end IS NULL
         ORDER BY correction_start DESC
@@ -1462,9 +1492,11 @@ def correction_dialog(book_id, conn, section):
         correction_id = ongoing_correction.iloc[0]["correction_id"]
         current_start = ongoing_correction.iloc[0]["correction_start"]
         current_worker = ongoing_correction.iloc[0]["worker"]
+        is_internal_task = bool(ongoing_correction.iloc[0]["is_internal"])
     else:
         current_start = None
         current_worker = None
+        is_internal_task = False
 
     # Fetch default worker if not ongoing
     if not is_ongoing:
@@ -1504,7 +1536,7 @@ def correction_dialog(book_id, conn, section):
 
     # Fetch all corrections for history
     query = """
-        SELECT correction_start AS Start, correction_end AS End, worker, notes, round_number
+        SELECT correction_start AS Start, correction_end AS End, worker, notes, round_number, is_internal
         FROM corrections
         WHERE book_id = :book_id AND section = :section
         ORDER BY correction_start
@@ -1512,9 +1544,10 @@ def correction_dialog(book_id, conn, section):
     corrections = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
     for idx, row in corrections.iterrows():
         r_num = row['round_number'] if pd.notnull(row['round_number']) else 1
+        internal_flag = " (Internal)" if row['is_internal'] else ""
         events.append({
             "Time": row["Start"],
-            "Event": f"Correction Started by {row['worker']} (Round {r_num})",
+            "Event": f"Correction Started by {row['worker']} (Round {r_num}){internal_flag}",
             "Notes": row['notes'] if pd.notnull(row['notes']) else "-"
         })
         if pd.notnull(row["End"]):
@@ -1619,7 +1652,8 @@ def correction_dialog(book_id, conn, section):
                             "section": section,
                             "correction_start": now,
                             "worker": worker,
-                            "round_number": current_round
+                            "round_number": current_round,
+                            "is_internal": 0
                         }
                         insert_fields = ", ".join(updates.keys())
                         insert_placeholders = ", ".join([f":{key}" for key in updates.keys()])
@@ -1656,6 +1690,9 @@ def correction_dialog(book_id, conn, section):
     else:
         # Ongoing correction
         form_title = f"Ongoing {display_name} Correction"
+        if is_internal_task:
+            form_title = f"Ongoing {display_name} INTERNAL Correction"
+            
         st.markdown(f"<h4 style='color:#4CAF50;'>{form_title}</h4>", unsafe_allow_html=True)
         
         col_start, col_assigned = st.columns(2)
@@ -1685,30 +1722,26 @@ def correction_dialog(book_id, conn, section):
                         }
                         s.execute(text(query), params)
                         
-                        # 2. Advance Lifecycle State
-                        # Check if this was the last active correction task for this section? 
-                        # Actually, the requirement implies the *Lifecycle* moves when the worker says "I'm done".
-                        # Assuming one main correction task per section per round usually, or the user explicitly ends the phase.
-                        # For simplicity based on prompt: "When they finish... it moves".
-                        
+                        # 2. Advance Lifecycle State ONLY IF NOT INTERNAL
                         next_status = None
-                        if section == 'writing':
-                            next_status = 'Proofreading'
-                        elif section == 'proofreading':
-                            next_status = 'Formatting'
-                        elif section == 'formatting':
-                            next_status = 'None' # Cycle Closed
-                        
-                        if next_status:
-                            s.execute(
-                                text("UPDATE books SET correction_status = :status WHERE book_id = :book_id"),
-                                {"status": next_status, "book_id": book_id}
-                            )
+                        if not is_internal_task:
+                            if section == 'writing':
+                                next_status = 'Proofreading'
+                            elif section == 'proofreading':
+                                next_status = 'Formatting'
+                            elif section == 'formatting':
+                                next_status = 'None' # Cycle Closed
+                            
+                            if next_status:
+                                s.execute(
+                                    text("UPDATE books SET correction_status = :status WHERE book_id = :book_id"),
+                                    {"status": next_status, "book_id": book_id}
+                                )
 
                         s.commit()
 
                     details = (
-                        f"Book ID: {book_id}, End: {now}"
+                        f"Book ID: {book_id}, End: {now}, Internal: {is_internal_task}"
                     )
                     if next_status:
                          details += f", Advanced to {next_status}"
@@ -1725,10 +1758,13 @@ def correction_dialog(book_id, conn, section):
                     except Exception as e:
                         st.error(f"Error logging {display_name.lower()} correction details: {str(e)}")
                     st.success(f"✔️ Ended {display_name} correction")
-                    if next_status == 'None':
-                         st.success("✅ Correction Cycle Complete!")
-                    elif next_status:
-                         st.info(f"➡️ Moved to {next_status}")
+                    if not is_internal_task:
+                        if next_status == 'None':
+                             st.success("✅ Correction Cycle Complete!")
+                        elif next_status:
+                             st.info(f"➡️ Moved to {next_status}")
+                    else:
+                        st.success("✅ Internal Correction Task Complete!")
 
                     st.toast(f"Ended {display_name} correction", icon="✔️", duration="long")
                     sleep(1)
@@ -1737,6 +1773,223 @@ def correction_dialog(book_id, conn, section):
             if st.button("Cancel", type="secondary", width='stretch'):
                 st.rerun()
 
+
+
+@st.dialog("Internal Correction", width='medium')
+def internal_correction_dialog(book_id, conn, section):
+    # IST timezone
+    IST = timezone(timedelta(hours=5, minutes=30))
+    
+    # Map section to display name and database columns
+    section_config = {
+        "writing": {"display": "Writing", "by": "writing_by", "start": "writing_start", "end": "writing_end"},
+        "proofreading": {"display": "Proofreading", "by": "proofreading_by", "start": "proofreading_start", "end": "proofreading_end"},
+        "formatting": {"display": "Formatting", "by": "formatting_by", "start": "formatting_start", "end": "formatting_end"},
+        "cover": {"display": "Cover Page", "by": "cover_by", "start": "cover_start", "end": "cover_end"}
+    }
+    
+    config = section_config.get(section, section_config["writing"])
+    display_name = config["display"]
+
+    # Fetch book title
+    book_details = fetch_book_details(book_id, conn)
+    if not book_details.empty:
+        book_title = book_details.iloc[0]['title']
+        st.markdown(f"<h3 style='color:#4CAF50;'>{book_id} : {book_title}</h3>", unsafe_allow_html=True)
+    else:
+        book_title = "Unknown Title"
+        st.markdown(f"### {display_name} Internal Correction for Book ID: {book_id}")
+
+    # Fetch default worker from books table
+    query = f"SELECT {config['by']} AS worker FROM books WHERE book_id = :book_id"
+    book_data = conn.query(query, params={"book_id": book_id}, show_spinner=False)
+    default_worker = book_data.iloc[0]["worker"] if not book_data.empty and book_data.iloc[0]["worker"] else "Select Team Member"
+
+    # Fetch hold status
+    hold_query = """
+        SELECT hold_start, resume_time, reason
+        FROM holds 
+        WHERE book_id = :book_id AND section = :section
+    """
+    hold_data = conn.query(hold_query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    hold_start = hold_data.iloc[0]['hold_start'] if not hold_data.empty else None
+    resume_time = hold_data.iloc[0]['resume_time'] if not hold_data.empty else None
+    hold_reason = hold_data.iloc[0]['reason'] if not hold_data.empty and 'reason' in hold_data.columns else "-"
+
+    # Fetch section start and end from books
+    query = f"SELECT {config['start']}, {config['end']}, {config['by']} AS worker FROM books WHERE book_id = :book_id"
+    section_data = conn.query(query, params={"book_id": book_id}, show_spinner=False)
+    section_start = section_data.iloc[0][config['start']] if not section_data.empty else None
+    section_end = section_data.iloc[0][config['end']] if not section_data.empty else None
+    section_worker = section_data.iloc[0]['worker'] if not section_data.empty and section_data.iloc[0]['worker'] else "-"
+
+    # Check if digital book has been sent to ANY author
+    with conn.session as s:
+        digital_sent_res = s.execute(
+            text("SELECT COUNT(*) FROM book_authors WHERE book_id = :book_id AND digital_book_sent = 1"),
+            {"book_id": book_id}
+        ).scalar()
+    
+    digital_book_sent = digital_sent_res > 0
+
+    # Collect and display history (Reuse logic from correction_dialog)
+    events = []
+    if section_start:
+        events.append({"Time": section_start, "Event": f"{display_name} Started by {section_worker}", "Notes": "-"})
+    if hold_start:
+        events.append({"Time": hold_start, "Event": "Placed on Hold", "Notes": hold_reason})
+    if resume_time:
+        events.append({"Time": resume_time, "Event": "Resumed", "Notes": "-"})
+
+    query = """
+        SELECT correction_start AS Start, correction_end AS End, worker, notes, round_number, is_internal
+        FROM corrections
+        WHERE book_id = :book_id AND section = :section
+        ORDER BY correction_start
+    """
+    corrections = conn.query(query, params={"book_id": book_id, "section": section}, show_spinner=False)
+    for idx, row in corrections.iterrows():
+        r_num = row['round_number'] if pd.notnull(row['round_number']) else 1
+        internal_flag = " (Internal)" if row['is_internal'] else ""
+        events.append({
+            "Time": row["Start"],
+            "Event": f"Correction Started by {row['worker']} (Round {r_num}){internal_flag}",
+            "Notes": row['notes'] if pd.notnull(row['notes']) else "-"
+        })
+        if pd.notnull(row["End"]):
+            events.append({"Time": row["End"], "Event": "Correction Ended", "Notes": "-"})
+
+    if section_end:
+        events.append({"Time": section_end, "Event": f"{display_name} Ended", "Notes": "-"})
+
+    events.sort(key=lambda x: x["Time"])
+
+    with st.expander(f"Show Full {display_name} History"):
+        if events:
+            for event in events:
+                time_str = event["Time"].strftime('%d %B %Y, %I:%M %p') if pd.notnull(event["Time"]) else "-"
+                event_str = event["Event"]
+                notes = event["Notes"]
+                if notes != "-":
+                    st.info(f"**{time_str}**: {event_str}  \n**Reason**: {notes}")
+                else:
+                    st.info(f"**{time_str}**: {event_str}")
+        else:
+            st.info("No history available.")
+
+    if digital_book_sent:
+        st.warning("⚠️ Internal correction is not allowed because the digital copy of the book has already been sent to one or more authors.")
+        if st.button("Close", use_container_width=True):
+            st.rerun()
+        return
+    
+    st.warning("⚠️ Do not use this for author-requested changes, those must go through the standard author correction workflow. This is strictly for team-driven quality improvements and does not follow the full correction lifecycle (writing → proofreading → formatting); it updates the current correction only.")
+    
+
+
+    # Fetch unique names for the section
+    names = fetch_unique_names(config["by"], conn)
+    options = ["Select Team Member"] + names + ["Add New..."]
+
+    selected_worker = st.selectbox(
+        "Team Member",
+        options,
+        index=options.index(default_worker) if default_worker in options else 0,
+        key=f"internal_corr_worker_select_{book_id}",
+    )
+    
+    worker = None
+    if selected_worker == "Add New...":
+        worker = st.text_input("New Team Member Name", key=f"internal_corr_new_worker_{book_id}").strip()
+    elif selected_worker != "Select Team Member":
+        worker = selected_worker
+
+    notes = st.text_area("Correction Notes", placeholder="Describe the internal correction needed...", key=f"internal_corr_notes_{book_id}")
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if worker:
+            if st.button("▶️ Start Internal Correction", type="primary", width='stretch'):
+                with st.spinner(f"Starting internal {display_name} correction..."):
+                    sleep(1)
+                    now = datetime.now(IST)
+                    
+                    with conn.session as s:
+                        # 1. Determine Round Number (Reuse logic from app.py)
+                        book_info = s.execute(
+                            text("SELECT correction_status FROM books WHERE book_id = :book_id"),
+                            {"book_id": book_id}
+                        ).fetchone()
+                        
+                        max_round_res = s.execute(
+                            text("SELECT COALESCE(MAX(round_number), 0) FROM author_corrections WHERE book_id = :book_id"),
+                            {"book_id": book_id}
+                        ).scalar()
+                        
+                        status = book_info.correction_status if book_info else 'None'
+                        
+                        if status == 'None' or status is None:
+                            current_round = max_round_res + 1
+                        else:
+                            current_round = max_round_res
+
+                        # 2. Insert into author_corrections (Internal Request)
+                        s.execute(
+                            text("""
+                                INSERT INTO author_corrections (book_id, author_id, correction_text, round_number)
+                                VALUES (:book_id, NULL, :correction_text, :round_number)
+                            """),
+                            {
+                                "book_id": book_id,
+                                "correction_text": f"[INTERNAL] {notes}" if notes else "[INTERNAL] No details provided",
+                                "round_number": current_round
+                            }
+                        )
+
+                        # 3. Update Book status if starting new cycle
+                        if status == 'None' or status is None:
+                            s.execute(
+                                text("UPDATE books SET correction_status = :status WHERE book_id = :book_id"),
+                                {"status": section.capitalize(), "book_id": book_id}
+                            )
+
+                        # 4. Insert into corrections table
+                        updates = {
+                            "book_id": book_id,
+                            "section": section,
+                            "correction_start": now,
+                            "worker": worker,
+                            "notes": notes.strip() if notes.strip() else None,
+                            "round_number": current_round,
+                            "is_internal": 1
+                        }
+                        insert_fields = ", ".join(updates.keys())
+                        insert_placeholders = ", ".join([f":{key}" for key in updates.keys()])
+                        
+                        query = f"""
+                            INSERT INTO corrections ({insert_fields})
+                            VALUES ({insert_placeholders})
+                        """
+                        s.execute(text(query), updates)
+                        s.commit()
+                    
+                    try:
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            f"started internal {section} correction",
+                            f"Book ID: {book_id}, Worker: {worker}, Round: {current_round}"
+                        )
+                    except Exception:
+                        pass
+                    st.success(f"✔️ Started Internal {display_name} correction (Round {current_round})")
+                    st.toast(f"Internal {display_name} correction started", icon="✔️")
+                    sleep(1)
+                    st.rerun()
+        else:
+            st.button("▶️ Start Internal Correction", type="primary", disabled=True, width='stretch')
 
 
 @st.dialog("Edit Details", width='medium')
@@ -2268,7 +2521,10 @@ def render_correction_table(correction_books, section, conn):
                     st.write(date_str)
                 
                 with col_configs[3]:
-                    st.markdown(f'<span class="pill worker-by-1">Cycle {row["Round"]}</span>', unsafe_allow_html=True)
+                    round_text = f'<span class="pill worker-by-1">Cycle {row["Round"]}</span>'
+                    if row.get('is_internal') == 1:
+                        round_text += ' <span class="pill status-on-hold" style="background-color:#F3E5F5; color:#8E24AA; font-weight:bold;">Internal</span>'
+                    st.markdown(round_text, unsafe_allow_html=True)
                 
                 with col_configs[4]:
                     active_tasks = row['Active Tasks']
@@ -2473,7 +2729,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
             else:
                 columns.append("Action")
         elif "Completed" in title:
-            columns.extend([f"{section.capitalize()} By", f"{section.capitalize()} End"])
+            columns.extend([f"{section.capitalize()} By", f"{section.capitalize()} End", "Action"])
         
         # Validate column sizes
         if len(column_sizes) < len(columns):
@@ -2830,6 +3086,10 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                     end_date = row[f'{section.capitalize()} End']
                     value = end_date.strftime('%Y-%m-%d') if not pd.isna(end_date) and end_date != '0000-00-00 00:00:00' else "-"
                     st.markdown(f'<span>{value}</span>', unsafe_allow_html=True)
+                col_idx += 1
+                with col_configs[col_idx]:
+                    if st.button("Correction", key=f"int_corr_btn_{section}_{row['Book ID']}", help="Start an internal correction"):
+                        internal_correction_dialog(row['Book ID'], conn, section)
 
 
 # --- Section Configuration ---
@@ -2937,22 +3197,22 @@ for section, config in sections.items():
             column_sizes_running = [0.7, 5.2, 1, 1.3, 1.3, 1.2, 1, 1]
             column_sizes_on_hold = [0.7, 5.2, 1, 1, 1, 1.2, 1, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 0.8, 1]
-            column_sizes_completed = [0.7, 5, 1, 1.3, 1, 1, 1]
+            column_sizes_completed = [0.7, 4.5, 1, 1.2, 1, 1, 1, 1]
         elif section == "proofreading":
             column_sizes_running = [0.7, 5, 1, 1.2, 0.9, 1.6, 1.2, 1]
             column_sizes_on_hold = [0.7, 5, 1, 1.2, 0.9, 1, 1.2, 1]
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8]
-            column_sizes_completed = [0.7, 3, 1, 1.3, 1.1, 1, 1, 1, 1]
+            column_sizes_completed = [0.7, 3, 1, 1.2, 1, 1, 1, 1, 1, 1]
         elif section == "formatting":
             column_sizes_running = [0.7, 5.5, 1, 1, 1.2, 1.2, 1]
             column_sizes_on_hold = [0.7, 5.5, 1, 1, 1, 1.2, 1]
             column_sizes_pending = [0.7, 5.5, 1, 1, 1.2, 1, 1]
-            column_sizes_completed = [0.7, 3, 1, 1.3, 1.2, 1, 1, 1]
+            column_sizes_completed = [0.7, 3, 1, 1.2, 1.1, 1, 1, 1, 1]
         elif section == "cover":
             column_sizes_running = [0.8, 5, 1.2, 1.3, 1, 1, 1, 1, 1, 1]
             column_sizes_on_hold = [0.8, 3, 1.1, 1.2, 1, 1, 1, 1, 1, 1, 1]
             column_sizes_pending = [0.8, 5.5, 1, 1.2, 1, 1, 1, 0.8, 1]
-            column_sizes_completed = [0.7, 5.5, 1, 1.5, 1.3, 1.3, 1]
+            column_sizes_completed = [0.7, 5, 1, 1.3, 1.2, 1.2, 1]
 
         # Initialize session state for completed table visibility
         if f"show_{section}_completed" not in st.session_state:
@@ -3267,24 +3527,25 @@ else:
                 for _, req in requests_df.iterrows():
                     if pd.notna(req['created_at']):
                         all_dates.append(req['created_at'])
-                        author_name = req['author_name'] if pd.notnull(req['author_name']) else "Unknown Author"
+                        author_name = req['author_name'] if pd.notnull(req['author_name']) else "Internal Team"
                         text_snippet = (req['correction_text'][:100] + '...') if req['correction_text'] and len(req['correction_text']) > 100 else (req['correction_text'] or "File uploaded")
                         events.append({
                             'timestamp': req['created_at'],
                             'section': 'correction',
                             'type': 'correction_request',
-                            'details': f"Author: {author_name} | Round {req['round_number']} Request: {text_snippet}"
+                            'details': f"{'Internal' if pd.isnull(req['author_id']) else 'Author'}: {author_name} | Round {req['round_number']} Request: {text_snippet}"
                         })
 
                 # Add corrections (Team Action)
                 for _, corr in corrections_df.iterrows():
                     if pd.notna(corr['correction_start']):
                         all_dates.append(corr['correction_start'])
+                        internal_label = "[INTERNAL] " if corr.get('is_internal') == 1 else ""
                         events.append({
                             'timestamp': corr['correction_start'],
                             'section': corr['section'],
                             'type': 'correction_start',
-                            'details': f"Worker: {corr['worker'] if pd.notna(corr['worker']) else 'N/A'} (Cycle: {corr['round_number']})"
+                            'details': f"{internal_label}Worker: {corr['worker'] if pd.notna(corr['worker']) else 'N/A'} (Cycle: {corr['round_number']})"
                         })
                     if pd.notna(corr['correction_end']):
                         all_dates.append(corr['correction_end'])

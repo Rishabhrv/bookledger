@@ -5497,7 +5497,7 @@ def edit_author_dialog(book_id, conn):
                                 # Display existing corrections
                                 with conn.session as s:
                                     author_corrections = s.execute(
-                                        text("SELECT * FROM author_corrections WHERE book_id = :book_id AND author_id = :author_id ORDER BY created_at DESC"),
+                                        text("SELECT ac.*, COALESCE(a.name, 'Internal Team') as author_name FROM author_corrections ac LEFT JOIN authors a ON ac.author_id = a.author_id WHERE ac.book_id = :book_id AND (ac.author_id = :author_id OR ac.author_id IS NULL) ORDER BY ac.created_at DESC"),
                                         {"book_id": book_id, "author_id": author_id}
                                     ).fetchall()
                                 
@@ -5545,7 +5545,7 @@ def edit_author_dialog(book_id, conn):
                                             
                                             # Content Section
                                             st.markdown(f"**📝 Request Details**")
-                                            st.info(corr.correction_text if corr.correction_text else "*No text provided*")
+                                            st.info(f"**From:** {corr.author_name}  \n{corr.correction_text}" if corr.correction_text else f"**From:** {corr.author_name}  \n*No text provided*")
                                             
                                             # Footer with date and file
                                             f_col1, f_col2 = st.columns([2, 1], vertical_alignment="center")
@@ -8555,7 +8555,7 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
 
     # Correction History
     requests_query = """
-    SELECT ac.*, a.name AS author_name 
+    SELECT ac.*, COALESCE(a.name, 'Internal Team') AS author_name 
     FROM author_corrections ac
     LEFT JOIN authors a ON ac.author_id = a.author_id
     WHERE ac.book_id = :book_id 
@@ -8573,12 +8573,19 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
     if not requests_df.empty or not corrections_df.empty:
         with st.expander("📝 Correction History", expanded=False):
             if not requests_df.empty:
-                st.markdown("**Author Correction Requests**")
-                req_table = "<table class='compact-table'><tr><th>Round</th><th>Author</th><th>Date</th><th>Correction</th></tr>"
+                st.markdown("**Correction Requests**")
+                req_table = "<table class='compact-table'><tr><th>Source</th><th>Round</th><th>Date</th><th>Correction</th></tr>"
                 for _, req in requests_df.iterrows():
                     date_str = req['created_at'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(req['created_at']) else '-'
                     text_val = req['correction_text'] if pd.notnull(req['correction_text']) and str(req['correction_text']).strip() != '' else "File uploaded"
-                    req_table += f"<tr><td>{req['round_number']}</td><td>{req['author_name']}</td><td>{date_str}</td><td>{text_val}</td></tr>"
+                    
+                    is_internal = pd.isnull(req['author_id'])
+                    if is_internal:
+                        source_badge = '<span style="background-color:#F3E5F5; color:#8E24AA; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">Internal Team</span>'
+                    else:
+                        source_badge = f'<span style="background-color:#E3F2FD; color:#1976D2; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">{req["author_name"]}</span>'
+                    
+                    req_table += f"<tr><td>{source_badge}</td><td>{req['round_number']}</td><td>{date_str}</td><td>{text_val}</td></tr>"
                 req_table += "</table>"
                 st.markdown(req_table, unsafe_allow_html=True)
             
@@ -8588,7 +8595,12 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
                 for _, corr in corrections_df.iterrows():
                     start_str = corr['correction_start'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_start']) else '-'
                     end_str = corr['correction_end'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_end']) else '⏳ Active'
-                    corr_table += f"<tr><td>{corr['section'].capitalize()}</td><td>{corr['round_number']}</td><td>{corr['worker']}</td><td>{start_str}</td><td>{end_str}</td></tr>"
+                    
+                    section_display = corr['section'].capitalize()
+                    if corr.get('is_internal') == 1:
+                        section_display += ' <span style="background-color:#F3E5F5; color:#8E24AA; padding:1px 4px; border-radius:4px; font-size:9px; font-weight:bold;">Internal Team</span>'
+                        
+                    corr_table += f"<tr><td>{section_display}</td><td>{corr['round_number']}</td><td>{corr['worker']}</td><td>{start_str}</td><td>{end_str}</td></tr>"
                 corr_table += "</table>"
                 st.markdown(corr_table, unsafe_allow_html=True)
 

@@ -223,6 +223,79 @@ def get_activity_log(selected_date, selected_user=None, selected_action=None):
         s.commit()
     return df
 
+# Fetch daily summary metrics
+def get_daily_summary(selected_date):
+    conn = connect_db()
+    query = """
+        SELECT action, details 
+        FROM activity_log 
+        WHERE DATE(timestamp) = :selected_date
+    """
+    with conn.session as s:
+        result = s.execute(text(query), {"selected_date": selected_date})
+        df = pd.DataFrame(result.fetchall(), columns=["action", "details"])
+    
+    if df.empty:
+        return None
+
+    summary = {
+        "💰 Payments": len(df[df['action'] == 'registered payment']),
+        "🛠️ Corrections": len(df[df['action'] == 'added correction']),
+        "📧 Welcome Mail": len(df[(df['action'] == 'sent welcome email') | 
+                                (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))]),
+        "📥 Author Details": len(df[df['details'].str.contains("Author Details Received changed to 'True'", na=False)]),
+        "📷 Author Photo": len(df[df['details'].str.contains("Photo Received changed to 'True'", na=False)]),
+        "🆔 ID Proof": len(df[df['details'].str.contains("ID Proof Received changed to 'True'", na=False)]),
+        "📜 Cover & Agreement": len(df[df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)]),
+        "✍🏻 Agreement Recvd": len(df[df['details'].str.contains("Agreement Received changed to 'True'", na=False)]),
+        "📤 Digital Proof": len(df[df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)]),
+        "🖨️ Print Confirm": len(df[df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False)])
+    }
+    return summary
+
+# Fetch detailed records for a specific metric
+def get_metric_details(label, selected_date):
+    conn = connect_db()
+    conditions = {
+        "💰 Payments": "action = 'registered payment'",
+        "🛠️ Corrections": "action = 'added correction'",
+        "📧 Welcome Mail": "(action = 'sent welcome email' OR (action = 'updated checklist' AND details LIKE '%Welcome Mail Sent changed to ''True''%'))",
+        "📥 Author Details": "details LIKE '%Author Details Received changed to ''True''%'",
+        "📷 Author Photo": "details LIKE '%Photo Received changed to ''True''%'",
+        "🆔 ID Proof": "details LIKE '%ID Proof Received changed to ''True''%'",
+        "📜 Cover & Agreement": "details LIKE '%Cover Agreement Sent changed to ''True''%'",
+        "✍🏻 Agreement Recvd": "details LIKE '%Agreement Received changed to ''True''%'",
+        "📤 Digital Proof": "details LIKE '%Digital Book Sent changed to ''True''%'",
+        "🖨️ Print Confirm": "details LIKE '%Printing Confirmation Received changed to ''True''%'"
+    }
+    condition = conditions.get(label, "1=0")
+    query = f"SELECT timestamp, username, details FROM activity_log WHERE DATE(timestamp) = :selected_date AND {condition} ORDER BY timestamp DESC"
+    with conn.session as s:
+        result = s.execute(text(query), {"selected_date": selected_date})
+        df = pd.DataFrame(result.fetchall(), columns=["Time", "User", "Details"])
+    if not df.empty:
+        df['Time'] = pd.to_datetime(df['Time']).dt.strftime('%I:%M %p')
+    return df
+
+@st.dialog("Activity Breakdown", width="large")
+def show_metric_details(label, selected_date):
+    st.markdown(f"#### {label} Breakdown")
+    st.caption(f"Records for {selected_date}")
+    details_df = get_metric_details(label, selected_date)
+    if not details_df.empty:
+        st.dataframe(
+            details_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Time": st.column_config.TextColumn("Time", width="small"),
+                "User": st.column_config.TextColumn("By", width="small"),
+                "Details": st.column_config.TextColumn("Activity Details", width="large")
+            }
+        )
+    else:
+        st.info("No detailed records found.")
+
 # Fetch checklist updates with book and author details
 def get_checklist_updates(selected_date):
     conn = connect_db()
@@ -373,6 +446,43 @@ with col3:
 selected_user = st.segmented_control("👥 Filter by User", options=user_options, 
                                      default=user_options[0], 
                                      label_visibility="collapsed")
+
+# Display Daily Summary
+summary_data = get_daily_summary(selected_date.strftime('%Y-%m-%d'))
+if summary_data:
+    st.markdown("#### 📈 Daily Update Summary")
+    # Display as a nice grid
+    summary_items = list(summary_data.items())
+    rows = [summary_items[i:i+5] for i in range(0, len(summary_items), 5)]
+    for row in rows:
+        cols = st.columns(5)
+        for idx, (label, value) in enumerate(row):
+            if value > 0:
+                with cols[idx]:
+                    st.markdown(
+                        f"""
+                        <div style="background-color: #f8f9fa; padding: 10px; border-radius: 8px; border-left: 3px solid #1f77b4; height: 100px; display: flex; flex-direction: column; justify-content: space-between;">
+                            <div>
+                                <div style="font-size: 11px; color: #6c757d; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
+                                <div style="font-size: 22px; font-weight: 700; color: #1f77b4; margin-top: 4px;">{value}</div>
+                            </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    if st.button("View Details", key=f"details_{label}_{idx}", type="tertiary", use_container_width=True):
+                        show_metric_details(label, selected_date.strftime('%Y-%m-%d'))
+            else:
+                with cols[idx]:
+                    st.markdown(
+                        f"""
+                        <div style="background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #f1f3f4; height: 100px; opacity: 0.6;">
+                            <div style="font-size: 11px; color: #adb5bd; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
+                            <div style="font-size: 22px; font-weight: 700; color: #ced4da; margin-top: 4px;">0</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
 st.divider()
 

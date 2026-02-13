@@ -906,7 +906,7 @@ def fetch_print_details(book_id, conn):
     return conn.query(query, params={'book_id': book_id}, show_spinner=False)
 
 @st.dialog("Book Details", width="large")
-def show_book_details(book_id, book_row, authors_df, printeditions_df):
+def show_book_details(book_id, book_row, authors_df, printeditions_df, conn):
     # Calculate days since enrolled
     enrolled_date = book_row['date'] if pd.notnull(book_row['date']) else None
     if enrolled_date:
@@ -1079,6 +1079,57 @@ def show_book_details(book_id, book_row, authors_df, printeditions_df):
         table_html += f"<tr><td>{op_name}</td><td>{start_str}</td><td>{end_str}</td><td>{by_who}</td><td>{status}</td></tr>"
     table_html += "</table>"
     st.markdown(table_html, unsafe_allow_html=True)
+
+    # Correction History
+    requests_query = """
+    SELECT ac.*, COALESCE(a.name, 'Internal Team') AS author_name 
+    FROM author_corrections ac
+    LEFT JOIN authors a ON ac.author_id = a.author_id
+    WHERE ac.book_id = :book_id 
+    ORDER BY ac.created_at DESC
+    """
+    corrections_query = """
+    SELECT * FROM corrections 
+    WHERE book_id = :book_id 
+    ORDER BY correction_start DESC
+    """
+    
+    requests_df = conn.query(requests_query, params={"book_id": str(book_id)}, show_spinner=False)
+    corrections_df = conn.query(corrections_query, params={"book_id": str(book_id)}, show_spinner=False)
+
+    if not requests_df.empty or not corrections_df.empty:
+        with st.expander("📝 Correction History", expanded=False):
+            if not requests_df.empty:
+                st.markdown("**Correction Requests**")
+                req_table = "<table class='compact-table'><tr><th>Source</th><th>Round</th><th>Date</th><th>Correction</th></tr>"
+                for _, req in requests_df.iterrows():
+                    date_str = req['created_at'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(req['created_at']) else '-'
+                    text_val = req['correction_text'] if pd.notnull(req['correction_text']) and str(req['correction_text']).strip() != '' else "File uploaded"
+                    
+                    is_internal = pd.isnull(req['author_id'])
+                    if is_internal:
+                        source_badge = '<span style="background-color:#F3E5F5; color:#8E24AA; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">INTERNAL TEAM</span>'
+                    else:
+                        source_badge = f'<span style="background-color:#E3F2FD; color:#1976D2; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">{req["author_name"]}</span>'
+                    
+                    req_table += f"<tr><td>{source_badge}</td><td>{req['round_number']}</td><td>{date_str}</td><td>{text_val}</td></tr>"
+                req_table += "</table>"
+                st.markdown(req_table, unsafe_allow_html=True)
+            
+            if not corrections_df.empty:
+                st.markdown("<br>**Team Correction Actions**", unsafe_allow_html=True)
+                corr_table = "<table class='compact-table'><tr><th>Section</th><th>Round</th><th>Worker</th><th>Start</th><th>End</th></tr>"
+                for _, corr in corrections_df.iterrows():
+                    start_str = corr['correction_start'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_start']) else '-'
+                    end_str = corr['correction_end'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_end']) else '⏳ Active'
+                    
+                    section_display = corr['section'].capitalize()
+                    if corr.get('is_internal') == 1:
+                        section_display += ' <span style="background-color:#F3E5F5; color:#8E24AA; padding:1px 4px; border-radius:4px; font-size:9px; font-weight:bold;">INTERNAL</span>'
+                        
+                    corr_table += f"<tr><td>{section_display}</td><td>{corr['round_number']}</td><td>{corr['worker']}</td><td>{start_str}</td><td>{end_str}</td></tr>"
+                corr_table += "</table>"
+                st.markdown(corr_table, unsafe_allow_html=True)
 
 
     st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
@@ -1800,7 +1851,7 @@ with st.container(border=False):
                             st.button(":material/currency_rupee:", key=f"price_btn_{row['book_id']}", help="Price management disabled for this publisher", disabled=True)
                     with btn_col2:
                         if st.button(":material/info:", key=f"details_{row['book_id']}", help="View Details"):
-                            show_book_details(row['book_id'], row, authors_data, printeditions_data)
+                            show_book_details(row['book_id'], row, authors_data, printeditions_data, conn)
                 st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown(
