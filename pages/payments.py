@@ -488,8 +488,16 @@ def manage_price_dialog(book_id, conn):
                                 with hcol4:
                                     st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
                                 with hcol5:
-                                    status_color = "green" if p.get('status') == 'Approved' else "orange"
-                                    st.markdown(f"<span style='color:{status_color}'>{p.get('status', 'Pending')}</span>", unsafe_allow_html=True)
+                                    status = p.get('status', 'Pending')
+                                    if status == 'Approved':
+                                        status_color = "green"
+                                    elif status == 'Rejected':
+                                        status_color = "red"
+                                    else:
+                                        status_color = "orange"
+                                    st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
+                                    if status == 'Rejected' and p.get('rejection_reason'):
+                                        st.caption(f"Reason: {p['rejection_reason']}")
                                 with hcol6:
                                     if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
                                         with conn.session as s:
@@ -550,6 +558,7 @@ def manage_price_dialog(book_id, conn):
                                     
                                     log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "registered payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}")
                                     st.toast(f"Registered ₹{amt} for {row['name']}", icon="✅")
+                                    import time
                                     time.sleep(1)
                                     st.rerun()
                             except ValueError:

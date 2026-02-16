@@ -892,6 +892,31 @@ def send_email(subject, body, attachment_data, filename):
         st.error(f"Failed to send email: {e}")
         return False
 
+def send_otp_email(to_email, otp):
+    try:
+        email_addr = st.secrets["ag_volumes_mail"]["EMAIL_ADDRESS"]
+        email_pass = st.secrets["ag_volumes_mail"]["EMAIL_PASSWORD"]
+        
+        msg = MIMEMultipart()
+        msg["From"] = email_addr
+        msg["To"] = to_email
+        msg["Subject"] = "Admin Password Change OTP"
+        
+        body = f"Your OTP for changing the admin password is: {otp}\nThis OTP is valid for 10 minutes."
+        msg.attach(MIMEText(body, "plain"))
+        
+        # Use GMAIL_SMTP_SERVER and GMAIL_SMTP_PORT as they are standard for Gmail, or use what's in secrets if appropriate.
+        # Based on existing send_email, it uses GMAIL_SMTP_SERVER and GMAIL_SMTP_PORT.
+        server = smtplib.SMTP(st.secrets["email_servers"]["GMAIL_SMTP_SERVER"], st.secrets["email_servers"]["GMAIL_SMTP_PORT"])
+        server.starttls()
+        server.login(email_addr, email_pass)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"Failed to send OTP email: {e}")
+        return False
+
 def get_all_ijisem_data(conn):
     # Fetch papers
     papers_query = "SELECT * FROM papers"
@@ -1216,10 +1241,55 @@ def settings_dialog(conn):
                             )
                             selected_user = user_dict[selected_user_key]
 
+                            # Reset OTP state if user changes
+                            if "last_selected_user_id" not in st.session_state or st.session_state.last_selected_user_id != selected_user.id:
+                                st.session_state.last_selected_user_id = selected_user.id
+                                st.session_state.admin_otp_verified = False
+                                st.session_state.admin_otp_sent = False
+                                if "admin_otp" in st.session_state: 
+                                    del st.session_state.admin_otp
+
                         with st.container(border=True):
                 
                             if selected_user.id == 1:
                                 st.warning("⚠️ Primary admin (ID: 1) - Limited editing capabilities.")
+                                
+                                if not st.session_state.get("admin_otp_verified", False):
+                                    st.info("🔒 Identity verification required to change admin password.")
+
+                                    if st.button("📧 Send OTP to Admin", key="send_admin_otp_btn", use_container_width=True):
+                                        otp = str(random.randint(100000, 999999))
+                                        st.session_state.admin_otp = otp
+                                        if send_otp_email(selected_user.email, otp):
+                                            st.session_state.admin_otp_sent = True
+                                            log_activity(
+                                                conn, st.session_state.user_id, st.session_state.username,
+                                                st.session_state.session_id, "sent otp",
+                                                f"OTP sent to admin email: {selected_user.email}"
+                                            )
+                                            st.success(f"OTP sent to {selected_user.email}")
+                                        else:
+                                            st.error("Failed to send OTP.")
+                                    
+                                    if st.session_state.get("admin_otp_sent"):
+                                        entered_otp = st.text_input("Enter OTP", key="admin_otp_input", label_visibility="collapsed", placeholder="Enter OTP")
+
+                                        if st.button("✅ Verify OTP", key="verify_admin_otp_btn", use_container_width=True):
+                                            if entered_otp == st.session_state.get("admin_otp"):
+                                                st.session_state.admin_otp_verified = True
+                                                log_activity(
+                                                    conn, st.session_state.user_id, st.session_state.username,
+                                                    st.session_state.session_id, "verified otp",
+                                                    "Admin identity verified via OTP"
+                                                )
+                                                st.success("Verified!")
+                                            else:
+                                                log_activity(
+                                                    conn, st.session_state.user_id, st.session_state.username,
+                                                    st.session_state.session_id, "otp verification failed",
+                                                    f"Invalid OTP entered: {entered_otp}"
+                                                )
+                                                st.error("Invalid OTP")
 
                             # Check if current user is Sales app user
                             try:
@@ -1248,6 +1318,11 @@ def settings_dialog(conn):
                             st.subheader("👤 Basic Information")
                             col1, col2 = st.columns(2)
                             with col1:
+                                # Identity check for admin
+                                is_admin_verified = True
+                                if selected_user.id == 1 and not st.session_state.get("admin_otp_verified", False):
+                                    is_admin_verified = False
+
                                 if is_sales_user and publishing_consultant_names:
                                     st.text_input(
                                         "Username", value=selected_user.username, disabled=True,
@@ -1258,19 +1333,23 @@ def settings_dialog(conn):
                                 else:
                                     new_username = st.text_input(
                                         "Username", value=selected_user.username,
-                                        key=f"edit_username_{selected_user.id}"
+                                        key=f"edit_username_{selected_user.id}",
+                                        disabled=not is_admin_verified
                                     )
                     
                                 new_email = st.text_input(
                                     "Email", value=selected_user.email or "",
-                                    key=f"edit_email_{selected_user.id}"
+                                    key=f"edit_email_{selected_user.id}",
+                                    disabled=not is_admin_verified
                                 )
                 
                             with col2:
+                                # Disable password change for admin if not verified
                                 new_password = st.text_input(
                                     "Password", value="", type="password",
                                     key=f"edit_password_{selected_user.id}",
-                                    placeholder="Leave empty to keep current"
+                                    placeholder="Leave empty to keep current" if is_admin_verified else "Verify identity to change",
+                                    disabled=not is_admin_verified
                                 )
                     
                                 current_role = selected_user.role.capitalize() if selected_user.role in ["admin", "user"] else "User"
@@ -1313,21 +1392,24 @@ def settings_dialog(conn):
                                 if new_app == "Main":
                                     new_access_type = st.multiselect(
                                         "Access Permissions", options=access_options,
-                                        default=current_access, key=f"edit_access_type_{selected_user.id}"
+                                        default=current_access, key=f"edit_access_type_{selected_user.id}",
+                                        disabled=selected_user.id == 1
                                     )
                                 elif new_app in FULL_ACCESS_APPS:
                                     default_access = current_access_type if current_access_type in access_options else "Full Access"
                                     new_access_type = st.selectbox(
                                         "Access Permissions", options=access_options,
                                         index=access_options.index(default_access) if default_access in access_options else 0,
-                                        key=f"edit_access_type_full_{selected_user.id}"
+                                        key=f"edit_access_type_full_{selected_user.id}",
+                                        disabled=selected_user.id == 1
                                     )
                                 else:
                                     default_access = current_access_type if current_access_type in access_options else (access_options[0] if access_options else "")
                                     new_access_type = st.selectbox(
                                         "Access Permissions", options=access_options,
                                         index=access_options.index(default_access) if default_access in access_options else 0,
-                                        key=f"edit_access_type_ops_{selected_user.id}"
+                                        key=f"edit_access_type_ops_{selected_user.id}",
+                                        disabled=selected_user.id == 1
                                     )
 
                             # Additional Information
@@ -1355,7 +1437,8 @@ def settings_dialog(conn):
                                     new_level_display = st.selectbox(
                                         "Access Level", options=["Worker", "Reporting Manager", "Both"],
                                         index=["Worker", "Reporting Manager", "Both"].index(current_level_display) if current_level_display in ["Worker", "Reporting Manager", "Both"] else 0,
-                                        key=f"edit_level_{selected_user.id}"
+                                        key=f"edit_level_{selected_user.id}",
+                                        disabled=selected_user.id == 1
                                     )
                                     new_level = new_level_display.lower().replace(" ", "_")
                     
@@ -1378,7 +1461,8 @@ def settings_dialog(conn):
                                         new_report_to_display = st.selectbox(
                                             "Reports To", options=report_to_options,
                                             index=report_to_options.index(current_report_to_display),
-                                            key=f"edit_report_to_{selected_user.id}"
+                                            key=f"edit_report_to_{selected_user.id}",
+                                            disabled=selected_user.id == 1
                                         )
                                         new_report_to = new_report_to_display.split(" (ID: ")[1][:-1] if " (ID: " in new_report_to_display else None
                                     else:
@@ -1392,7 +1476,7 @@ def settings_dialog(conn):
                             new_start_date = st.date_input(
                                 "Start Date", value=current_start_date,
                                 key=f"edit_start_date_{selected_user.id}",
-                                disabled=new_app != "Main"
+                                disabled=new_app != "Main" or selected_user.id == 1
                             )
 
                             # Action Buttons
@@ -1785,6 +1869,11 @@ def settings_dialog(conn):
                             body = f"Please find attached the exported data from {database} database.\nExport types: {', '.join(export_options)}"
                             
                             if send_email(subject, body, output.getvalue(), filename):
+                                log_activity(
+                                    conn, st.session_state.user_id, st.session_state.username,
+                                    st.session_state.session_id, "exported excel",
+                                    f"Database: {database}, Options: {', '.join(export_options)}"
+                                )
                                 st.success(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}")
                                 st.toast(f"Data exported successfully and sent to Admin Email: {ADMIN_EMAIL}. Included: {', '.join(export_options)}", icon="✔️", duration="long")
                                 st.balloons()
@@ -1975,6 +2064,11 @@ def settings_dialog(conn):
                             body = f"Please find attached the filtered books report from the MIS database.\nFilters applied: Publisher={selected_publisher}, Delivery Status={delivery_status}, Subject={selected_subject}, Tags={', '.join(selected_tags) or 'None'}, Author Type={selected_author_type}"
                             
                             if send_email(subject, body, pdf_output.getvalue(), filename):
+                                log_activity(
+                                    conn, st.session_state.user_id, st.session_state.username,
+                                    st.session_state.session_id, "exported pdf",
+                                    f"Publisher: {selected_publisher}, Subject: {selected_subject}, Status: {delivery_status}"
+                                )
                                 st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
                                 st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
                                 st.balloons()

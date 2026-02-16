@@ -486,8 +486,7 @@ def fetch_books(months_back: int = 4, section: str = "writing") -> pd.DataFrame:
             "base": [
                 "cover_by AS 'Cover By'", 
                 "cover_start AS 'Cover Start'", 
-                "cover_end AS 'Cover End'",
-                "apply_isbn AS 'Apply ISBN'", 
+                "cover_end AS 'Cover End'", 
                 "isbn AS 'ISBN'",
                 "book_note AS 'book_note'"
             ],
@@ -2338,7 +2337,7 @@ def edit_section_dialog(book_id, conn, section):
                 with st.container(border=True):
                     st.markdown("### Finalize Writing Details")
                     about_book = st.text_area("About the Book", key=f"about_book_{book_id}")
-                    about_book_200 = st.text_area("About the Book in 200 Words", key=f"about_book_200_{book_id}")
+                    about_book_200 = st.text_area("About the Book in 100 Words", key=f"about_book_200_{book_id}")
                     
                     col_conf, col_cancel = st.columns(2)
                     with col_conf:
@@ -2694,7 +2693,7 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                 columns.append("Book Pages")
         elif role == "cover_designer":
             if "Pending" in title or is_running:
-                columns.extend(["Apply ISBN", "Photo", "Details"])
+                columns.extend(["ISBN", "Photo", "Details"])
         elif role == "writer":
             if "Completed" in title:
                 columns.append("Book Pages")
@@ -2864,9 +2863,9 @@ def render_table(books_df, title, column_sizes, color, section, role, is_running
                         st.markdown(f'<span>{value}</span>', unsafe_allow_html=True)
                     col_idx += 1
             elif role == "cover_designer":
-                if "Apply ISBN" in columns:
+                if "ISBN" in columns:
                     with col_configs[col_idx]:
-                        apply_isbn = row['Apply ISBN']
+                        apply_isbn = row['ISBN']
                         value = "Yes" if pd.notnull(apply_isbn) and apply_isbn else "No"
                         class_name = "pill apply-isbn-yes" if value == "Yes" else "pill apply-isbn-no"
                         st.markdown(f'<span class="{class_name}">{value}</span>', unsafe_allow_html=True)

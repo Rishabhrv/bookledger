@@ -506,9 +506,12 @@ def get_payment_status(row):
     # Ensure numeric conversion to avoid string comparison errors
     total = float(row.get('total_amount', 0) or 0)
     amount_paid = float(row.get('amount_paid', 0) or 0)
+    has_rejected = row.get('has_rejected', 0)
 
     # Logic for determining status
-    if total <= 0:
+    if has_rejected == 1:
+        return generate_badge("Rejected", "#b91c1c", "#fee2e2")
+    elif total <= 0:
         return generate_badge("Pending Payment", "#b91c1c", "#fee2e2")
     elif amount_paid >= total:
         return generate_badge("Paid", "#166534", "#e5fff3")
@@ -827,8 +830,16 @@ def manage_price_dialog(book_id, conn):
                                 with hcol4:
                                     st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
                                 with hcol5:
-                                    status_color = "green" if p.get('status') == 'Approved' else "orange"
-                                    st.markdown(f"<span style='color:{status_color}'>{p.get('status', 'Pending')}</span>", unsafe_allow_html=True)
+                                    status = p.get('status', 'Pending')
+                                    if status == 'Approved':
+                                        status_color = "green"
+                                    elif status == 'Rejected':
+                                        status_color = "red"
+                                    else:
+                                        status_color = "orange"
+                                    st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
+                                    if status == 'Rejected' and p.get('rejection_reason'):
+                                        st.caption(f"Reason: {p['rejection_reason']}")
                                 with hcol6:
                                     if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
                                         with conn.session as s:
@@ -1397,13 +1408,16 @@ query = """
     -- Aggregate total_amount and amount_paid
     SUM(ba.total_amount) as total_amount,
     COALESCE(SUM(ap_agg.paid), 0) as amount_paid,
+    COALESCE(MAX(ap_agg.has_rejected), 0) as has_rejected,
     ba.publishing_consultant
 FROM books b
 INNER JOIN book_authors ba ON b.book_id = ba.book_id
 LEFT JOIN (
-    SELECT book_author_id, SUM(amount) as paid
+    SELECT 
+        book_author_id, 
+        SUM(CASE WHEN status = 'Approved' THEN amount ELSE 0 END) as paid,
+        MAX(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as has_rejected
     FROM author_payments
-    WHERE status = 'Approved'
     GROUP BY book_author_id
 ) ap_agg ON ba.id = ap_agg.book_author_id
 WHERE ba.publishing_consultant = :user_name AND b.is_cancelled = 0
