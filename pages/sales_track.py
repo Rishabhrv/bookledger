@@ -197,7 +197,7 @@ def add_order_dialog():
     st.markdown("---")
     r3c1, r3c2 = st.columns(2)
     with r3c1:
-        status_options = ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"]
+        status_options = ["New Order", "Packed", "Shipped", "Delivered", "Returned", "Exchanged"]
         order_status = st.selectbox("Order Status", status_options)
     
     with r3c2:
@@ -380,7 +380,7 @@ def edit_order_dialog(order_data):
 
     c7, c8 = st.columns(2)
     with c7:
-        status_options = ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"]
+        status_options = ["New Order", "Packed", "Shipped", "Delivered", "Returned", "Exchanged"]
         current_status = order_data['order_status'] if order_data['order_status'] in status_options else "New Order"
         order_status = st.selectbox("Order Status", status_options, index=status_options.index(current_status))
     with c8:
@@ -629,7 +629,7 @@ with col2:
         selected_month = st.pills("Month", available_months, selection_mode="single", key="filter_month")
         
         filter_source = st.multiselect("Source", ["Amazon", "Flipkart", "Website", "Direct"], key="filter_source_key")
-        filter_status = st.multiselect("Status", ["New Order", "Shipped", "Delivered", "Returned", "Exchanged"], key="filter_status_key")
+        filter_status = st.multiselect("Status", ["New Order", "Packed", "Shipped", "Delivered", "Returned", "Exchanged"], key="filter_status_key")
         # Book filter
         filter_books = st.multiselect("Book", options=list(book_options.keys()), placeholder="Select specific books", key="filter_books_key")
 
@@ -892,6 +892,7 @@ if not orders_df.empty:
                 with cols[7]:
                     status_color_map = {
                         "New Order": "#3498db",
+                        "Packed": "#f1c40f",
                         "Shipped": "#f39c12",
                         "Delivered": "#27ae60",
                         "Returned": "#e74c3c",

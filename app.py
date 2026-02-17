@@ -405,6 +405,47 @@ def update_button_counts(conn):
                 st.toast(f"You have {total_unread} unread messages!", icon="💬", duration="infinite")
                 st.session_state.unread_toast_shown = True
 
+        # 7. Pending Checklist
+        welcome_pending_count_query = """
+            SELECT COUNT(*) AS count 
+            FROM books b 
+            JOIN book_authors ba ON b.book_id = ba.book_id 
+            WHERE ba.welcome_mail_sent = 0 
+              AND b.is_cancelled = 0 
+              AND b.is_archived = 0
+              AND b.deliver = 0
+        """
+        cover_pending_count_query = """
+            SELECT COUNT(*) AS count 
+            FROM books b 
+            JOIN book_authors ba ON b.book_id = ba.book_id 
+            WHERE b.cover_page_complete = 1 
+              AND ba.cover_agreement_sent = 0 
+              AND b.is_cancelled = 0 
+              AND b.is_archived = 0
+              AND b.deliver = 0
+        """
+        ops_pending_count_query = """
+            SELECT COUNT(*) AS count 
+            FROM books b 
+            JOIN book_authors ba ON b.book_id = ba.book_id 
+            WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) 
+              AND b.proofreading_complete = 1 
+              AND b.formatting_complete = 1 
+              AND b.cover_page_complete = 1 
+              AND ba.digital_book_sent = 0 
+              AND b.is_cancelled = 0 
+              AND b.is_archived = 0
+              AND b.deliver = 0
+        """
+        welcome_pending_count = conn.query(welcome_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
+        cover_pending_count = conn.query(cover_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
+        ops_pending_count = conn.query(ops_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
+        total_pending_checklist = welcome_pending_count + cover_pending_count + ops_pending_count
+        
+        if "pending_checklist" in BUTTON_CONFIG and total_pending_checklist > 0:
+            BUTTON_CONFIG["pending_checklist"]["label"] += f" 🔴 ({total_pending_checklist})"
+
     except Exception:
         pass
 
@@ -1060,6 +1101,157 @@ def fetch_tags(conn):
     except Exception as e:
         st.error(f"Error fetching tags: {e}")
         return []
+
+
+
+@st.dialog("Pending Checklist", width="medium", on_dismiss="rerun")
+def pending_checklist_dialog(conn):
+    # --- Data Fetching ---
+    
+    # 1. Welcome mail
+    welcome_mail_query = """
+    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
+    FROM books b
+    JOIN book_authors ba ON b.book_id = ba.book_id
+    JOIN authors a ON ba.author_id = a.author_id
+    WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0
+    ORDER BY b.book_id
+    """
+    welcome_mail_data = conn.query(welcome_mail_query, show_spinner=False, ttl=0)
+
+    # 2. Cover ready
+    cover_ready_query = """
+    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
+    FROM books b
+    JOIN book_authors ba ON b.book_id = ba.book_id
+    JOIN authors a ON ba.author_id = a.author_id
+    WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0
+      AND b.is_cancelled = 0 AND b.deliver = 0
+    ORDER BY b.book_id
+    """
+    cover_ready_data = conn.query(cover_ready_query, show_spinner=False, ttl=0)
+
+    # 3. Operations complete
+    ops_complete_query = """
+    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position,
+           b.correction_status,
+           (SELECT COUNT(*) FROM corrections WHERE book_id = b.book_id AND correction_end IS NULL) as active_corrections
+    FROM books b
+    JOIN book_authors ba ON b.book_id = ba.book_id
+    JOIN authors a ON ba.author_id = a.author_id
+    WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1)
+      AND b.proofreading_complete = 1 AND b.formatting_complete = 1
+      AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0
+      AND b.is_cancelled = 0 AND b.deliver = 0
+    ORDER BY b.book_id
+    """
+    ops_complete_data = conn.query(ops_complete_query, show_spinner=False, ttl=0)
+
+    # --- Callback ---
+    def update_status_silent(ba_id, field, book_id, author_id, label):
+        try:
+            update_book_authors(ba_id, {field: 1}, conn) 
+            log_activity(
+                conn, st.session_state.user_id, st.session_state.username,
+                st.session_state.session_id, "updated checklist",
+                f"Book ID: {book_id}, Author ID: {author_id}, {label} changed to 'True'"
+            )
+            st.toast(f"{label} Updated!", icon="✅")
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+    # --- Renderer ---
+    def render_checklist(df, field, key_prefix, log_label, description_text):
+        if df.empty:
+            st.success("✨ All caught up! No pending items here.")
+            return
+
+        st.info(f"💡 {description_text}")
+
+        # Initialize session state for checkboxes if not exists
+        if "pending_checklist_states" not in st.session_state:
+            st.session_state.pending_checklist_states = {}
+
+        with st.container(height=400, border=True):
+            for book_id, group in df.groupby('book_id'):
+                title = group.iloc[0]['title']
+                
+                # Check for correction cycle (for Digital Book Sent section)
+                is_in_correction = False
+                if field == "digital_book_sent":
+                    correction_status = group.iloc[0].get('correction_status', 'None')
+                    active_corrections = group.iloc[0].get('active_corrections', 0)
+                    is_in_correction = (correction_status is not None and correction_status != 'None') or active_corrections > 0
+
+                # Book Card Style Header
+                st.markdown(f"""
+                    <div style='padding: 4px 10px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-top: 4px; margin-bottom: 4px; display: flex; align-items: baseline; gap: 8px;'>
+                        <div style='font-size: 0.8em; font-weight: bold; color: #64748b; min-width: fit-content;'>{book_id}</div>
+                        <div style='font-size: 0.95em; font-weight: 600; color: #1e293b;'>{title}</div>
+                        {"<span style='color: #ef4444; font-size: 0.75em; font-weight: bold;'>⚠️ IN CORRECTION</span>" if is_in_correction else ""}
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                # List Authors for this book
+                for _, author in group.iterrows():
+                    col1, col2 = st.columns([0.85, 0.15])
+                    with col1:
+                        st.markdown(f"""
+                            <div style='padding-left: 10px; margin-bottom: 3px;'>
+                                <span style='font-size: 0.9em; font-weight: 500;'>{author['author_name']}</span>
+                                <span style='color: #94a3b8; font-size: 0.8em; margin-left: 6px;'>({author['author_position']})</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    with col2:
+                        checkbox_key = f"{key_prefix}_{author['ba_id']}"
+                        
+                        # Set initial state if not present
+                        if checkbox_key not in st.session_state.pending_checklist_states:
+                            st.session_state.pending_checklist_states[checkbox_key] = False
+
+                        current_val = st.checkbox(
+                            "Done",
+                            key=checkbox_key,
+                            label_visibility="collapsed",
+                            disabled=is_in_correction,
+                            help="Disabled during active correction cycle" if is_in_correction else None
+                        )
+                        
+                        # If value changed (from False to True), update database and state
+                        if current_val and not st.session_state.pending_checklist_states[checkbox_key]:
+                            update_status_silent(author['ba_id'], field, author['book_id'], author['author_id'], log_label)
+                            st.session_state.pending_checklist_states[checkbox_key] = True
+                
+                st.markdown("<hr style='margin: 10px 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
+
+    # --- Tabs Layout ---
+    w_count = len(welcome_mail_data)
+    w_book_count = welcome_mail_data['book_id'].nunique() if not welcome_mail_data.empty else 0
+
+    c_count = len(cover_ready_data)
+    c_book_count = cover_ready_data['book_id'].nunique() if not cover_ready_data.empty else 0
+
+    o_count = len(ops_complete_data)
+    o_book_count = ops_complete_data['book_id'].nunique() if not ops_complete_data.empty else 0
+
+    tab0, tab1, tab2 = st.tabs([
+        f"🎨 Cover ({c_count})", 
+        f"📚 Digital ({o_count})",
+        f"📧 Welcome ({w_count})"
+    ])
+
+    with tab2:
+        desc = f"Welcome mail is not yet sent to {w_count} authors across {w_book_count} books."
+        render_checklist(welcome_mail_data, "welcome_mail_sent", "w_mail", "Welcome Mail Sent", desc)
+
+    with tab0:
+        desc = f"Cover page is ready but not sent to {c_count} authors across {c_book_count} books."
+        render_checklist(cover_ready_data, "cover_agreement_sent", "c_sent", "Cover Agreement Sent", desc)
+
+    with tab1:
+        desc = f"Operations complete but Digital Book not sent to {o_count} authors across {o_book_count} books."
+        render_checklist(ops_complete_data, "digital_book_sent", "d_book", "Digital Book Sent", desc)
+
 
 
 ###################################################################################################################################
@@ -5178,7 +5370,6 @@ def edit_author_dialog(book_id, conn):
                                     st.session_state.checkbox_states[author_id]['welcome_mail_sent'] = updates_checklist['welcome_mail_sent']
                                     update_book_authors(row['id'], {'welcome_mail_sent': int(updates_checklist['welcome_mail_sent'])}, conn)
                                 
-                                # Author Details Received - Display only, no auto-sync on dialog open
                                 updates_checklist['author_details_sent'] = st.checkbox(
                                     "📥 Author Details Received",
                                     value=bool(row['author_details_sent']),
@@ -5187,7 +5378,6 @@ def edit_author_dialog(book_id, conn):
                                     disabled=False
                                 )
                                 
-                                # Photo Received - Display only, no auto-sync on dialog open
                                 updates_checklist['photo_recive'] = st.checkbox(
                                     "📷 Photo Received",
                                     value=bool(row['photo_recive']),
@@ -9053,7 +9243,7 @@ with c3:
         st.cache_data.clear()
 
 # Search Functionality and Page Size Selection
-srcol1, srcol3, srcol4, srcol5 = st.columns([6, 4, 1, 1], gap="small") 
+srcol1, srcol3, srcol_pending, srcol4, srcol5 = st.columns([5, 3.5, 1.5, 0.9, 0.9], gap="small") 
 
 with srcol1:
     # Search bar
@@ -9433,6 +9623,32 @@ with srcol3:
                 consultant_book_ids = conn.query(consultant_query, params={"consultant": st.session_state.consultant_filter}, show_spinner=False)
                 filtered_books = filtered_books[filtered_books['book_id'].isin(consultant_book_ids['book_id'].tolist())]
 
+
+with srcol_pending:
+    
+    # 7. Pending Checklist Count (Unique Books)
+    if is_button_allowed("pending_checklist_dialog"):
+        try:
+            w_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND"
+            c_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0 AND b.is_cancelled = 0"
+            o_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0 AND b.is_cancelled = 0"
+            
+            w_b_count = conn.query(w_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+            c_b_count = conn.query(c_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+            o_b_count = conn.query(o_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+            t_b_count = w_b_count + c_b_count + o_b_count
+            
+            label = "Pending"
+            if t_b_count > 0:
+                label = f"Pending ({t_b_count})"
+            
+            if st.button(label, icon=":material/checklist:", help="Pending Checklist", width="stretch", type="secondary"):
+                pending_checklist_dialog(conn)
+        except:
+            if st.button("Pending", icon=":material/checklist:", help="Pending Checklist", width="stretch", type="secondary"):
+                pending_checklist_dialog(conn)
+    else:
+        st.button("Pending", icon=":material/checklist:", help="Pending Checklist (Not Authorized)", width="stretch", type="secondary", disabled=True)
 
 with srcol4:
     # Add Book button

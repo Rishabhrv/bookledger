@@ -29,6 +29,7 @@ ACCESS_TO_BUTTON = {
     "Sales Tracking": "sales_track",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
+    "Pending Checklist": "pending_checklist_dialog",
     "Authors Edit": "edit_author_detail"
 }
 
