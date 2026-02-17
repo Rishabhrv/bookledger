@@ -9628,25 +9628,22 @@ with srcol_pending:
     
     # 7. Pending Checklist Count (Unique Books)
     if is_button_allowed("pending_checklist_dialog"):
-        try:
-            w_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND"
-            c_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0 AND b.is_cancelled = 0"
-            o_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0 AND b.is_cancelled = 0"
-            
-            w_b_count = conn.query(w_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
-            c_b_count = conn.query(c_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
-            o_b_count = conn.query(o_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
-            t_b_count = w_b_count + c_b_count + o_b_count
-            
-            label = "Pending"
-            if t_b_count > 0:
-                label = f"Pending ({t_b_count})"
-            
-            if st.button(label, icon=":material/checklist:", help="Pending Checklist", width="stretch", type="secondary"):
-                pending_checklist_dialog(conn)
-        except:
-            if st.button("Pending", icon=":material/checklist:", help="Pending Checklist", width="stretch", type="secondary"):
-                pending_checklist_dialog(conn)
+
+        w_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0"
+        c_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0 AND b.is_cancelled = 0"
+        o_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0 AND b.is_cancelled = 0"
+        
+        w_b_count = conn.query(w_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+        c_b_count = conn.query(c_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+        o_b_count = conn.query(o_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
+        t_b_count = w_b_count + c_b_count + o_b_count
+        
+        label = "Pending"
+        if t_b_count > 0:
+            label = f"Pending ({t_b_count})"
+        
+        if st.button(label, icon=":material/checklist:", help="Pending Checklist", width="stretch", type="secondary"):
+            pending_checklist_dialog(conn)
     else:
         st.button("Pending", icon=":material/checklist:", help="Pending Checklist (Not Authorized)", width="stretch", type="secondary", disabled=True)
 
