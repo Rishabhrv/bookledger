@@ -669,89 +669,124 @@ def manage_price_dialog(book_id, conn):
     if book_authors.empty:
         st.warning(f"No authors found for Book ID: {book_id}")
     else:
-        cols = st.columns(len(book_authors), gap="small")
-        for i, (_, row) in enumerate(book_authors.iterrows()):
-            total_amount = int(row.get('total_amount', 0) or 0)
-            amount_paid = float(row.get('amount_paid', 0) or 0)
-            agent = row.get('publishing_consultant', 'Unknown Agent')
+        # --- Grouping Logic ---
+        book_authors['agent_clean'] = book_authors['corresponding_agent'].fillna('').str.strip()
+        all_agents = set(book_authors[book_authors['agent_clean'] != '']['agent_clean'])
+        
+        def assign_group(row):
+            if row['agent_clean'] != '': return row['agent_clean']
+            if row['name'] in all_agents: return row['name']
+            return f"INDV_{row['id']}"
+            
+        book_authors['payment_group'] = book_authors.apply(assign_group, axis=1)
+        
+        agent_summary = book_authors.groupby('payment_group').agg({
+            'total_amount': 'sum',
+            'amount_paid': 'sum',
+            'publishing_consultant': 'first',
+            'name': list
+        }).reset_index()
 
-            # Determine payment status
-            if amount_paid >= total_amount and total_amount > 0:
-                status_class = "status-paid"
-                status_text = f"₹{amount_paid}/₹{total_amount}"
-                badge_text = "Paid"
-            elif amount_paid > 0:
-                status_class = "status-partial"
-                status_text = f"₹{amount_paid}/₹{total_amount}"
-                badge_text = "Partial"
+        # Calculate book total paid
+        total_book_paid = float(book_authors['amount_paid'].sum())
+        total_book_expected = float(current_price) if pd.notna(current_price) else 0.0
+        total_book_remaining = total_book_expected - total_book_paid
+
+        # Determine book status color
+        if total_book_paid >= total_book_expected and total_book_expected > 0:
+            book_status_class, book_badge_text = "status-paid", "Fully Paid"
+        elif total_book_paid > 0:
+            book_status_class, book_badge_text = "status-partial", "Partially Paid"
+        else:
+            book_status_class, book_badge_text = "status-pending", "Pending"
+
+        cols = st.columns(len(agent_summary) + 1, gap="small")
+        
+        with cols[0]:
+            html = f"""
+                <div class="payment-box {book_status_class}" style="border-left: 5px solid #4CAF50;">
+                    <div class="author-name">Total Book Price</div>
+                    <div class="payment-text">₹{int(total_book_paid)}/₹{int(total_book_expected)}</div>
+                    <div class="status-badge">{book_badge_text}</div>
+                    <div class="agent-text">Remaining: ₹{int(total_book_remaining)}</div>
+                </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
+
+        for i, row in agent_summary.iterrows():
+            total_amount = int(row['total_amount'] or 0)
+            amount_paid = float(row['amount_paid'] or 0)
+            agent_consultant = row['publishing_consultant'] or 'Unknown Agent'
+            group_id = row['payment_group']
+            
+            if group_id.startswith("INDV_"):
+                display_name, is_group = row['name'][0], False
             else:
-                status_class = "status-pending"
-                status_text = f"₹0/₹{total_amount}" if total_amount > 0 else "N/A"
-                badge_text = "Pending"
+                display_name, is_group = group_id, True
+            
+            member_names = ", ".join(row['name'])
 
-            with cols[i]:
+            if amount_paid >= total_amount and total_amount > 0:
+                status_class, badge_text = "status-paid", "Paid"
+            elif amount_paid > 0:
+                status_class, badge_text = "status-partial", "Partial"
+            else:
+                status_class, badge_text = "status-pending", "Pending"
+
+            with cols[i+1]:
+                group_style = "border-top: 3px solid #3b82f6;" if is_group else ""
                 html = f"""
-                    <div class="payment-box {status_class}">
-                        <div class="author-name">{row['name']}</div>
-                        <div class="payment-text">{status_text}</div>
+                    <div class="payment-box {status_class}" style="{group_style}" title="Covers: {member_names}">
+                        <div class="author-name">{display_name}</div>
+                        <div class="payment-text">₹{int(amount_paid)}/₹{total_amount}</div>
                         <div class="status-badge">{badge_text}</div>
-                        <div class="agent-text">{agent}</div>
+                        <div class="agent-text">{agent_consultant}</div>
                     </div>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-    glob_col1, glob_col2 = st.columns([2.2,1])
+    # Section 1: Book Price
+    with st.container(border=True):
+        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
+        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
+        with col1:
+            price_str = st.text_input(
+                "Book Price (₹)",
+                value=str(int(current_price)) if pd.notna(current_price) else "",
+                key=f"price_{book_id}",
+                placeholder="Enter whole amount"
+            )
 
-    with glob_col2:
- 
-        with st.container(border=True):
-            # Section 1: Book Price
-            st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-            col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
-            with col1:
-                price_str = st.text_input(
-                    "Book Price (₹)",
-                    value=str(int(current_price)) if pd.notna(current_price) else "",
-                    key=f"price_{book_id}",
-                    placeholder="Enter whole amount"
-                )
-
-            with col2:
-                if st.button("Save Price", key=f"save_price_{book_id}"):
-                    with st.spinner("Saving..."):
-                        import time
-                        time.sleep(1)
-                        try:
-                            price = int(price_str) if price_str.strip() else None
-                            if price is not None and price < 0:
-                                st.error("Price cannot be negative")
-                                return
-                            with conn.session as s:
-                                s.execute(
-                                    text("UPDATE books SET price = :price WHERE book_id = :book_id"),
-                                    {"price": price, "book_id": book_id}
-                                )
-                                s.commit()
-                            
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated book price",
-                                f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+        with col2:
+            if st.button("Save Price", key=f"save_price_{book_id}"):
+                with st.spinner("Saving..."):
+                    import time
+                    time.sleep(1)
+                    try:
+                        price = int(price_str) if price_str.strip() else None
+                        if price is not None and price < 0:
+                            st.error("Price cannot be negative")
+                            return
+                        with conn.session as s:
+                            s.execute(
+                                text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                                {"price": price, "book_id": book_id}
                             )
-                            
-                            st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
-                            st.cache_data.clear()
-                        except ValueError:
-                            st.error("Please enter a valid whole number", icon="🚨")
+                            s.commit()
+                        
+                        log_activity(
+                            conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                            "updated book price", f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+                        )
+                        st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
+                        st.cache_data.clear()
+                    except ValueError:
+                        st.error("Please enter a valid whole number", icon="🚨")
     
-    with glob_col1:
-        with st.container(border=True):
-            # Section 2: Author Payments with Tabs
-            st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
-            if not book_authors.empty:
+    # Section 2: Author Payments with Tabs
+    with st.container(border=True):
+        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
+        if not book_authors.empty:
                 total_author_amounts = 0
                 updated_authors = []
 

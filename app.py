@@ -407,7 +407,7 @@ def update_button_counts(conn):
 
         # 7. Pending Checklist
         welcome_pending_count_query = """
-            SELECT COUNT(*) AS count 
+            SELECT COUNT(DISTINCT b.book_id) AS count 
             FROM books b 
             JOIN book_authors ba ON b.book_id = ba.book_id 
             WHERE ba.welcome_mail_sent = 0 
@@ -416,7 +416,7 @@ def update_button_counts(conn):
               AND b.deliver = 0
         """
         cover_pending_count_query = """
-            SELECT COUNT(*) AS count 
+            SELECT COUNT(DISTINCT b.book_id) AS count 
             FROM books b 
             JOIN book_authors ba ON b.book_id = ba.book_id 
             WHERE b.cover_page_complete = 1 
@@ -426,7 +426,7 @@ def update_button_counts(conn):
               AND b.deliver = 0
         """
         ops_pending_count_query = """
-            SELECT COUNT(*) AS count 
+            SELECT COUNT(DISTINCT b.book_id) AS count 
             FROM books b 
             JOIN book_authors ba ON b.book_id = ba.book_id 
             WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) 
@@ -1108,32 +1108,39 @@ def fetch_tags(conn):
 def pending_checklist_dialog(conn):
     # --- Data Fetching ---
     
-    # 1. Welcome mail
+    # 1. Welcome mail (Calculate from registration date)
     welcome_mail_query = """
-    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
+    SELECT b.book_id, b.title, b.date AS pending_since, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
     FROM books b
     JOIN book_authors ba ON b.book_id = ba.book_id
     JOIN authors a ON ba.author_id = a.author_id
-    WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0
-    ORDER BY b.book_id
+    WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0
+    ORDER BY pending_since ASC
     """
     welcome_mail_data = conn.query(welcome_mail_query, show_spinner=False, ttl=0)
 
-    # 2. Cover ready
+    # 2. Cover ready (Calculate from cover end date)
     cover_ready_query = """
-    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
+    SELECT b.book_id, b.title, b.cover_end AS pending_since, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
     FROM books b
     JOIN book_authors ba ON b.book_id = ba.book_id
     JOIN authors a ON ba.author_id = a.author_id
     WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0
-      AND b.is_cancelled = 0 AND b.deliver = 0
-    ORDER BY b.book_id
+      AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0
+    ORDER BY pending_since ASC
     """
     cover_ready_data = conn.query(cover_ready_query, show_spinner=False, ttl=0)
 
-    # 3. Operations complete
+    # 3. Operations complete (Calculate from latest operation end date)
     ops_complete_query = """
-    SELECT b.book_id, b.title, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position,
+    SELECT b.book_id, b.title, 
+           GREATEST(
+               IFNULL(b.writing_end, '1000-01-01'), 
+               IFNULL(b.proofreading_end, '1000-01-01'), 
+               IFNULL(b.formatting_end, '1000-01-01'), 
+               IFNULL(b.cover_end, '1000-01-01')
+           ) AS pending_since,
+           ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position,
            b.correction_status,
            (SELECT COUNT(*) FROM corrections WHERE book_id = b.book_id AND correction_end IS NULL) as active_corrections
     FROM books b
@@ -1142,8 +1149,8 @@ def pending_checklist_dialog(conn):
     WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1)
       AND b.proofreading_complete = 1 AND b.formatting_complete = 1
       AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0
-      AND b.is_cancelled = 0 AND b.deliver = 0
-    ORDER BY b.book_id
+      AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0
+    ORDER BY pending_since ASC
     """
     ops_complete_data = conn.query(ops_complete_query, show_spinner=False, ttl=0)
 
@@ -1173,35 +1180,42 @@ def pending_checklist_dialog(conn):
             st.session_state.pending_checklist_states = {}
 
         with st.container(height=400, border=True):
-            for book_id, group in df.groupby('book_id'):
-                title = group.iloc[0]['title']
+            for book_id, group in df.groupby('book_id', sort=False):
+                row = group.iloc[0]
+                title = row['title']
                 
+                # Calculate days from the 'pending_since' column
+                pending_date = pd.to_datetime(row['pending_since'])
+                days_pending = (datetime.now().date() - pending_date.date()).days if pd.notnull(pending_date) else 0
+                
+                # Visual cues for urgency
+                urgency_color = "#3b82f6" # Default blue
+                urgency_label = ""
+                
+                if days_pending > 7:
+                    urgency_color = "#ef4444" # Red
+                    urgency_label = f"<span style='background-color: #fef2f2; color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: 0.6em; font-weight: bold;'>🔥 {days_pending} days</span>"
+                elif days_pending > 3:
+                    urgency_color = "#f59e0b" # Amber
+                    urgency_label = f"<span style='background-color: #fffbeb; color: #d97706; padding: 2px 6px; border-radius: 4px; font-size: 0.6em; font-weight: bold;'>⏳ {days_pending} days</span>"
+                else:
+                    urgency_label = f"<span style='color: #94a3b8; font-size: 0.6em; font-weight: 500;'>{days_pending} days</span>"
+
                 # Check for correction cycle (for Digital Book Sent section)
                 is_in_correction = False
                 if field == "digital_book_sent":
-                    correction_status = group.iloc[0].get('correction_status', 'None')
-                    active_corrections = group.iloc[0].get('active_corrections', 0)
+                    correction_status = row.get('correction_status', 'None')
+                    active_corrections = row.get('active_corrections', 0)
                     is_in_correction = (correction_status is not None and correction_status != 'None') or active_corrections > 0
 
                 # Book Card Style Header
-                st.markdown(f"""
-                    <div style='padding: 4px 10px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-top: 4px; margin-bottom: 4px; display: flex; align-items: baseline; gap: 8px;'>
-                        <div style='font-size: 0.8em; font-weight: bold; color: #64748b; min-width: fit-content;'>{book_id}</div>
-                        <div style='font-size: 0.95em; font-weight: 600; color: #1e293b;'>{title}</div>
-                        {"<span style='color: #ef4444; font-size: 0.75em; font-weight: bold;'>⚠️ IN CORRECTION</span>" if is_in_correction else ""}
-                    </div>
-                """, unsafe_allow_html=True)
+                st.markdown(f"""<div style='padding: 6px 10px; border-radius: 8px; border-left: 4px solid {urgency_color}; background-color: {urgency_color}08; margin-top: 8px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;'><div style='display: flex; align-items: center; gap: 8px;'><div style='font-size: 0.8em; font-weight: bold; color: #64748b;'>{book_id}</div><div style='font-size: 0.95em; font-weight: 600; color: #1e293b;'>{title}</div>{"<span style='color: #ef4444; font-size: 0.75em; font-weight: bold; background: #fee2e2; padding: 1px 5px; border-radius: 4px;'>⚠️ IN CORRECTION</span>" if is_in_correction else ""}</div>{urgency_label}</div>""", unsafe_allow_html=True)
                 
                 # List Authors for this book
                 for _, author in group.iterrows():
                     col1, col2 = st.columns([0.85, 0.15])
                     with col1:
-                        st.markdown(f"""
-                            <div style='padding-left: 10px; margin-bottom: 3px;'>
-                                <span style='font-size: 0.9em; font-weight: 500;'>{author['author_name']}</span>
-                                <span style='color: #94a3b8; font-size: 0.8em; margin-left: 6px;'>({author['author_position']})</span>
-                            </div>
-                        """, unsafe_allow_html=True)
+                        st.markdown(f"""<div style='padding-left: 10px; margin-bottom: 3px;'><span style='font-size: 0.9em; font-weight: 500;'>{author['author_name']}</span><span style='color: #94a3b8; font-size: 0.8em; margin-left: 6px;'>({author['author_position']})</span></div>""", unsafe_allow_html=True)
                     with col2:
                         checkbox_key = f"{key_prefix}_{author['ba_id']}"
                         
@@ -1235,9 +1249,9 @@ def pending_checklist_dialog(conn):
     o_book_count = ops_complete_data['book_id'].nunique() if not ops_complete_data.empty else 0
 
     tab0, tab1, tab2 = st.tabs([
-        f"🎨 Cover ({c_count})", 
-        f"📚 Digital ({o_count})",
-        f"📧 Welcome ({w_count})"
+        f"🎨 Cover ({c_book_count})", 
+        f"📚 Digital ({o_book_count})",
+        f"📧 Welcome ({w_book_count})"
     ])
 
     with tab2:
@@ -4333,242 +4347,316 @@ def manage_price_dialog(book_id, conn):
     if book_authors.empty:
         st.warning(f"No authors found for Book ID: {book_id}")
     else:
-        cols = st.columns(len(book_authors), gap="small")
-        for i, (_, row) in enumerate(book_authors.iterrows()):
-            total_amount = int(row.get('total_amount', 0) or 0)
-            amount_paid = float(row.get('amount_paid', 0) or 0)
-            agent = row.get('publishing_consultant', 'Unknown Agent')
+        # --- Grouping Logic ---
+        # 1. Normalize corresponding_agent
+        book_authors['agent_clean'] = book_authors['corresponding_agent'].fillna('').str.strip()
+        
+        # 2. Identify who is an agent for someone else
+        all_agents = set(book_authors[book_authors['agent_clean'] != '']['agent_clean'])
+        
+        # 3. Assign groups
+        # If an author has an agent, they belong to that agent's group.
+        # If an author has no agent but IS an agent for others, they belong to their own name's group.
+        # Otherwise, they are individuals (unique group ID).
+        def assign_group(row):
+            if row['agent_clean'] != '':
+                return row['agent_clean']
+            if row['name'] in all_agents:
+                return row['name']
+            return f"INDV_{row['id']}"
+            
+        book_authors['payment_group'] = book_authors.apply(assign_group, axis=1)
+        
+        # Aggregate summary for cards
+        agent_summary = book_authors.groupby('payment_group').agg({
+            'total_amount': 'sum',
+            'amount_paid': 'sum',
+            'publishing_consultant': 'first',
+            'name': list,
+            'agent_clean': 'first'
+        }).reset_index()
+
+        # Calculate book total paid
+        total_book_paid = float(book_authors['amount_paid'].sum())
+        total_book_expected = float(current_price) if pd.notna(current_price) else 0.0
+        total_book_remaining = total_book_expected - total_book_paid
+
+        # Determine book status color
+        if total_book_paid >= total_book_expected and total_book_expected > 0:
+            book_status_class = "status-paid"
+            book_badge_text = "Fully Paid"
+        elif total_book_paid > 0:
+            book_status_class = "status-partial"
+            book_badge_text = "Partially Paid"
+        else:
+            book_status_class = "status-pending"
+            book_badge_text = "Pending"
+
+        cols = st.columns(len(agent_summary) + 1, gap="small")
+        
+        # Add Book Price Card
+        with cols[0]:
+            html = f"""
+                <div class="payment-box {book_status_class}" style="border-left: 5px solid #4CAF50;">
+                    <div class="author-name">Total Book Price</div>
+                    <div class="payment-text">₹{int(total_book_paid)}/₹{int(total_book_expected)}</div>
+                    <div class="status-badge">{book_badge_text}</div>
+                    <div class="agent-text">Remaining: ₹{int(total_book_remaining)}</div>
+                </div>
+            """
+            st.markdown(html, unsafe_allow_html=True)
+
+        for i, row in agent_summary.iterrows():
+            total_amount = int(row['total_amount'] or 0)
+            amount_paid = float(row['amount_paid'] or 0)
+            agent_consultant = row['publishing_consultant'] or 'Unknown Agent'
+            group_id = row['payment_group']
+            
+            # Formatting for UI
+            if group_id.startswith("INDV_"):
+                display_name = row['name'][0]
+                is_group = False
+            else:
+                display_name = group_id
+                is_group = True
+            
+            member_names = ", ".join(row['name'])
 
             # Determine payment status
             if amount_paid >= total_amount and total_amount > 0:
                 status_class = "status-paid"
-                status_text = f"₹{amount_paid}/₹{total_amount}"
+                status_text = f"₹{int(amount_paid)}/₹{total_amount}"
                 badge_text = "Paid"
             elif amount_paid > 0:
                 status_class = "status-partial"
-                status_text = f"₹{amount_paid}/₹{total_amount}"
+                status_text = f"₹{int(amount_paid)}/₹{total_amount}"
                 badge_text = "Partial"
             else:
                 status_class = "status-pending"
                 status_text = f"₹0/₹{total_amount}" if total_amount > 0 else "N/A"
                 badge_text = "Pending"
 
-            with cols[i]:
+            with cols[i+1]:
+                group_style = "border-top: 3px solid #3b82f6;" if is_group else ""
                 html = f"""
-                    <div class="payment-box {status_class}">
-                        <div class="author-name">{row['name']}</div>
+                    <div class="payment-box {status_class}" style="{group_style}" title="Covers: {member_names}">
+                        <div class="author-name">{display_name}</div>
                         <div class="payment-text">{status_text}</div>
                         <div class="status-badge">{badge_text}</div>
-                        <div class="agent-text">{agent}</div>
+                        <div class="agent-text">{agent_consultant}</div>
                     </div>
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-    glob_col1, glob_col2 = st.columns([2.2,1])
+    # Section 1: Book Price
+    with st.container(border=True):
+        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
+        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
+        with col1:
+            price_str = st.text_input(
+                "₹ Total Book Price",
+                value=str(int(current_price)) if pd.notna(current_price) else "",
+                key=f"price_{book_id}",
+                placeholder="Enter whole amount"
+            )
 
-    with glob_col2:
- 
-        with st.container(border=True):
-            # Section 1: Book Price
-            st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-            col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
-            with col1:
-                price_str = st.text_input(
-                    "Book Price (₹)",
-                    value=str(int(current_price)) if pd.notna(current_price) else "",
-                    key=f"price_{book_id}",
-                    placeholder="Enter whole amount"
-                )
-
-            with col2:
-                if st.button("Save Price", key=f"save_price_{book_id}"):
-                    with st.spinner("Saving..."):
-                        import time
-                        time.sleep(1)
-                        try:
-                            price = int(price_str) if price_str.strip() else None
-                            if price is not None and price < 0:
-                                st.error("Price cannot be negative")
-                                return
-                            with conn.session as s:
-                                s.execute(
-                                    text("UPDATE books SET price = :price WHERE book_id = :book_id"),
-                                    {"price": price, "book_id": book_id}
-                                )
-                                s.commit()
-                            
-                            log_activity(
-                                conn,
-                                st.session_state.user_id,
-                                st.session_state.username,
-                                st.session_state.session_id,
-                                "updated book price",
-                                f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+        with col2:
+            if st.button("Save Price", key=f"save_price_{book_id}"):
+                with st.spinner("Saving..."):
+                    import time
+                    time.sleep(1)
+                    try:
+                        price = int(price_str) if price_str.strip() else None
+                        if price is not None and price < 0:
+                            st.error("Price cannot be negative")
+                            return
+                        with conn.session as s:
+                            s.execute(
+                                text("UPDATE books SET price = :price WHERE book_id = :book_id"),
+                                {"price": price, "book_id": book_id}
                             )
-                            
-                            st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
-                            st.cache_data.clear()
-                        except ValueError:
-                            st.error("Please enter a valid whole number", icon="🚨")
+                            s.commit()
+                        
+                        log_activity(
+                            conn,
+                            st.session_state.user_id,
+                            st.session_state.username,
+                            st.session_state.session_id,
+                            "updated book price",
+                            f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+                        )
+                        
+                        st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
+                        st.cache_data.clear()
+                    except ValueError:
+                        st.error("Please enter a valid whole number", icon="🚨")
     
-    with glob_col1:
-        with st.container(border=True):
-            # Section 2: Author Payments with Tabs
-            st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
-            if not book_authors.empty:
-                total_author_amounts = 0
-                updated_authors = []
+    # Section 2: Author Payments with Tabs
+    with st.container(border=True):
+        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
+        if not book_authors.empty:
+            # Sort groups to keep them consistent
+            groups = book_authors.groupby('payment_group')
+            
+            # Prepare tab names
+            tab_names = []
+            group_keys = []
+            for name, group_df in groups:
+                if name.startswith("INDV_"):
+                    tab_names.append(group_df.iloc[0]['name'])
+                else:
+                    tab_names.append(f"👤 {name} (Agent)")
+                group_keys.append(name)
 
-                # Create tabs for each author
-                tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
-                tabs = st.tabs(tab_titles)
+            tabs = st.tabs(tab_names)
 
-                for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-                    with tab:
-                        ba_id = row['id']
-                        total_amount = int(row.get('total_amount', 0) or 0)
-                        remark_val = row.get('remark', '') or ""
-                        
-                        # Calculate amount paid from the new table
-                        amount_paid = float(row.get('amount_paid', 0) or 0)
-                        
-                        # Payment status
-                        if amount_paid >= total_amount and total_amount > 0:
-                            status = '<span class="payment-status status-paid">Fully Paid</span>'
-                        elif amount_paid > 0:
-                            status = '<span class="payment-status status-partial">Partially Paid</span>'
-                        else:
-                            status = '<span class="payment-status status-pending">Pending</span>'
-                        st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
+            for tab, group_id in zip(tabs, group_keys):
+                group_df = groups.get_group(group_id)
+                with tab:
+                    # Lead author for anchoring payments
+                    if group_id.startswith("INDV_"):
+                        lead_author = group_df.iloc[0]
+                        is_group = False
+                    else:
+                        # Prefer author whose name matches the agent name, else first in group
+                        matches = group_df[group_df['name'] == group_id]
+                        lead_author = matches.iloc[0] if not matches.empty else group_df.iloc[0]
+                        is_group = True
+                    
+                    ba_ids = tuple(group_df['id'].tolist())
+                    anchor_ba_id = lead_author['id']
+                    
+                    # Totals for the group/individual
+                    total_amount_sum = int(group_df['total_amount'].sum() or 0)
+                    total_paid_sum = float(group_df['amount_paid'].sum() or 0)
+                    
+                    # Payment status
+                    if total_paid_sum >= total_amount_sum and total_amount_sum > 0:
+                        status_html = '<span class="payment-status status-paid">Fully Paid</span>'
+                    elif total_paid_sum > 0:
+                        status_html = '<span class="payment-status status-partial">Partially Paid</span>'
+                    else:
+                        status_html = '<span class="payment-status status-pending">Pending</span>'
+                    
+                    st.markdown(f"**Payment Status:** {status_html}", unsafe_allow_html=True)
+                    if is_group:
+                        st.info(f"**Authors Covered by {group_id}:** {', '.join(group_df['name'].tolist())}")
 
-                        # --- Section: Author Metadata ---
-                        col_m1, col_m2 = st.columns([1, 2])
-                        with col_m1:
+                    # --- Section: Individual Author Metadata ---
+                    st.markdown("##### 📝 Manage Amounts")
+                    for _, row in group_df.iterrows():
+                        cur_ba_id = row['id']
+                        mcol1, mcol2, mcol3 = st.columns([1, 2, 0.5])
+                        with mcol1:
                             new_total_str = st.text_input(
-                                "Total Amount Due (₹)",
-                                value=str(total_amount) if total_amount > 0 else "",
-                                key=f"total_{ba_id}",
-                                placeholder="Enter whole amount"
+                                f"₹ Total ({row['name']})",
+                                value=str(int(row['total_amount'] or 0)) if (row['total_amount'] or 0) > 0 else "",
+                                key=f"total_{cur_ba_id}",
+                                placeholder="Amount"
                             )
-                        with col_m2:
+                        with mcol2:
                             new_remark = st.text_input(
-                                "Payment Remark",
-                                value=remark_val,
-                                key=f"remark_{ba_id}",
-                                placeholder="General notes about author payment..."
+                                f"Remark ({row['name']})",
+                                value=row.get('remark', '') or "",
+                                key=f"remark_{cur_ba_id}",
+                                placeholder="Notes..."
                             )
-                        
-                        if st.button("Update Total & Remark", key=f"update_meta_{ba_id}"):
-                            try:
-                                nt = int(new_total_str) if new_total_str.strip() else 0
-                                update_book_authors(ba_id, {"total_amount": nt, "remark": new_remark}, conn)
-                                log_activity(
-                                    conn,
-                                    st.session_state.user_id,
-                                    st.session_state.username,
-                                    st.session_state.session_id,
-                                    "updated author total & remark",
-                                    f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Total: ₹{nt}, Remark: {new_remark}"
-                                )
-                                st.success("Updated successfully!")
-                                st.rerun()
-                            except ValueError:
-                                st.error("Invalid amount")
+                        with mcol3:
+                            st.write("") # Padding
+                            if st.button("Save", key=f"save_meta_{cur_ba_id}", use_container_width=True):
+                                try:
+                                    nt = int(new_total_str) if new_total_str.strip() else 0
+                                    update_book_authors(cur_ba_id, {"total_amount": nt, "remark": new_remark}, conn)
+                                    log_activity(
+                                        conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                                        "updated author total & remark",
+                                        f"Book: {book_id}, Author: {row['name']}, Total: ₹{nt}"
+                                    )
+                                    st.toast(f"Updated {row['name']}!", icon="✔️")
+                                    st.cache_data.clear()
+                                except ValueError:
+                                    st.error("Invalid amount")
 
-                        st.write("---")
+                    st.write("---")
 
-                        # --- Section: Payment History ---
-                        st.markdown("##### 🧾 Payment History")
-                        history_query = "SELECT * FROM author_payments WHERE book_author_id = :ba_id ORDER BY payment_date DESC"
-                        history = conn.query(history_query, params={"ba_id": ba_id}, ttl=0, show_spinner=False)
-                        
-                        if not history.empty:
-                            for _, p in history.iterrows():
-                                hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
-                                with hcol1:
-                                    st.write(f"₹{p['amount']}")
-                                with hcol2:
-                                    st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
-                                with hcol3:
-                                    st.write(f"**{p['payment_mode']}**")
-                                with hcol4:
-                                    st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
-                                with hcol5:
-                                    status = p.get('status', 'Pending')
-                                    status_color = "green" if status == 'Approved' else "red" if status == 'Rejected' else "orange"
-                                    st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
-                                    if status == 'Rejected' and p.get('rejection_reason'):
-                                        st.caption(f"Reason: {p['rejection_reason']}")
-                                with hcol6:
-                                    if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
-                                        with conn.session as s:
-                                            s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
-                                            s.commit()
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{p['amount']} ({p['payment_mode']})")
-                                        st.rerun()
-                        else:
-                            st.info("No individual payment records found.")
-
-                        st.write("---")
-                        
-                        # --- Section: Add New Payment ---
-                        st.markdown("##### ➕ Add New Payment")
-                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
-                        acol1, acol2, acol3 = st.columns([1, 1, 1])
-                        with acol1:
-                            add_amt = st.text_input("Amount (₹)", key=f"add_amt_{ba_id}", placeholder="0")
-                        with acol2:
-                            add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_{ba_id}")
-                        with acol3:
-                            add_mode = st.selectbox("Mode", payment_modes, key=f"add_mode_{ba_id}")
-                        
-                        add_txn = ""
-                        if add_mode in ["UPI", "Bank Deposit"]:
-                            add_txn = st.text_input("Transaction ID", key=f"add_txn_{ba_id}", placeholder="Ref No.")
-                        
-                        add_rem = st.text_input("Payment Specific Note", key=f"add_rem_{ba_id}", placeholder="e.g. Received via WhatsApp")
-
-                        if st.button("➕ Register Payment", key=f"btn_add_{ba_id}", type="primary", use_container_width=True):
-                            try:
-                                amt = float(add_amt) if add_amt.strip() else 0
-                                if amt <= 0:
-                                    st.error("Enter a valid amount")
-                                else:
-                                    # Determine status based on role
-                                    is_admin = st.session_state.get("role") == "admin"
-                                    initial_status = 'Approved' if is_admin else 'Pending'
-                                    
+                    # --- Section: Payment History ---
+                    st.markdown(f"##### 🧾 Payment History {'(Group)' if is_group else ''}")
+                    history_query = "SELECT * FROM author_payments WHERE book_author_id IN :ba_ids ORDER BY payment_date DESC"
+                    history = conn.query(history_query, params={"ba_ids": ba_ids}, ttl=0, show_spinner=False)
+                    
+                    if not history.empty:
+                        for _, p in history.iterrows():
+                            # Find which author this payment was recorded under
+                            pay_ba_row = group_df[group_df['id'] == p['book_author_id']]
+                            pay_author_name = pay_ba_row.iloc[0]['name'] if not pay_ba_row.empty else "Unknown"
+                            
+                            hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
+                            with hcol1:
+                                st.write(f"₹{p['amount']}")
+                                if is_group: st.caption(f"Ref: {pay_author_name}")
+                            with hcol2:
+                                st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
+                            with hcol3:
+                                st.write(f"**{p['payment_mode']}**")
+                            with hcol4:
+                                st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
+                            with hcol5:
+                                p_status = p.get('status', 'Pending')
+                                status_color = "green" if p_status == 'Approved' else "red" if p_status == 'Rejected' else "orange"
+                                st.markdown(f"<span style='color:{status_color}'>{p_status}</span>", unsafe_allow_html=True)
+                            with hcol6:
+                                if st.button(":material/delete:", key=f"del_pay_{p['id']}"):
                                     with conn.session as s:
-                                        s.execute(text("""
-                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
-                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
-                                        """), {
-                                            "ba_id": ba_id, 
-                                            "amt": amt, 
-                                            "date": add_date, 
-                                            "mode": add_mode, 
-                                            "txn": add_txn, 
-                                            "remark": add_rem,
-                                            "status": initial_status,
-                                            "created_by": st.session_state.get("user_id"),
-                                            "requested_by": st.session_state.get("username", "Unknown"),
-                                            "approved_by": st.session_state.get("username") if is_admin else None,
-                                            "approved_at": datetime.now() if is_admin else None
-                                        })
+                                        s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
                                         s.commit()
-                                    
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}, Status: {initial_status}")
-                                    
-                                    if is_admin:
-                                        st.success("Payment registered and approved!")
-                                    else:
-                                        st.success("Payment registered! Waiting for Admin Approval.")
                                     st.rerun()
-                            except ValueError:
-                                st.error("Invalid amount")
+                    else:
+                        st.info("No payment records found.")
 
-                        remaining = total_amount - amount_paid
-                        st.markdown(f"<div style='text-align:right;'><span style='color:green'>**Total Paid:** ₹{amount_paid}</span> | <span style='color:red'>**Remaining:** ₹{remaining}</span></div>", unsafe_allow_html=True)
+                    st.write("---")
+                    
+                    # --- Section: Add New Payment ---
+                    st.markdown(f"##### ➕ Add New Payment {'(Group)' if is_group else ''}")
+                    acol1, acol2, acol3 = st.columns([1, 1, 1])
+                    with acol1:
+                        add_amt = st.text_input("Amount (₹)", key=f"add_amt_ui_{group_id}", placeholder="0")
+                    with acol2:
+                        add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_ui_{group_id}")
+                    with acol3:
+                        add_mode = st.selectbox("Mode", ["Cash", "UPI", "Bank Deposit"], key=f"add_mode_ui_{group_id}")
+                    
+                    add_txn = ""
+                    if add_mode in ["UPI", "Bank Deposit"]:
+                        add_txn = st.text_input("Transaction ID", key=f"add_txn_ui_{group_id}", placeholder="Ref No.")
+                    
+                    add_rem = st.text_input("Note", key=f"add_rem_ui_{group_id}", placeholder="e.g. Received via WhatsApp")
+
+                    if st.button(f"➕ Register {'Group ' if is_group else ''}Payment", key=f"btn_add_ui_{group_id}", type="primary", use_container_width=True):
+                        try:
+                            amt = float(add_amt) if add_amt.strip() else 0
+                            if amt <= 0:
+                                st.error("Enter a valid amount")
+                            else:
+                                is_admin = st.session_state.get("role") == "admin"
+                                initial_status = 'Approved' if is_admin else 'Pending'
+                                with conn.session as s:
+                                    s.execute(text("""
+                                        INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
+                                        VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
+                                    """), {
+                                        "ba_id": anchor_ba_id, "amt": amt, "date": add_date, "mode": add_mode, "txn": add_txn, "remark": add_rem,
+                                        "status": initial_status, "created_by": st.session_state.get("user_id"),
+                                        "requested_by": st.session_state.get("username", "Unknown"),
+                                        "approved_by": st.session_state.get("username") if is_admin else None,
+                                        "approved_at": datetime.now() if is_admin else None
+                                    })
+                                    s.commit()
+                                st.success("Payment registered!")
+                        except ValueError:
+                            st.error("Invalid amount")
+
+                    remaining = total_amount_sum - total_paid_sum
+                    st.markdown(f"<div style='text-align:right; font-size:16px; margin-top:10px;'><b>Total Paid:</b> <span style='color:green'>₹{int(total_paid_sum)}</span> | <b>Remaining:</b> <span style='color:red'>₹{int(remaining)}</span></div>", unsafe_allow_html=True)
 
 
 
@@ -9629,9 +9717,9 @@ with srcol_pending:
     # 7. Pending Checklist Count (Unique Books)
     if is_button_allowed("pending_checklist_dialog"):
 
-        w_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0"
-        c_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0 AND b.is_cancelled = 0"
-        o_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0 AND b.is_cancelled = 0"
+        w_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE ba.welcome_mail_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0"
+        c_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE b.cover_page_complete = 1 AND ba.cover_agreement_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0"
+        o_p_q = "SELECT COUNT(DISTINCT b.book_id) AS count FROM books b JOIN book_authors ba ON b.book_id = ba.book_id WHERE (b.is_publish_only = 1 OR b.is_thesis_to_book = 1 OR b.writing_complete = 1) AND b.proofreading_complete = 1 AND b.formatting_complete = 1 AND b.cover_page_complete = 1 AND ba.digital_book_sent = 0 AND b.is_cancelled = 0 AND b.deliver = 0 AND b.is_archived = 0"
         
         w_b_count = conn.query(w_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
         c_b_count = conn.query(c_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
