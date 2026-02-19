@@ -670,6 +670,40 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             'downtime_percentage': 0
         }
 
+def get_activity_log_for_user(conn, selected_date, username):
+    query = """
+        SELECT timestamp, user_id, username, session_id, action, details 
+        FROM activity_log 
+        WHERE DATE(timestamp) = :selected_date AND username = :username
+        ORDER BY timestamp DESC
+    """
+    params = {"selected_date": selected_date, "username": username}
+    return conn.query(query, params=params, ttl=0)
+
+def calculate_session_duration(session_group):
+    timestamps = pd.to_datetime(session_group['timestamp'])
+    duration = timestamps.max() - timestamps.min()
+    total_seconds = int(duration.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0: return f"{hours}h {minutes}m {seconds}s"
+    elif minutes > 0: return f"{minutes}m {seconds}s"
+    else: return f"{seconds}s"
+
+def get_action_emoji(action):
+    action_emojis = {
+        'logged in': '🔐', 'navigated to page': '🧭', 'changed author type': '✍️',
+        'updated writing details': '📝', 'updated author': '👤', 'updated proofreading details': '🔍',
+        'updated formatting details': '📐', 'updated formatting correction': '📐', 'updated writing correction': '✏️',
+        'updated proofreading correction': '🔎', 'added formatting correction': '➕', 'added proofreading correction': '➕',
+        'updated writing correction details': '✏️', 'added writing correction': '➕', 'updated cover details': '🎨',
+        'edited print edition': '🖨️', 'updated book': '📚', 'toggled checkbox': '☑️',
+        'updated writing corrections': '✏️', 'opened dialog': '💬', 'added print edition': '🖨️',
+        'updated links': '🔗', 'updated sales': '💰', 'searched': '🔎', 'updated book details': '📖',
+        'cleaned old logs': '🧹', 'updated checklist': '✅'
+    }
+    return action_emojis.get(action.lower(), '⚙️')
+
 def display_lifetime_stats(conn, user_id):
     """Enhanced lifetime statistics with icons and styling."""
     stats = get_user_lifetime_stats(conn, user_id)
@@ -1388,6 +1422,168 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
                 st.error(f"Error adding entry: {e}")
 
 
+@st.dialog("Daily Checklist Details", width="large")
+def show_daily_checklist_dialog(conn, user_id, username, selected_date, is_manager=False, is_admin=False):
+    """Dialog for viewing daily checklist details with timestamps and approval actions."""
+    st.subheader(f"✅ Daily Checklist: {username}", anchor=False)
+    st.caption(f"Date: {selected_date.strftime('%B %d, %Y')}")
+
+    submission_df = get_today_submission(conn, user_id, selected_date)
+    if submission_df.empty:
+        st.info("No checklist data for this day.")
+        return
+
+    sub_row = submission_df.iloc[0]
+    sub_id = sub_row['id']
+    status = sub_row['status']
+    start_time = sub_row['start_time']
+    end_time = sub_row['end_time']
+    
+    # Header Metrics (Compact)
+    c1, c2, c3, c4 = st.columns(4)
+    status_map_color = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
+    
+    with c1:
+        render_compact_metric("Status", f"{status_map_color.get(status, '⚪')} {status.upper()}")
+    
+    with c2:
+        start_val = pd.to_datetime(start_time).strftime("%I:%M %p") if start_time else "—"
+        render_compact_metric("Started At", start_val)
+        
+    with c3:
+        sub_val = pd.to_datetime(sub_row['submitted_at']).strftime("%I:%M %p") if sub_row['submitted_at'] else "—"
+        render_compact_metric("Submitted At", sub_val)
+    
+    with c4:
+        total_time_str = "—"
+        if start_time and end_time:
+            duration = end_time - start_time
+            hours, remainder = divmod(duration.total_seconds(), 3600)
+            minutes, _ = divmod(remainder, 60)
+            total_time_str = f"{int(hours)}h {int(minutes)}m"
+        render_compact_metric("Total Duration", total_time_str)
+
+    st.markdown("---")
+    
+    # Detailed Logs with Hierarchy
+    logs_df = get_checklist_logs(conn, sub_id)
+    resp_df = conn.query("SELECT id, task_name, description FROM daily_responsibilities WHERE user_id = :user_id", params={"user_id": user_id}, ttl=0)
+    merged_df = logs_df.merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
+    
+    # --- Progress bar for Manager ---
+    total_tasks = merged_df['responsibility_id'].nunique()
+    latest_per_task = merged_df.groupby('responsibility_id').last()
+    done_count = int(latest_per_task['status'].isin(['approved', 'submitted']).sum())
+    st.progress(done_count / max(total_tasks, 1), text=f"{done_count} of {total_tasks} tasks submitted or approved")
+    
+    st.write("**Tasks Breakdown:**")
+    
+    # Sort for hierarchy
+    merged_df = merged_df.sort_values(['responsibility_id', 'id'])
+
+    status_icons = {"pending": "🕒", "started": "▶️", "completed": "⏹️", "submitted": "📤", "approved": "✅", "rejected": "❌"}
+    status_colors = {
+        "pending": ("#f0f2f6", "#31333f"),
+        "started": ("#fff4e5", "#b35900"),
+        "completed": ("#e6ffed", "#22863a"),
+        "submitted": ("#f5f0ff", "#6f42c1"),
+        "approved": ("#e6ffed", "#22863a"),
+        "rejected": ("#ffeef0", "#d73a49")
+    }
+
+    for resp_id, group in merged_df.groupby('responsibility_id'):
+        with st.container(border=True):
+            st.markdown(f"#### 📋 {group.iloc[0]['task_name']}")
+            
+            # Show description if available
+            if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
+                st.markdown(f"""
+                    <div style='color: #64748b; font-size: 0.8rem; margin-top: -12px; margin-bottom: 12px; margin-left: 28px; font-style: italic; line-height: 1.4;'>
+                        {group.iloc[0]['description']}
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            for i, (idx, row) in enumerate(group.iterrows()):
+                status = row['status']
+                is_latest = (i == len(group) - 1)
+                
+                # Visual distinction for previous attempts
+                bg_style = "background-color: #f8f9fa;" if not is_latest else ""
+                border_style = f"border-left: 5px solid {status_colors.get(status, ('#ccc', '#ccc'))[1]};"
+                st.markdown(f'<div style="{bg_style} {border_style} padding: 15px; border-radius: 8px; margin-bottom: 10px;">', unsafe_allow_html=True)
+                
+                # Title row within the card
+                c_title, c_badge = st.columns([0.7, 0.3])
+                if not is_latest:
+                    c_title.markdown(f"**Attempt #{i+1}**")
+                
+                bg, fg = status_colors.get(status, ("#f0f2f6", "#31333f"))
+                badge_html = f"""
+                    <div style='background-color: {bg}; color: {fg}; padding: 3px 10px; 
+                    border-radius: 12px; font-size: 0.75rem; font-weight: 700; 
+                    display: inline-block; text-transform: uppercase;'>
+                        {status_icons.get(status, '')} {status}
+                    </div>
+                """
+                c_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
+
+                # Metadata row
+                m1, m2, m3, m4 = st.columns(4)
+                
+                def render_meta_dlg(col, label, val):
+                    col.markdown(f"""
+                        <div style='line-height: 1.2;'>
+                            <p style='color: #808495; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; margin-bottom: 2px;'>{label}</p>
+                            <p style='font-size: 0.85rem; font-weight: 500; margin-bottom: 0;'>{val}</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                render_meta_dlg(m1, "Start", pd.to_datetime(row['start_time']).strftime('%I:%M %p') if pd.notna(row['start_time']) else "—")
+                render_meta_dlg(m2, "End", pd.to_datetime(row['end_time']).strftime('%I:%M %p') if pd.notna(row['end_time']) else "—")
+                render_meta_dlg(m3, "Submitted", pd.to_datetime(row['submitted_at']).strftime('%I:%M %p') if pd.notna(row['submitted_at']) else "—")
+                
+                dur_val = "—"
+                if pd.notna(row['end_time']) and pd.notna(row['start_time']):
+                    dur = pd.to_datetime(row['end_time']) - pd.to_datetime(row['start_time'])
+                    dur_val = f"{int(dur.total_seconds()//60)}m"
+                render_meta_dlg(m4, "Duration", dur_val)
+
+                # Actions for Managers
+                if (is_manager or is_admin) and row['status'] == 'submitted' and is_latest:
+                    st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+                    c_app, c_rej = st.columns(2)
+                    if c_app.button("Approve", key=f"app_t_dlg_{row['id']}", type="primary", use_container_width=True):
+                        try:
+                            now = get_ist_time()
+                            with conn.session as s:
+                                s.execute(text("UPDATE daily_checklist_logs SET status = 'approved', reviewed_at = :now WHERE id = :id"),
+                                          {"now": now, "id": row['id']})
+                                s.commit()
+                            st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
+                    
+                    with c_rej.popover("Reject", use_container_width=True):
+                        notes = st.text_area("Reason for Rejection", key=f"rej_notes_dlg_{row['id']}")
+                        if st.button("Confirm Reject", key=f"rej_conf_dlg_{row['id']}", type="secondary", use_container_width=True):
+                            if not notes.strip(): st.warning("Reason is required.")
+                            else:
+                                try:
+                                    now = get_ist_time()
+                                    with conn.session as s:
+                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'rejected', reviewed_at = :now, review_notes = :notes WHERE id = :id"),
+                                                  {"now": now, "notes": notes.strip(), "id": row['id']})
+                                        s.commit()
+                                    st.rerun()
+                                except Exception as e: st.error(f"Error: {e}")
+                
+                # Notes and Feedback
+                if pd.notna(row.get('resubmission_notes')) and row.get('resubmission_notes'):
+                    st.markdown(f"<div style='margin-top: 10px; font-size: 0.85rem;'>📝 <b>Correction:</b> {row['resubmission_notes']}</div>", unsafe_allow_html=True)
+                if pd.notna(row['review_notes']) and row['review_notes']:
+                    st.markdown(f"<div style='margin-top: 5px; font-size: 0.85rem; color: #d73a49;'>💬 <b>Manager Feedback:</b> {row['review_notes']}</div>", unsafe_allow_html=True)
+                
+                st.markdown("</div>", unsafe_allow_html=True)
+
 @st.dialog("Confirm Submission")
 def confirm_submission_dialog(conn, timesheet_id, current_status):
     """Dialog to confirm timesheet submission."""
@@ -1809,6 +2005,13 @@ def render_grouped_timesheet(conn, work_df, start_of_week_date, is_editable=Fals
 def inject_custom_css():
     st.markdown("""
         <style>
+            .tree-item { padding: 10px 14px; font-size: 14px; border-left: 2px solid #1f77b4; margin-left: 20px; margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+            .tree-item:hover { background-color: #f8f9fa; }
+            .session-node { font-size: 14px; font-weight: 600; color: #495057; margin-left: 15px; margin-bottom: 8px; margin-top: 6px; padding: 6px 0; display: flex; align-items: center; gap: 8px; }
+            .session-duration { font-size: 12px; color: #6c757d; font-weight: 400; font-style: italic; }
+            .timestamp { color: #6c757d; font-size: 12px; font-weight: 500; white-space: nowrap; }
+            .action { font-weight: 600; color: #1f77b4; white-space: nowrap; display: flex; align-items: center; gap: 5px; }
+            .details { color: #333; font-size: 13px; word-break: break-word; background-color: #f8f9fa; padding: 5px 10px; border-radius: 4px; flex: 1; min-width: 200px; line-height: 1.5; }
             .day-card {
                 padding: 10px;
                 border-radius: 8px;
@@ -2164,6 +2367,212 @@ def timesheet_history_page(conn):
         st.session_state.show_week_details_for = None
 
 
+def get_daily_submissions_for_manager(conn, manager_id, date):
+    # Only show users who have at least one task that is NOT pending or started
+    query = """
+        SELECT DISTINCT s.*, u.username 
+        FROM daily_checklist_submissions s
+        JOIN userss u ON s.user_id = u.id
+        JOIN daily_checklist_logs l ON s.id = l.submission_id
+        WHERE s.manager_id = :manager_id 
+        AND s.date = :date
+        AND l.status NOT IN ('pending', 'started')
+    """
+    return conn.query(query, params={"manager_id": manager_id, "date": date}, ttl=0)
+
+def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=False):
+    """Renders the daily checklist details directly in the page."""
+    sub_id = sub_row['id']
+    username = sub_row['username']
+    user_id = sub_row['user_id']
+    status = sub_row['status']
+    start_time = sub_row['start_time']
+    end_time = sub_row['end_time']
+
+    status_icons = {"pending": "🕒", "started": "▶️", "completed": "⏹️", "submitted": "📤", "approved": "✅", "rejected": "❌"}
+    status_colors = {
+        "pending": ("#f0f2f6", "#31333f"),
+        "started": ("#fff4e5", "#b35900"),
+        "completed": ("#e6ffed", "#22863a"),
+        "submitted": ("#f5f0ff", "#6f42c1"),
+        "approved": ("#e6ffed", "#22863a"),
+        "rejected": ("#ffeef0", "#d73a49")
+    }
+
+    with st.container(border=True):
+        st.markdown(f"### ✅ {username}'s Checklist")
+
+        # Header Metrics (Compact)
+        c1, c2, c3, c4 = st.columns(4)
+        
+        status_map_color = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
+        
+        with c1:
+            render_compact_metric("Overall Status", f"{status_map_color.get(status, '⚪')} {status.upper()}")
+        
+        with c2:
+            start_val = pd.to_datetime(start_time).strftime("%I:%M %p") if pd.notna(start_time) and start_time else "—"
+            render_compact_metric("Started At", start_val)
+            
+        with c3:
+            sub_val = pd.to_datetime(sub_row['submitted_at']).strftime("%I:%M %p") if pd.notna(sub_row['submitted_at']) and sub_row['submitted_at'] else "—"
+            render_compact_metric("Submitted At", sub_val)
+
+        with c4:
+            total_time_str = "—"
+            if pd.notna(start_time) and pd.notna(end_time) and start_time and end_time:
+                duration = pd.to_datetime(end_time) - pd.to_datetime(start_time)
+                hours, remainder = divmod(duration.total_seconds(), 3600)
+                minutes, _ = divmod(remainder, 60)
+                total_time_str = f"{int(hours)}h {int(minutes)}m"
+            render_compact_metric("Total Duration", total_time_str)
+
+        st.markdown("---")
+
+        # Detailed Logs
+        logs_df = get_checklist_logs(conn, sub_id)
+        resp_df = conn.query("SELECT id, task_name, description FROM daily_responsibilities WHERE user_id = :user_id",
+                                params={"user_id": user_id}, ttl=0)
+        merged_df = (logs_df
+                        .merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
+                        .sort_values(['responsibility_id', 'id']))
+
+        # --- Progress bar for Manager ---
+        total_tasks = merged_df['responsibility_id'].nunique()
+        latest_per_task = merged_df.groupby('responsibility_id').last()
+        done_count = int(latest_per_task['status'].isin(['approved', 'submitted']).sum())
+        st.progress(done_count / max(total_tasks, 1), text=f"{done_count} of {total_tasks} tasks submitted or approved")
+
+        for resp_id, group in merged_df.groupby('responsibility_id'):
+            group = group.reset_index(drop=True)
+            latest = group.iloc[-1]
+            latest_status = latest['status']
+
+            # Identify if there was a previous rejection for this specific task (to show context to manager)
+            prev_rejected_row = None
+            if latest_status in ['pending', 'started', 'completed', 'submitted'] and len(group) > 1:
+                for idx in range(len(group)-2, -1, -1):
+                    if group.iloc[idx]['status'] == 'rejected':
+                        prev_rejected_row = group.iloc[idx]
+                        break
+
+            with st.container(border=True):
+                # Task name + latest status badge
+                col_title, col_badge = st.columns([0.7, 0.3])
+                col_title.markdown(f"#### 📋 {group.iloc[0]['task_name']}")
+                
+                # Show description if available
+                if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
+                    st.markdown(f"""
+                        <div style='color: #64748b; font-size: 0.8rem; margin-top: -10px; margin-bottom: 10px; margin-left: 28px; font-style: italic; line-height: 1.4;'>
+                            {group.iloc[0]['description']}
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                bg, fg = status_colors.get(latest_status, ("#f0f2f6", "#31333f"))
+                badge_html = f"""
+                    <div style='background-color: {bg}; color: {fg}; padding: 4px 12px; 
+                    border-radius: 16px; font-size: 0.8rem; font-weight: 700; 
+                    display: inline-block; text-transform: uppercase; letter-spacing: 0.5px;'>
+                        {status_icons.get(latest_status, '')} {latest_status}
+                    </div>
+                """
+                col_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
+
+                # Metadata Columns
+                m1, m2, m3, m4 = st.columns(4)
+                
+                def render_meta_col_mgr(col, label, val):
+                    col.markdown(f"""
+                        <div style='line-height: 1.2;'>
+                            <p style='color: #808495; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; margin-bottom: 2px;'>{label}</p>
+                            <p style='font-size: 0.95rem; font-weight: 500; margin-bottom: 0;'>{val}</p>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                start_val = pd.to_datetime(latest['start_time']).strftime('%I:%M %p') if pd.notna(latest['start_time']) else "—"
+                end_val = pd.to_datetime(latest['end_time']).strftime('%I:%M %p') if pd.notna(latest['end_time']) else "—"
+                sub_val = pd.to_datetime(latest['submitted_at']).strftime('%I:%M %p') if pd.notna(latest['submitted_at']) else "—"
+                
+                dur_val = "—"
+                if pd.notna(latest['start_time']) and pd.notna(latest['end_time']):
+                    dur = pd.to_datetime(latest['end_time']) - pd.to_datetime(latest['start_time'])
+                    dur_val = f"{int(dur.total_seconds() // 60)}m"
+
+                render_meta_col_mgr(m1, "Start", start_val)
+                render_meta_col_mgr(m2, "End", end_val)
+                render_meta_col_mgr(m3, "Submitted", sub_val)
+                render_meta_col_mgr(m4, "Duration", dur_val)
+
+                # Notes and Feedback for LATEST attempt
+                if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \
+                   (pd.notna(latest.get('review_notes')) and latest.get('review_notes')):
+                    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                
+                # Contextual Info for Manager (show why it was rejected previously)
+                if prev_rejected_row is not None and pd.notna(prev_rejected_row['review_notes']):
+                    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+                    st.warning(f"**History Context:** Task was previously rejected because: {prev_rejected_row['review_notes']}", icon="⚠️")
+                
+                st.write("")
+                # Previous attempts
+                if len(group) > 1:
+                    with st.expander(f"🕓 View Full History ({len(group)})", expanded=True):
+                        for i, (_, hist_row) in enumerate(group.iloc[::-1].iterrows()):
+                            h_idx = len(group) - i
+                            h_bg, h_fg = status_colors.get(hist_row['status'], ("#f0f2f6", "#31333f"))
+                            
+                            c_bg = "#f8f9fa"
+                            if hist_row['status'] == 'approved': c_bg = "#f0fff4"
+                            elif hist_row['status'] == 'rejected': c_bg = "#fff5f5"
+
+                            st.markdown(f"""
+                                <div style='background-color: {c_bg}; padding: 10px; border-radius: 6px; border-left: 3px solid {h_fg}; margin-bottom: 8px;'>
+                                    <div style='display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px;'>
+                                        <b>Attempt #{h_idx}</b>
+                                        <b style='color: {h_fg};'>{hist_row['status'].upper()}</b>
+                                    </div>
+                                    <div style='font-size: 0.8rem; color: #555;'>
+                                        Start: {pd.to_datetime(hist_row['start_time']).strftime('%I:%M %p') if pd.notna(hist_row['start_time']) else '—'} | 
+                                        End: {pd.to_datetime(hist_row['end_time']).strftime('%I:%M %p') if pd.notna(hist_row['end_time']) else '—'} |
+                                        Sub: {pd.to_datetime(hist_row['submitted_at']).strftime('%I:%M %p') if pd.notna(hist_row['submitted_at']) else '—'}
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                            if pd.notna(hist_row.get('resubmission_notes')) and hist_row.get('resubmission_notes'):
+                                st.markdown(f"<div style='margin: -5px 0 8px 12px; font-size: 0.8rem; color: #444;'>📝 <b>Correction:</b> {hist_row['resubmission_notes']}</div>", unsafe_allow_html=True)
+                            if pd.notna(hist_row.get('review_notes')) and hist_row.get('review_notes'):
+                                st.markdown(f"<div style='margin: -5px 0 8px 12px; font-size: 0.8rem; color: #d73a49;'>💬 <b>Feedback:</b> {hist_row['review_notes']}</div>", unsafe_allow_html=True)
+
+                with st.container():
+                    if (is_manager or is_admin) and latest['status'] == 'submitted':
+                        c_app, c_rej = st.columns(2)
+                        if c_app.button("✅ Approve", key=f"app_t_inline_{latest['id']}", type="primary", use_container_width=True):
+                            try:
+                                now = get_ist_time()
+                                with conn.session as s:
+                                    s.execute(text("UPDATE daily_checklist_logs SET status = 'approved', reviewed_at = :now WHERE id = :id"),
+                                                {"now": now, "id": latest['id']})
+                                    s.commit()
+                                st.rerun()
+                            except Exception as e: st.error(f"Error: {e}")
+
+                        with c_rej.popover("❌ Reject", use_container_width=True):
+                            notes = st.text_area("Reason for rejection", key=f"rej_notes_inline_{latest['id']}")
+                            if st.button("Confirm Reject", key=f"rej_conf_inline_{latest['id']}", type="secondary", use_container_width=True):
+                                if not notes.strip():
+                                    st.warning("A reason is required.")
+                                else:
+                                    try:
+                                        now = get_ist_time()
+                                        with conn.session as s:
+                                            s.execute(text("UPDATE daily_checklist_logs SET status = 'rejected', reviewed_at = :now, review_notes = :notes WHERE id = :id"),
+                                                        {"now": now, "notes": notes.strip(), "id": latest['id']})
+                                            s.commit()
+                                        st.rerun()
+                                    except Exception as e: st.error(f"Error: {e}")
+
 def manager_dashboard(conn):
     st.subheader("📋 Manager Dashboard", anchor=False, divider="rainbow")
     
@@ -2172,20 +2581,9 @@ def manager_dashboard(conn):
     if late_submitters:
         st.warning(f"**Pending Submissions:** The following users have not submitted their timesheet from last week: **{', '.join(late_submitters)}**.", icon="🔔")
     
-    # Check for and display submitted timesheets as a temporary toast notification
-    if 'submitted_timesheet_notified' not in st.session_state:
-        st.session_state.submitted_timesheet_notified = False
-    
-    if not st.session_state.submitted_timesheet_notified:
-        submitted_users = get_submitted_timesheet_users(conn, st.session_state.user_id)
-        if submitted_users:
-            st.toast(f"**Submitted Timesheets:** {', '.join(submitted_users)} have submitted their timesheet.", icon="✅", duration="infinite")
-            st.session_state.submitted_timesheet_notified = True
-    
-    st.caption("Select a direct report to view their timesheets.")
     inject_custom_css()
-
     users_df = get_direct_reports(conn, st.session_state.user_id)
+    
     if users_df.empty:
         st.info("No direct reports found.")
         return
@@ -2195,7 +2593,8 @@ def manager_dashboard(conn):
         selected_user = st.selectbox(
             "Select Employee",
             options=users_df['username'],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="mgr_user_select"
         )
     
     if not selected_user:
@@ -2205,116 +2604,162 @@ def manager_dashboard(conn):
     user_info = users_df[users_df['username'] == selected_user].iloc[0]
     selected_user_id = user_info['id']
     
-    available_years, month_by_year = get_available_months_years(conn, selected_user_id)
-    
-    if not available_years:
-        st.info("No timesheet data available for this user.")
-        return
+    tab_weekly, tab_daily, tab_activity = st.tabs(["📅 Weekly Timesheets", "✅ Daily Checklists", "🕵️ User Activity"])
 
-    current_date = datetime.now()
-    default_year = current_date.year if current_date.year in available_years else max(available_years)
-    st.session_state.setdefault('selected_year_mgr', default_year)
+    with tab_daily:
+        selected_date_daily = st.date_input("Select Date", value=get_ist_date(), key="mgr_daily_date")
+        daily_subs = get_daily_submissions_for_manager(conn, st.session_state.user_id, selected_date_daily)
+        
+        # Filter for selected user
+        user_daily_sub = daily_subs[daily_subs['username'] == selected_user]
+        
+        if user_daily_sub.empty:
+            st.info(f"No checklists submitted for {selected_user} on {selected_date_daily.strftime('%B %d, %Y')}")
+        else:
+            for _, row in user_daily_sub.iterrows():
+                render_daily_checklist_inline(conn, row, is_manager=True)
 
-    available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
-    if not available_months_for_year:
-        st.session_state['selected_year_mgr'] = max(available_years)
-        available_months_for_year = month_by_year[max(available_years)]
+    with tab_weekly:
+        # Check for and display submitted timesheets as a temporary toast notification
+        if 'submitted_timesheet_notified' not in st.session_state:
+            st.session_state.submitted_timesheet_notified = False
+        
+        if not st.session_state.submitted_timesheet_notified:
+            submitted_users = get_submitted_timesheet_users(conn, st.session_state.user_id)
+            if submitted_users:
+                st.toast(f"**Submitted Timesheets:** {', '.join(submitted_users)} have submitted their timesheet.", icon="✅", duration="infinite")
+                st.session_state.submitted_timesheet_notified = True
+        
+        st.caption("Select a year and month to view their timesheets.")
+        
+        available_years, month_by_year = get_available_months_years(conn, selected_user_id)
+        
+        if not available_years:
+            st.info("No timesheet data available for this user.")
+        else:
+            current_date = datetime.now()
+            default_year = current_date.year if current_date.year in available_years else max(available_years)
+            st.session_state.setdefault('selected_year_mgr', default_year)
 
-    default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
-    st.session_state.setdefault('selected_month_mgr', default_month)
+            available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
+            if not available_months_for_year:
+                st.session_state['selected_year_mgr'] = max(available_years)
+                available_months_for_year = month_by_year[max(available_years)]
 
-    with c2:
-        st.selectbox(
-            "Year",
-            options=available_years,
-            key="selected_year_mgr",
-            label_visibility="collapsed"
-        )
+            default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
+            st.session_state.setdefault('selected_month_mgr', default_month)
 
-    available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
+            with c2:
+                st.selectbox("Year", options=available_years, key="selected_year_mgr", label_visibility="collapsed")
 
-    with c3:
-        st.selectbox(
-            "Month",
-            options=available_months_for_year,
-            format_func=lambda month: calendar.month_name[month],
-            key="selected_month_mgr",
-            label_visibility="collapsed"
-        )
+            available_months_for_year = month_by_year.get(st.session_state['selected_year_mgr'], [])
 
-    selected_year = st.session_state['selected_year_mgr']
-    selected_month = st.session_state['selected_month_mgr']
+            with c3:
+                st.selectbox(
+                    "Month",
+                    options=available_months_for_year,
+                    format_func=lambda month: calendar.month_name[month],
+                    key="selected_month_mgr",
+                    label_visibility="collapsed"
+                )
 
-    monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month, statuses=['submitted', 'approved', 'rejected'])
-    
-    total_days = calendar.monthrange(selected_year, selected_month)[1]
-    expected_working_days = 0
-    for day in range(1, total_days + 1):
-        date_obj = date(selected_year, selected_month, day)
-        if date_obj.weekday() == 6:
-            continue
-        if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
-            continue
-        expected_working_days += 1
-    expected_working_hours = expected_working_days * 8
+            selected_year = st.session_state['selected_year_mgr']
+            selected_month = st.session_state['selected_month_mgr']
 
-    # Display enhanced monthly stats
-    display_monthly_stats(
-        monthly_summary, selected_year, selected_month,
-        expected_working_days, expected_working_hours
-    )
+            monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month, statuses=['submitted', 'approved', 'rejected'])
+            
+            total_days = calendar.monthrange(selected_year, selected_month)[1]
+            expected_working_days = 0
+            for day in range(1, total_days + 1):
+                date_obj = date(selected_year, selected_month, day)
+                if date_obj.weekday() == 6: continue
+                if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday': continue
+                expected_working_days += 1
+            expected_working_hours = expected_working_days * 8
 
-    with st.expander("Lifetime Statistics", expanded=False):
-        display_lifetime_stats(conn, selected_user_id)
-    
-    days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    header_cols = st.columns([1,1,1,1,1,1,0.8])
-    for i, header in enumerate(days_headers):
-        with header_cols[i]:
-            st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
-    with header_cols[6]:
-        st.markdown(f'<div class="header-card">View</div>', unsafe_allow_html=True)
+            display_monthly_stats(monthly_summary, selected_year, selected_month, expected_working_days, expected_working_hours)
 
-    cal = calendar.Calendar()
-    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
-    status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
-    now_date = datetime.now().date()
-    for week in cal.monthdatescalendar(selected_year, selected_month):
-        cols = st.columns([1,1,1,1,1,1,0.8])
-        for i, day_date in enumerate(week[:-1]):
-            with cols[i]:
-                is_current_month = (day_date.month == selected_month)
-                is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
-                is_future = day_date > datetime.now().date()
-                daily_data = monthly_summary.get(day_date, {})
-                render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
-        with cols[6]:
-            if any(d.month == selected_month for d in week):
-                week_start_date = week[0]
-                # Get status from one day in the week
-                week_days = [d for d in week[:-1] if d in monthly_summary]
-                timesheet_status = None
-                if week_days:
-                    timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
+            with st.expander("Lifetime Statistics", expanded=False):
+                display_lifetime_stats(conn, selected_user_id)
+            
+            days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+            header_cols = st.columns([1,1,1,1,1,1,0.8])
+            for i, header in enumerate(days_headers):
+                with header_cols[i]: st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+            with header_cols[6]: st.markdown(f'<div class="header-card">View</div>', unsafe_allow_html=True)
+
+            cal = calendar.Calendar()
+            status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
+            status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
+            now_date = datetime.now().date()
+            for week in cal.monthdatescalendar(selected_year, selected_month):
+                cols = st.columns([1,1,1,1,1,1,0.8])
+                for i, day_date in enumerate(week[:-1]):
+                    with cols[i]:
+                        is_current_month = (day_date.month == selected_month)
+                        is_weekend = (day_date.weekday() == 6)
+                        is_future = day_date > datetime.now().date()
+                        daily_data = monthly_summary.get(day_date, {})
+                        render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+                with cols[6]:
+                    if any(d.month == selected_month for d in week):
+                        week_start_date = week[0]
+                        week_days = [d for d in week[:-1] if d in monthly_summary]
+                        timesheet_status = monthly_summary[week_days[0]]['timesheet_status'] if week_days else None
+                        is_future_week = week_start_date > now_date
+                        has_timesheet = bool(week_days and timesheet_status)
+                        disabled = is_future_week or not has_timesheet
+                        week_number = week_start_date.isocalendar().week
+                        
+                        if disabled:
+                            button_text = "No Data" if not has_timesheet else "Future"
+                            st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", width='stretch', disabled=True)
+                        else:
+                            status_emoji = status_map.get(timesheet_status, '⚪️')
+                            status_label = status_display.get(timesheet_status, "Unknown")
+                            if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", width='stretch'):
+                                st.session_state.show_week_details_for = week_start_date
+                                st.rerun()
+                        st.caption(f"Week {week_number}", unsafe_allow_html=True)
+
+    with tab_activity:
+        selected_date_act = st.date_input("Select Date", value=get_ist_date(), key="mgr_act_date")
+        df_logs = get_activity_log_for_user(conn, selected_date_act, selected_user)
+        
+        if not df_logs.empty:
+            st.caption(f"📊 {len(df_logs)} activities found")
+            grouped = df_logs.groupby('session_id')
+            # Sort sessions by most recent activity
+            session_groups = df_logs.groupby('session_id').agg({'timestamp': 'max'}).reset_index()
+            session_groups = session_groups.sort_values('timestamp', ascending=False)
+            
+            for idx, session_id in enumerate(session_groups['session_id'], 1):
+                session_group = df_logs[df_logs['session_id'] == session_id].sort_values('timestamp', ascending=False)
+                duration = calculate_session_duration(session_group)
+                activity_count = len(session_group)
+                st.markdown(
+                    f'<div class="session-node">📂 Session {idx} • '
+                    f'{activity_count} {"activity" if activity_count == 1 else "activities"} • '
+                    f'<span class="session-duration">⏱️ {duration}</span></div>', 
+                    unsafe_allow_html=True
+                )
                 
-                is_future_week = week_start_date > now_date
-                has_timesheet = bool(week_days and timesheet_status)
-                disabled = is_future_week or not has_timesheet
-                
-                # Calculate week number
-                week_number = week_start_date.isocalendar().week
-                
-                if disabled:
-                    button_text = "No Data" if not has_timesheet else "Future"
-                    st.button(button_text, key=f"week_btn_mgr_{week_start_date}_disabled", width='stretch', disabled=True)
-                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
-                else:
-                    status_emoji = status_map.get(timesheet_status, '⚪️')
-                    status_label = status_display.get(timesheet_status, "Unknown")
-                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_mgr_{week_start_date}", width='stretch'):
-                        st.session_state.show_week_details_for = week_start_date
-                        st.rerun()
-                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
+                for _, row in session_group.iterrows():
+                    formatted_time = pd.to_datetime(row['timestamp']).strftime('%I:%M %p')
+                    emoji = get_action_emoji(row['action'])
+                    st.markdown(
+                        f"""
+                        <div class="tree-item">
+                            <span class="timestamp">🕐 {formatted_time}</span>
+                            <span class="action">{emoji} {row['action']}</span>
+                            <span class="action-arrow">→</span>
+                            <span class="details">{row['details']}</span>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+        else:
+            st.info(f"No activities found for {selected_user} on {selected_date_act.strftime('%B %d, %Y')}")
 
     if "show_week_details_for" not in st.session_state:
         st.session_state.show_week_details_for = None
@@ -2323,6 +2768,19 @@ def manager_dashboard(conn):
         show_weekly_dialog(conn, selected_user_id, selected_user, st.session_state.show_week_details_for, is_manager=True)
         st.session_state.show_week_details_for = None
 
+
+
+def get_daily_submissions_for_admin(conn, user_id, date):
+    query = """
+        SELECT DISTINCT s.*, u.username 
+        FROM daily_checklist_submissions s
+        JOIN userss u ON s.user_id = u.id
+        JOIN daily_checklist_logs l ON s.id = l.submission_id
+        WHERE s.user_id = :user_id 
+        AND s.date = :date
+        AND l.status IN ('submitted', 'approved', 'rejected')
+    """
+    return conn.query(query, params={"user_id": user_id, "date": date}, ttl=0)
 
 def admin_dashboard(conn):
     st.subheader("👑 Admin Dashboard", anchor=False, divider="rainbow")
@@ -2348,117 +2806,129 @@ def admin_dashboard(conn):
 
     user_info = users_df[users_df['username'] == selected_user].iloc[0]
     selected_user_id = user_info['id']
-    
-    available_years, month_by_year = get_available_months_years(conn, selected_user_id)
-    
-    if not available_years:
-        st.info("No timesheet data available for this user.")
-        return
 
-    current_date = datetime.now()
-    default_year = current_date.year if current_date.year in available_years else max(available_years)
-    st.session_state.setdefault('selected_year', default_year)
+    tab_weekly, tab_daily = st.tabs(["📅 Weekly Timesheets", "✅ Daily Checklists"])
 
-    available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
-    if not available_months_for_year:
-        st.session_state['selected_year'] = max(available_years)
-        available_months_for_year = month_by_year[max(available_years)]
+    with tab_daily:
+        c_date = st.date_input("Select Date", value=get_ist_date(), key="admin_daily_date")
+        daily_subs = get_daily_submissions_for_admin(conn, selected_user_id, c_date)
+        
+        if daily_subs.empty:
+            st.info(f"No checklists found for {selected_user} on {c_date.strftime('%B %d, %Y')}")
+        else:
+            for _, row in daily_subs.iterrows():
+                render_daily_checklist_inline(conn, row, is_admin=True)
 
-    default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
-    st.session_state.setdefault('selected_month', default_month)
+    with tab_weekly:
+        available_years, month_by_year = get_available_months_years(conn, selected_user_id)
+        
+        if not available_years:
+            st.info("No timesheet data available for this user.")
+        else:
+            current_date = datetime.now()
+            default_year = current_date.year if current_date.year in available_years else max(available_years)
+            st.session_state.setdefault('selected_year', default_year)
 
-    with c2:
-        st.selectbox(
-            "Year",
-            options=available_years,
-            key="selected_year",
-            label_visibility="collapsed"
-        )
+            available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
+            if not available_months_for_year:
+                st.session_state['selected_year'] = max(available_years)
+                available_months_for_year = month_by_year[max(available_years)]
 
-    available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
+            default_month = current_date.month if current_date.month in available_months_for_year else max(available_months_for_year)
+            st.session_state.setdefault('selected_month', default_month)
 
-    with c3:
-        st.selectbox(
-            "Month",
-            options=available_months_for_year,
-            format_func=lambda month: calendar.month_name[month],
-            key="selected_month",
-            label_visibility="collapsed"
-        )
+            with c2:
+                st.selectbox(
+                    "Year",
+                    options=available_years,
+                    key="selected_year",
+                    label_visibility="collapsed"
+                )
 
-    selected_year = st.session_state['selected_year']
-    selected_month = st.session_state['selected_month']
+            available_months_for_year = month_by_year.get(st.session_state['selected_year'], [])
 
-    monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month)
-    
-    total_days = calendar.monthrange(selected_year, selected_month)[1]
-    expected_working_days = 0
-    for day in range(1, total_days + 1):
-        date_obj = date(selected_year, selected_month, day)
-        if date_obj.weekday() == 6:
-            continue
-        if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
-            continue
-        expected_working_days += 1
-    expected_working_hours = expected_working_days * 8
+            with c3:
+                st.selectbox(
+                    "Month",
+                    options=available_months_for_year,
+                    format_func=lambda month: calendar.month_name[month],
+                    key="selected_month",
+                    label_visibility="collapsed"
+                )
 
-    # Display enhanced monthly stats
-    display_monthly_stats(
-        monthly_summary, selected_year, selected_month,
-        expected_working_days, expected_working_hours
-    )
+            selected_year = st.session_state['selected_year']
+            selected_month = st.session_state['selected_month']
 
-    with st.expander("Lifetime Statistics", expanded=False):
-        display_lifetime_stats(conn, selected_user_id)
-    
-    days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-    header_cols = st.columns([1,1,1,1,1,1,0.8], vertical_alignment="bottom")
-    for i, header in enumerate(days_headers):
-        with header_cols[i]:
-            st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
-    with header_cols[6]:
-        st.markdown(f'<div class="header-card">Timesheet</div>', unsafe_allow_html=True)
-    
+            monthly_summary = get_monthly_summary(conn, selected_user_id, selected_year, selected_month)
+            
+            total_days = calendar.monthrange(selected_year, selected_month)[1]
+            expected_working_days = 0
+            for day in range(1, total_days + 1):
+                date_obj = date(selected_year, selected_month, day)
+                if date_obj.weekday() == 6:
+                    continue
+                if date_obj in monthly_summary and monthly_summary[date_obj]['status'] == 'holiday':
+                    continue
+                expected_working_days += 1
+            expected_working_hours = expected_working_days * 8
 
-    cal = calendar.Calendar()
-    status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
-    status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
-    now_date = datetime.now().date()
-    for week in cal.monthdatescalendar(selected_year, selected_month):
-        cols = st.columns([1,1,1,1,1,1,0.8])
-        for i, day_date in enumerate(week[:-1]):
-            with cols[i]:
-                is_current_month = (day_date.month == selected_month)
-                is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
-                is_future = day_date > datetime.now().date()
-                daily_data = monthly_summary.get(day_date, {})
-                render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
-        with cols[6]:
-            if any(d.month == selected_month for d in week):
-                week_start_date = week[0]
-                # Get status from one day in the week
-                week_days = [d for d in week[:-1] if d in monthly_summary]
-                timesheet_status = None
-                if week_days:
-                    timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
-                
-                is_future_week = week_start_date > now_date
-                has_timesheet = bool(week_days and timesheet_status)
-                disabled = is_future_week or not has_timesheet
-                # Calculate week number
-                week_number = week_start_date.isocalendar().week
-                
-                if disabled:
-                    button_text = "No Data" if not has_timesheet else "Future"
-                    st.button(button_text, key=f"week_btn_{week_start_date}_disabled", width='stretch', disabled=True)
-                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
-                else:
-                    status_emoji = status_map.get(timesheet_status, '⚪️')
-                    status_label = status_display.get(timesheet_status, "Unknown")
-                    if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", width='stretch'):
-                        st.session_state.show_week_details_for = week_start_date
-                        st.rerun()
-                    st.caption(f"Week {week_number}", unsafe_allow_html=True)
+            # Display enhanced monthly stats
+            display_monthly_stats(
+                monthly_summary, selected_year, selected_month,
+                expected_working_days, expected_working_hours
+            )
+
+            with st.expander("Lifetime Statistics", expanded=False):
+                display_lifetime_stats(conn, selected_user_id)
+            
+            days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+            header_cols = st.columns([1,1,1,1,1,1,0.8], vertical_alignment="bottom")
+            for i, header in enumerate(days_headers):
+                with header_cols[i]:
+                    st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+            with header_cols[6]:
+                st.markdown(f'<div class="header-card">Timesheet</div>', unsafe_allow_html=True)
+            
+
+            cal = calendar.Calendar()
+            status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "draft": "🔵"}
+            status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "draft": "Draft"}
+            now_date = datetime.now().date()
+            for week in cal.monthdatescalendar(selected_year, selected_month):
+                cols = st.columns([1,1,1,1,1,1,0.8])
+                for i, day_date in enumerate(week[:-1]):
+                    with cols[i]:
+                        is_current_month = (day_date.month == selected_month)
+                        is_weekend = (day_date.weekday() == 6)  # Only Sunday is weekend
+                        is_future = day_date > datetime.now().date()
+                        daily_data = monthly_summary.get(day_date, {})
+                        render_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+                with cols[6]:
+                    if any(d.month == selected_month for d in week):
+                        week_start_date = week[0]
+                        # Get status from one day in the week
+                        week_days = [d for d in week[:-1] if d in monthly_summary]
+                        timesheet_status = None
+                        if week_days:
+                            timesheet_status = monthly_summary[week_days[0]]['timesheet_status']
+                        
+                        is_future_week = week_start_date > now_date
+                        has_timesheet = bool(week_days and timesheet_status)
+                        disabled = is_future_week or not has_timesheet
+                        # Calculate week number
+                        week_number = week_start_date.isocalendar().week
+                        
+                        if disabled:
+                            button_text = "No Data" if not has_timesheet else "Future"
+                            st.button(button_text, key=f"week_btn_{week_start_date}_disabled", width='stretch', disabled=True)
+                            st.caption(f"Week {week_number}", unsafe_allow_html=True)
+                        else:
+                            status_emoji = status_map.get(timesheet_status, '⚪️')
+                            status_label = status_display.get(timesheet_status, "Unknown")
+                            if st.button(f"{status_emoji} {status_label}", key=f"week_btn_{week_start_date}", width='stretch'):
+                                st.session_state.show_week_details_for = week_start_date
+                                st.rerun()
+                            st.caption(f"Week {week_number}", unsafe_allow_html=True)
 
     if "show_week_details_for" not in st.session_state:
         st.session_state.show_week_details_for = None
@@ -2468,6 +2938,326 @@ def admin_dashboard(conn):
         st.session_state.show_week_details_for = None
 
 
+
+###################################################################################################################################
+##################################--------------- Daily Checklist ----------------------------########################################
+###################################################################################################################################
+
+def get_daily_responsibilities(conn, user_id):
+    query = "SELECT id, task_name, description FROM daily_responsibilities WHERE user_id = :user_id AND is_active = 1"
+    return conn.query(query, params={"user_id": user_id}, ttl=0)
+
+def get_today_submission(conn, user_id, date):
+    query = "SELECT * FROM daily_checklist_submissions WHERE user_id = :user_id AND date = :date"
+    return conn.query(query, params={"user_id": user_id, "date": date}, ttl=0)
+
+def get_checklist_logs(conn, submission_id):
+    query = "SELECT * FROM daily_checklist_logs WHERE submission_id = :submission_id"
+    return conn.query(query, params={"submission_id": submission_id}, ttl=0)
+
+def daily_checklist_page(conn):
+    st.subheader(f"✅ Daily Responsibilities Checklist", anchor=False, divider="rainbow")
+    user_id = st.session_state.user_id
+    today = get_ist_date()
+    
+    # 1. Get or Create Submission for today (Automatic)
+    submission_df = get_today_submission(conn, user_id, today)
+    
+    if submission_df.empty:
+        responsibilities = get_daily_responsibilities(conn, user_id)
+        if responsibilities.empty:
+            st.info("Please add at least one responsibility in the section below to get started.")
+        else:
+            # Auto-initialize the day's record
+            try:
+                manager_id = None
+                user_info = get_user_details(user_id)
+                if user_info and user_info['report_to']:
+                    mgr_res = conn.query("SELECT id FROM userss WHERE username = :uname", params={"uname": user_info['report_to']}, ttl=3600)
+                    if not mgr_res.empty:
+                        manager_id = int(mgr_res.iloc[0]['id'])
+
+                with conn.session as s:
+                    s.execute(text("INSERT INTO daily_checklist_submissions (user_id, date, manager_id) VALUES (:uid, :date, :mid)"),
+                              {"uid": user_id, "date": today, "mid": manager_id})
+                    s.commit()
+                    
+                    res = s.execute(text("SELECT id FROM daily_checklist_submissions WHERE user_id = :uid AND date = :date"),
+                                    {"uid": user_id, "date": today}).fetchone()
+                    sub_id = res[0]
+                    
+                    for _, row in responsibilities.iterrows():
+                        s.execute(text("INSERT INTO daily_checklist_logs (submission_id, responsibility_id) VALUES (:sid, :rid)"),
+                                  {"sid": sub_id, "rid": row['id']})
+                    s.commit()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error initializing: {e}")
+        
+        return
+
+    # 2. Submission exists
+    sub_row = submission_df.iloc[0]
+    sub_id = sub_row['id']
+
+    # SYNC: Check for newly added master responsibilities that aren't in today's logs yet
+    try:
+        master_resp = get_daily_responsibilities(conn, user_id)
+        existing_logs = get_checklist_logs(conn, sub_id)
+        missing_resp_ids = set(master_resp['id']) - set(existing_logs['responsibility_id'])
+        
+        if missing_resp_ids:
+            with conn.session as s:
+                for rid in missing_resp_ids:
+                    s.execute(text("INSERT INTO daily_checklist_logs (submission_id, responsibility_id) VALUES (:sid, :rid)"),
+                              {"sid": sub_id, "rid": rid})
+                s.commit()
+            st.rerun()
+    except Exception as e:
+        pass
+    
+    # REPAIR: If manager_id is NULL, try to fix it now
+    if pd.isna(sub_row['manager_id']):
+        try:
+            user_info = get_user_details(user_id)
+            if user_info and user_info['report_to']:
+                mgr_res = conn.query("SELECT id FROM userss WHERE username = :uname", params={"uname": user_info['report_to']}, ttl=3600)
+                if not mgr_res.empty:
+                    m_id = int(mgr_res.iloc[0]['id'])
+                    with conn.session as s:
+                        s.execute(text("UPDATE daily_checklist_submissions SET manager_id = :mid WHERE id = :sid"), {"mid": m_id, "sid": sub_id})
+                        s.commit()
+                    st.rerun()
+        except:
+            pass
+    
+    logs_df = get_checklist_logs(conn, sub_id)
+    resp_df = conn.query("SELECT id, task_name, description FROM daily_responsibilities WHERE user_id = :user_id", params={"user_id": user_id}, ttl=0)
+    merged_df = logs_df.merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
+    
+    active_activity = any(merged_df['status'] == 'started')
+    merged_df = merged_df.sort_values(['responsibility_id', 'id'])
+
+    # --- Progress bar ---
+    total_tasks = merged_df['responsibility_id'].nunique()
+    latest_per_task = merged_df.groupby('responsibility_id').last()
+    done_count = int(latest_per_task['status'].isin(['approved', 'submitted']).sum())
+    st.progress(done_count / max(total_tasks, 1), text=f"{done_count} of {total_tasks} tasks submitted or approved")
+
+    if active_activity:
+        st.warning("A task is currently in progress — finish it before starting another.", icon="⚠️")
+
+    st.markdown("")
+
+    status_icons = {"pending": "🕒", "started": "▶️", "completed": "⏹️", "submitted": "📤", "approved": "✅", "rejected": "❌"}
+    status_colors = {
+        "pending": ("#f0f2f6", "#31333f"),
+        "started": ("#fff4e5", "#b35900"),
+        "completed": ("#e6ffed", "#22863a"),
+        "submitted": ("#f5f0ff", "#6f42c1"),
+        "approved": ("#e6ffed", "#22863a"),
+        "rejected": ("#ffeef0", "#d73a49")
+    }
+
+    for resp_id, group in merged_df.groupby('responsibility_id'):
+        group = group.reset_index(drop=True)
+        latest = group.iloc[-1]
+        latest_status = latest['status']
+        
+        # Identify if there was a previous rejection for this specific task
+        prev_rejected_row = None
+        if latest_status in ['pending', 'started', 'completed'] and len(group) > 1:
+            # Look backwards for the most recent rejected row
+            for idx in range(len(group)-2, -1, -1):
+                if group.iloc[idx]['status'] == 'rejected':
+                    prev_rejected_row = group.iloc[idx]
+                    break
+
+        with st.container(border=True):
+            # Task title + current status on same line
+            col_title, col_badge = st.columns([0.7, 0.3])
+            col_title.markdown(f"### 📋 {group.iloc[0]['task_name']}")
+            
+            # Show description if available
+            if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
+                st.markdown(f"""
+                    <div style='color: #64748b; font-size: 0.85rem; margin-top: -10px; margin-bottom: 12px; margin-left: 47px; font-style: italic; line-height: 1.4;'>
+                        {group.iloc[0]['description']}
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            bg, fg = status_colors.get(latest_status, ("#f0f2f6", "#31333f"))
+            badge_html = f"""
+                <div style='background-color: {bg}; color: {fg}; padding: 6px 14px; 
+                border-radius: 20px; font-size: 0.85rem; font-weight: 700; 
+                display: inline-block; text-transform: uppercase; letter-spacing: 0.8px; 
+                border: 1px solid {fg}22;'>
+                    {status_icons.get(latest_status, '')} {latest_status}
+                </div>
+            """
+            col_badge.markdown(f"<div style='text-align:right; padding-top:10px'>{badge_html}</div>", unsafe_allow_html=True)
+
+            # Metadata columns for the latest attempt
+            m1, m2, m3, m4 = st.columns(4)
+            
+            def render_meta_col(col, label, val):
+                col.markdown(f"""
+                    <div style='line-height: 1.2;'>
+                        <p style='color: #808495; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;'>{label}</p>
+                        <p style='font-size: 1rem; font-weight: 500; margin-bottom: 0;'>{val}</p>
+                    </div>
+                """, unsafe_allow_html=True)
+
+            start_val = pd.to_datetime(latest['start_time']).strftime('%I:%M %p') if pd.notna(latest['start_time']) else "—"
+            end_val = pd.to_datetime(latest['end_time']).strftime('%I:%M %p') if pd.notna(latest['end_time']) else "—"
+            sub_val = pd.to_datetime(latest['submitted_at']).strftime('%I:%M %p') if pd.notna(latest['submitted_at']) else "—"
+            
+            duration_val = "—"
+            if pd.notna(latest['start_time']) and pd.notna(latest['end_time']):
+                dur = pd.to_datetime(latest['end_time']) - pd.to_datetime(latest['start_time'])
+                mins = int(dur.total_seconds() // 60)
+                duration_val = f"{mins} mins" if mins < 60 else f"{mins//60}h {mins%60}m"
+
+            render_meta_col(m1, "Start Time", start_val)
+            render_meta_col(m2, "End Time", end_val)
+            render_meta_col(m3, "Submitted At", sub_val)
+            render_meta_col(m4, "Duration", duration_val)
+
+            # Notes and Feedback for LATEST attempt
+            if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \
+               (pd.notna(latest['review_notes']) and latest['review_notes']):
+                st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+            
+            # Contextual Feedback for Retries (Show previous rejection reason if current is a retry)
+            if prev_rejected_row is not None and pd.notna(prev_rejected_row['review_notes']):
+                st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
+                st.warning(f"**Rejection Feedback (Previous Attempt):** {prev_rejected_row['review_notes']}", icon="⚠️")
+
+            st.write("")
+
+            # Previous attempts collapsed
+            if len(group) > 1:
+                with st.expander(f"🕓 View Attempt History ({len(group)})", expanded=True):
+                    # Show all attempts in reverse order for better hierarchy
+                    for i, (_, hist_row) in enumerate(group.iloc[::-1].iterrows()):
+                        h_idx = len(group) - i
+                        is_latest_hist = (i == 0)
+                        h_bg, h_fg = status_colors.get(hist_row['status'], ("#f0f2f6", "#31333f"))
+                        
+                        # Use a clearer background for approved/rejected rows in history
+                        card_bg = "#f8f9fa"
+                        if hist_row['status'] == 'approved': card_bg = "#f0fff4"
+                        elif hist_row['status'] == 'rejected': card_bg = "#fff5f5"
+
+                        st.markdown(f"""
+                            <div style='background-color: {card_bg}; padding: 12px; border-radius: 8px; border-left: 4px solid {h_fg}; margin-bottom: 12px;'>
+                                <div style='display: flex; justify-content: space-between; margin-bottom: 8px;'>
+                                    <span style='font-weight: 700; font-size: 0.95rem;'>Attempt #{h_idx} {"(Latest)" if is_latest_hist else ""}</span>
+                                    <span style='color: {h_fg}; font-weight: 800; font-size: 0.85rem; text-transform: uppercase;'>{hist_row['status']}</span>
+                                </div>
+                                <div style='display: flex; flex-wrap: wrap; gap: 15px; color: #555; font-size: 0.85rem; margin-bottom: 8px;'>
+                                    <span><b>Start:</b> {pd.to_datetime(hist_row['start_time']).strftime('%I:%M %p') if pd.notna(hist_row['start_time']) else '—'}</span>
+                                    <span><b>End:</b> {pd.to_datetime(hist_row['end_time']).strftime('%I:%M %p') if pd.notna(hist_row['end_time']) else '—'}</span>
+                                    <span><b>Submitted:</b> {pd.to_datetime(hist_row['submitted_at']).strftime('%I:%M %p') if pd.notna(hist_row['submitted_at']) else '—'}</span>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Notes placed inside the history context but after the main block
+                        if pd.notna(hist_row.get('resubmission_notes')) and hist_row.get('resubmission_notes'):
+                            st.markdown(f"<div style='margin: -8px 0 10px 15px; padding: 5px 10px; border-left: 2px solid #6f42c1; font-size: 0.85rem; color: #444;'>📝 <b>Correction:</b> {hist_row['resubmission_notes']}</div>", unsafe_allow_html=True)
+                        if pd.notna(hist_row['review_notes']) and hist_row['review_notes']:
+                            st.markdown(f"<div style='margin: -8px 0 10px 15px; padding: 5px 10px; border-left: 2px solid #d73a49; font-size: 0.85rem; color: #b31d28;'>💬 <b>Feedback:</b> {hist_row['review_notes']}</div>", unsafe_allow_html=True)
+
+            # Latest attempt: actions
+            st.markdown("<hr style='margin: 15px 0; opacity: 0.1;'>", unsafe_allow_html=True)
+            col_actions = st.columns([1])[0] # Use full width for actions
+
+            with col_actions:
+                row = latest
+                status = latest_status
+                attempt_index = len(group) - 1
+
+                if status == 'pending':
+                    if st.button("▶️ Start Task", key=f"start_{row['id']}", disabled=active_activity,
+                                 help="Finish the active task before starting another." if active_activity else None,
+                                 use_container_width=True, type="secondary"):
+                        try:
+                            now = get_ist_time()
+                            with conn.session as s:
+                                s.execute(text("UPDATE daily_checklist_logs SET status = 'started', start_time = :now WHERE id = :id"),
+                                          {"now": now, "id": row['id']})
+                                if pd.isna(sub_row['start_time']):
+                                    s.execute(text("UPDATE daily_checklist_submissions SET start_time = :now WHERE id = :id"),
+                                              {"now": now, "id": sub_id})
+                                s.commit()
+                            st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
+                
+                elif status == 'started':
+                    if st.button("⏹️ End Task", key=f"end_{row['id']}", type="primary", use_container_width=True):
+                        try:
+                            now = get_ist_time()
+                            with conn.session as s:
+                                s.execute(text("UPDATE daily_checklist_logs SET status = 'completed', end_time = :now WHERE id = :id"),
+                                          {"now": now, "id": row['id']})
+                                s.execute(text("UPDATE daily_checklist_submissions SET end_time = :now WHERE id = :id"),
+                                          {"now": now, "id": sub_id})
+                                s.commit()
+                            st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
+                
+                elif status == 'completed':
+                    is_correction_attempt = (attempt_index > 0 or row.get('is_correction', False))
+                    
+                    if is_correction_attempt:
+                        with st.popover("📤 Submit Correction", use_container_width=True):
+                            resub_note = st.text_area("What did you correct?", placeholder="Describe what was fixed…", key=f"resub_note_submit_{row['id']}")
+                            if st.button("Confirm Submission", key=f"conf_sub_{row['id']}", type="primary", use_container_width=True):
+                                if not resub_note.strip():
+                                    st.warning("Please describe what was corrected.")
+                                else:
+                                    try:
+                                        now = get_ist_time()
+                                        with conn.session as s:
+                                            s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', submitted_at = :now, resubmission_notes = :note WHERE id = :id"),
+                                                      {"now": now, "note": resub_note.strip(), "id": row['id']})
+                                            s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                                      {"now": now, "id": sub_id})
+                                            s.commit()
+                                        st.rerun()
+                                    except Exception as e: st.error(f"Error: {e}")
+                    else:
+                        if st.button("📤 Submit for Review", key=f"submit_{row['id']}", type="primary", use_container_width=True):
+                            try:
+                                now = get_ist_time()
+                                with conn.session as s:
+                                    s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                              {"now": now, "id": row['id']})
+                                    s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                              {"now": now, "id": sub_id})
+                                    s.commit()
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Error: {e}")
+                
+                elif status == 'submitted':
+                    st.button("⌛ Awaiting Manager Review", key=f"wait_{row['id']}", disabled=True, use_container_width=True)
+                
+                elif status == 'approved':
+                    st.success("✅ Task Approved", icon="🎉")
+                
+                elif status == 'rejected':
+                    if st.button("↺ Retry / Correct Task", key=f"retry_btn_{row['id']}", type="primary", use_container_width=True):
+                        try:
+                            with conn.session as s:
+                                s.execute(text("""
+                                    INSERT INTO daily_checklist_logs (submission_id, responsibility_id, status, is_correction)
+                                    VALUES (:sid, :rid, 'pending', 1)
+                                """), {"sid": sub_id, "rid": row['responsibility_id']})
+                                s.commit()
+                            st.rerun()
+                        except Exception as e: st.error(f"Error: {e}")
 
 ###################################################################################################################################
 ##################################--------------- Main----------------------------########################################
@@ -2491,7 +3281,7 @@ def main():
         pages = []
         # CHANGED: Admins do not see personal timesheet pages.
         if st.session_state.role != 'admin':
-            pages.extend(["My Timesheet", "Timesheet History"])
+            pages.extend(["Daily Checklist", "My Timesheet", "Timesheet History"])
 
         # Add Manager Dashboard if user is a reporting manager (applies to admins too).
         if st.session_state.level in ['reporting_manager', 'both']:
@@ -2535,6 +3325,7 @@ def main():
         st.link_button("💬 Message", message_url, width='stretch', help= "Connect with Team")
 
     page_map = {
+        "Daily Checklist": daily_checklist_page,
         "My Timesheet": my_timesheet_page,
         "Timesheet History": timesheet_history_page,
         "Manager Dashboard": manager_dashboard,

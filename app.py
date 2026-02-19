@@ -1366,10 +1366,10 @@ def settings_dialog(conn):
             FULL_ACCESS_APPS = ["IJISEM", "Tasks", "Sales"]
             LEVEL_SUPPORT_APPS = ["IJISEM", "Tasks", "Operations", "Sales"]
 
-            # Create 3 tabs
+            # Create 4 tabs
             col_nav, col_content = st.columns([0.5, 5])
             with col_nav:
-                selected_user_tab = st.radio("Manage Users", ["Users", "Edit User", "Add User"], label_visibility="collapsed")
+                selected_user_tab = st.radio("Manage Users", ["Users", "Edit User", "Add User", "Responsibilities"], label_visibility="collapsed")
 
             with col_content:
                 if selected_user_tab == "Users":
@@ -1970,6 +1970,86 @@ def settings_dialog(conn):
                                                 st.error(f"❌ Duplicate entry: {str(e)}")
                                         else:
                                             st.error(f"❌ Database error: {str(e)}")
+
+                elif selected_user_tab == "Responsibilities":
+                    # Ensure description column exists
+                    try:
+                        with conn.session as s:
+                            s.execute(text("SELECT description FROM daily_responsibilities LIMIT 1"))
+                    except Exception:
+                        try:
+                            with conn.session as s:
+                                s.execute(text("ALTER TABLE daily_responsibilities ADD COLUMN description TEXT"))
+                                s.commit()
+                        except Exception as e:
+                            st.error(f"Error updating daily_responsibilities schema: {e}")
+
+                    col1, col2 = st.columns([5,1])
+                    with col1:
+                        st.write("### 📋 Manage Daily Responsibilities")
+                    with col2:
+                        if st.button(":material/refresh: Refresh", key="refresh_price", type="tertiary"):
+                            st.cache_data.clear()
+                    if not users:
+                        st.error("❌ No users found in database.")
+                    else:
+                        with st.container(border=True):
+                            user_dict = {f"{user.username} (ID: {user.id})": user for user in users if user.role != 'admin'}
+                            if not user_dict:
+                                st.info("No non-admin users found to assign responsibilities.")
+                            else:
+                                selected_user_key = st.selectbox(
+                                    "Select Employee", 
+                                    options=list(user_dict.keys()), 
+                                    key="resp_user_select"
+                                )
+                                target_user = user_dict[selected_user_key]
+                                target_user_id = target_user.id
+
+                                # Fetch current responsibilities
+                                try:
+                                    resp_df = conn.query("SELECT id, task_name, description FROM daily_responsibilities WHERE user_id = :uid AND is_active = 1", params={"uid": target_user_id}, ttl=0)
+                                    
+                                    st.write(f"Current Responsibilities for **{target_user.username}**:")
+                                    if resp_df.empty:
+                                        st.info("No responsibilities assigned yet.")
+                                    else:
+                                        for _, r in resp_df.iterrows():
+                                            col_name, col_del = st.columns([0.85, 0.15])
+                                            col_name.write(f"**- {r['task_name']}**")
+                                            if r.get('description'):
+                                                col_name.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;*<small>{r['description']}</small>*", unsafe_allow_html=True)
+                                            if col_del.button("🗑️", key=f"del_resp_{r['id']}", help="Delete Responsibility"):
+                                                try:
+                                                    with conn.session as s:
+                                                        s.execute(text("UPDATE daily_responsibilities SET is_active = 0 WHERE id = :id"), {"id": r['id']})
+                                                        s.commit()
+                                                    st.toast(f"Responsibility '{r['task_name']}' removed.")
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Error deleting: {e}")
+                                    
+                                    st.write("---")
+                                    col_t, col_d = st.columns([1, 1])
+                                    new_task = col_t.text_input("Add New Responsibility", key="new_resp_input", placeholder="e.g., Check Amazon Orders")
+                                    new_desc = col_d.text_input("Description / Guidelines", key="new_resp_desc", placeholder="e.g., Verify all pending orders by 10 AM")
+                                    
+                                    if st.button("➕ Add Responsibility", key="add_resp_btn", type="primary", use_container_width=True):
+                                        if new_task.strip():
+                                            try:
+                                                with conn.session as s:
+                                                    s.execute(text("INSERT INTO daily_responsibilities (user_id, task_name, description) VALUES (:uid, :name, :desc)"),
+                                                              {"uid": target_user_id, "name": new_task.strip(), "desc": new_desc.strip() if new_desc else None})
+                                                    s.commit()
+                                                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added responsibility", f"Assigned '{new_task.strip()}' to {target_user.username}")
+                                                st.success("✅ Responsibility added!")
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Error adding: {e}")
+                                        else:
+                                            st.warning("Please enter a task name.")
+                                except Exception as e:
+                                    st.error(f"Error fetching responsibilities: {e}")
 
         
 
