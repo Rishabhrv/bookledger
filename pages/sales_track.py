@@ -645,7 +645,8 @@ base_query = """
         so.id, so.book_id, b.title, b.book_mrp, so.source, so.quantity, so.order_date, so.order_id, 
         so.customer_details, so.order_status, so.status_date,
         so.customer_name, so.customer_phone, so.shipping_address,
-        so.corresponding_person, so.organization, so.city, so.discounted_price
+        so.corresponding_person, so.organization, so.city, so.discounted_price,
+        so.created_at
     FROM sales_orders so
     LEFT JOIN books b ON so.book_id = b.book_id
     WHERE 1=1
@@ -817,8 +818,8 @@ if not orders_df.empty:
         <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@1" rel="stylesheet" />
     """, unsafe_allow_html=True)
 
-    col_sizes = [0.8, 2.5, 0.8, 0.8, 0.5, 0.8, 1.0, 1, 1]
-    headers = ["Order ID", "Book", "Date", "Source", "Qty", "Price", "City", "Status", "Action"]
+    col_sizes = [1, 2.8, 1.2, 0.6, 0.3, 0.8, 1.0, 1, 1]
+    headers = ["Order ID", "Book", "Order Date", "Source", "Qty", "Price", "City", "Status", "Action"]
 
     # Table Header
     header_cols = st.columns(col_sizes)
@@ -843,7 +844,7 @@ if not orders_df.empty:
                 cols = st.columns(col_sizes, vertical_alignment="center")
                 
                 # Order ID
-                cols[0].markdown(f"<span style='color:#888; font-weight:500'>#{row['order_id'] or '-'}</span>", unsafe_allow_html=True)
+                cols[0].markdown(f"<span style='color:#888; font-size:11px; font-weight:600'>#{row['order_id'] or '-'}</span>", unsafe_allow_html=True)
                 
                 # Book & Address
                 with cols[1]:
@@ -854,8 +855,11 @@ if not orders_df.empty:
                         {addr_suffix}
                     """, unsafe_allow_html=True)
                 
-                # Order Date
-                cols[2].write(row['order_date'].strftime('%d %b %Y'))
+                # Order Date & Recorded At
+                with cols[2]:
+                    st.write(row['order_date'].strftime('%d %b %Y'))
+                    entry_time = row['created_at'].strftime('%H:%M, %d %b') if pd.notna(row['created_at']) else "-"
+                    st.markdown(f"<div style='color:#888; font-size:11px; margin-top:-10px;'>⏱️ Recorded: {entry_time}</div>", unsafe_allow_html=True)
 
                 # Source
                 badge_class = f"badge-{row['source'].lower()}"

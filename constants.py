@@ -4,6 +4,7 @@ from sqlalchemy import text
 import streamlit as st
 from datetime import datetime
 import pytz
+import json
 
 ACCESS_TO_BUTTON = {
     # Loop buttons (table)
@@ -365,3 +366,41 @@ def check_ready_to_print(book_id, conn):
     """
     result = conn.query(query, params={"book_id": book_id}, ttl=0, show_spinner=False)
     return result.iloc[0]['ready_to_print'] == 1
+
+
+
+def fetch_tags(conn):
+
+    try:
+        # Fetch and process tags
+        with conn.session as s:
+            tag_query = text("SELECT tags FROM books WHERE tags IS NOT NULL AND tags != ''")
+            all_tags = s.execute(tag_query).fetchall()
+            
+            unique_tags = set()
+            for row in all_tags[:5]:
+                if row[0] and isinstance(row[0], str):
+                    try:
+                        tags = json.loads(row[0])  # Parse JSON array
+                        unique_tags.update(tags)
+                    except json.JSONDecodeError:
+                        st.error(f"Invalid JSON in tags: {row[0]} -> Skipped")
+                else:
+                    st.error(f"Raw tag: {row[0]} -> Skipped (invalid or empty)")
+            
+            # Collect unique tags from all rows
+            for row in all_tags:
+                if row[0] and isinstance(row[0], str):
+                    try:
+                        tags = json.loads(row[0])
+                        unique_tags.update(tags)
+                    except json.JSONDecodeError:
+                        st.write(f"Invalid JSON in tags: {row[0]} -> Skipped")
+            
+            # Convert to sorted list
+            sorted_tags = sorted(unique_tags)
+
+            return sorted_tags
+    except Exception as e:
+        st.error(f"Error fetching tags: {e}")
+        return []

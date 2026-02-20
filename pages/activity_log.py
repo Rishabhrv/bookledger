@@ -241,6 +241,7 @@ def get_daily_summary(selected_date):
     summary = {
         "💰 Payments": len(df[df['action'] == 'registered payment']),
         "🛠️ Corrections": len(df[df['action'] == 'added correction']),
+        "📧 ISBN Emails": len(df[df['action'] == 'sent isbn email']),
         "📧 Welcome Mail": len(df[(df['action'] == 'sent welcome email') | 
                                 (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))]),
         "📥 Author Details": len(df[df['details'].str.contains("Author Details Received changed to 'True'", na=False)]),
@@ -259,6 +260,7 @@ def get_metric_details(label, selected_date):
     conditions = {
         "💰 Payments": "action = 'registered payment'",
         "🛠️ Corrections": "action = 'added correction'",
+        "📧 ISBN Emails": "action = 'sent isbn email'",
         "📧 Welcome Mail": "(action = 'sent welcome email' OR (action = 'updated checklist' AND details LIKE '%Welcome Mail Sent changed to ''True''%'))",
         "📥 Author Details": "details LIKE '%Author Details Received changed to ''True''%'",
         "📷 Author Photo": "details LIKE '%Photo Received changed to ''True''%'",
@@ -399,7 +401,8 @@ def get_action_emoji(action):
         'searched': '🔎',
         'updated book details': '📖',
         'cleaned old logs': '🧹',
-        'updated checklist': '✅'
+        'updated checklist': '✅',
+        'sent isbn email': '📧'
     }
     return action_emojis.get(action.lower(), '⚙️')
 
