@@ -2883,8 +2883,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                                         "surrendered isbn", f"Book ID: {book_id}, ISBN: {current_isbn} has been surrendered and author progress reset."
                                     )
                                     st.success("ISBN Surrendered Successfully! The dialog will now refresh.")
-                                    time.sleep(1)
-                                    st.rerun()
+                                    time.sleep(4)
+                                    st.toast("ISBN surrendered and author progress reset successfully!", icon="✔️", duration="long")
                                 except Exception as e:
                                     st.error(f"Error surrendering ISBN: {e}")
                 else:
@@ -2929,7 +2929,8 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                             sent_time = author['isbn_sent_at'].strftime('%d %b, %H:%M') if isinstance(author['isbn_sent_at'], (datetime, date)) else str(author['isbn_sent_at'])
                             st.markdown(f"<div style='color: #16a34a; font-size: 0.8em; font-weight: bold;'>✅ {sent_time}</div>", unsafe_allow_html=True)
                         else:
-                            if st.checkbox("Send Email", key=f"email_isbn_{author['id']}_{book_id}", disabled=not can_send):
+                            #disabled=not can_send
+                            if st.checkbox("Send Email", key=f"email_isbn_{author['id']}_{book_id}", disabled=True):
                                 selected_authors_to_email.append(author)
 
         

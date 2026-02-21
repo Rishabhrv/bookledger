@@ -722,14 +722,22 @@ def get_user_lifetime_stats(conn, user_id: int) -> dict:
             'downtime_percentage': 0
         }
 
-def get_activity_log_for_user(conn, selected_date, username):
+def get_activity_log_for_user(conn, selected_date, username, allowed_actions=None):
     query = """
         SELECT timestamp, user_id, username, session_id, action, details 
         FROM activity_log 
-        WHERE DATE(timestamp) = :selected_date AND username = :username
-        ORDER BY timestamp DESC
+        WHERE DATE(timestamp) = :selected_date AND LOWER(username) = LOWER(:username)
     """
     params = {"selected_date": selected_date, "username": username}
+    
+    if allowed_actions:
+        # Robust expansion for IN clause with case-insensitivity
+        action_placeholders = [f":action_{i}" for i in range(len(allowed_actions))]
+        query += f" AND LOWER(action) IN ({', '.join(action_placeholders)})"
+        for i, action in enumerate(allowed_actions):
+            params[f"action_{i}"] = action.strip().lower()
+        
+    query += " ORDER BY timestamp DESC"
     return conn.query(query, params=params, ttl=0)
 
 def calculate_session_duration(session_group):
@@ -952,14 +960,17 @@ def get_work_for_week(conn, user_id: int, week_start_date: date) -> pd.DataFrame
 @st.cache_data(ttl=300)
 def get_direct_reports(_conn, manager_id: int) -> pd.DataFrame:
     try:
+        # Include users where manager is assigned explicitly OR via user_app_access default
         query = """
             SELECT DISTINCT u.id, u.username FROM userss u
             LEFT JOIN timesheets t ON u.id = t.user_id
             LEFT JOIN daily_responsibilities dr ON u.id = dr.user_id
             LEFT JOIN daily_checklist_submissions dcs ON u.id = dcs.user_id
+            LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
             WHERE t.manager_id = :manager_id 
                OR dr.manager_id = :manager_id
                OR dcs.manager_id = :manager_id
+               OR (uaa.report_to = :manager_id AND uaa.app = 'tasks')
             ORDER BY u.username;
         """
         params = {"manager_id": manager_id}
@@ -1644,7 +1655,7 @@ def show_daily_checklist_dialog(conn, user_id, username, selected_date, is_manag
                 c_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
 
                 # Metadata row
-                m1, m2, m3, m4 = st.columns(4)
+                m1, m2, m3, m4, m5 = st.columns(5)
                 
                 def render_meta_dlg(col, label, val):
                     col.markdown(f"""
@@ -1654,15 +1665,16 @@ def show_daily_checklist_dialog(conn, user_id, username, selected_date, is_manag
                         </div>
                     """, unsafe_allow_html=True)
 
-                render_meta_dlg(m1, "Start", pd.to_datetime(row['start_time']).strftime('%I:%M %p') if pd.notna(row['start_time']) else "—")
-                render_meta_dlg(m2, "End", pd.to_datetime(row['end_time']).strftime('%I:%M %p') if pd.notna(row['end_time']) else "—")
-                render_meta_dlg(m3, "Submitted", pd.to_datetime(row['submitted_at']).strftime('%I:%M %p') if pd.notna(row['submitted_at']) else "—")
+                render_meta_dlg(m1, "Reporting To", row.get('manager_name') if pd.notna(row.get('manager_name')) else "Default")
+                render_meta_dlg(m2, "Start", pd.to_datetime(row['start_time']).strftime('%I:%M %p') if pd.notna(row['start_time']) else "—")
+                render_meta_dlg(m3, "End", pd.to_datetime(row['end_time']).strftime('%I:%M %p') if pd.notna(row['end_time']) else "—")
+                render_meta_dlg(m4, "Submitted", pd.to_datetime(row['submitted_at']).strftime('%I:%M %p') if pd.notna(row['submitted_at']) else "—")
                 
                 dur_val = "—"
                 if pd.notna(row['end_time']) and pd.notna(row['start_time']):
                     dur = pd.to_datetime(row['end_time']) - pd.to_datetime(row['start_time'])
                     dur_val = f"{int(dur.total_seconds()//60)}m"
-                render_meta_dlg(m4, "Duration", dur_val)
+                render_meta_dlg(m5, "Duration", dur_val)
 
                 # If is_manager is True, it means we are in a context where oversight is already granted (like Dashboard)
                 if (is_this_task_manager or is_admin) and row['status'] == 'submitted' and is_latest:
@@ -2567,7 +2579,7 @@ def get_daily_submissions_for_manager(conn, manager_id, date):
     """
     return conn.query(query, params={"manager_id": manager_id, "date": date}, ttl=0)
 
-def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=False):
+def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=False, key_suffix=""):
     """Renders the daily checklist details directly in the page."""
     sub_id = sub_row['id']
     username = sub_row['username']
@@ -2688,7 +2700,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                 col_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
 
                 # Metadata Columns
-                m1, m2, m3, m4 = st.columns(4)
+                m1, m2, m3, m4, m5 = st.columns(5)
                 
                 def render_meta_col_mgr(col, label, val):
                     col.markdown(f"""
@@ -2707,10 +2719,11 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                     dur = pd.to_datetime(latest['end_time']) - pd.to_datetime(latest['start_time'])
                     dur_val = f"{int(dur.total_seconds() // 60)}m"
 
-                render_meta_col_mgr(m1, "Start", start_val)
-                render_meta_col_mgr(m2, "End", end_val)
-                render_meta_col_mgr(m3, "Submitted", sub_val)
-                render_meta_col_mgr(m4, "Duration", dur_val)
+                render_meta_col_mgr(m1, "Reporting To", latest.get('manager_name') if pd.notna(latest.get('manager_name')) else "Default")
+                render_meta_col_mgr(m2, "Start", start_val)
+                render_meta_col_mgr(m3, "End", end_val)
+                render_meta_col_mgr(m4, "Submitted", sub_val)
+                render_meta_col_mgr(m5, "Duration", dur_val)
 
                 # Notes and Feedback for LATEST attempt
                 if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \
@@ -2757,7 +2770,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                 with st.container():
                     if (is_this_task_manager or is_admin) and latest['status'] == 'submitted':
                         c_app, c_rej = st.columns(2)
-                        if c_app.button("✅ Approve", key=f"app_t_inline_{latest['id']}", type="primary", use_container_width=True):
+                        if c_app.button("✅ Approve", key=f"app_t_inline_{latest['id']}{key_suffix}", type="primary", use_container_width=True):
                             try:
                                 now = get_ist_time()
                                 with conn.session as s:
@@ -2780,8 +2793,8 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                             except Exception as e: st.error(f"Error: {e}")
         
                         with c_rej.popover("❌ Reject", use_container_width=True):
-                            notes = st.text_area("Reason for rejection", key=f"rej_notes_inline_{latest['id']}")
-                            if st.button("Confirm Reject", key=f"rej_conf_inline_{latest['id']}", type="secondary", use_container_width=True):
+                            notes = st.text_area("Reason for rejection", key=f"rej_notes_inline_{latest['id']}{key_suffix}")
+                            if st.button("Confirm Reject", key=f"rej_conf_inline_{latest['id']}{key_suffix}", type="secondary", use_container_width=True):
                                 if not notes.strip():
                                     st.warning("A reason is required.")
                                 else:
@@ -2837,9 +2850,9 @@ def manager_dashboard(conn):
     user_info = users_df[users_df['username'] == selected_user].iloc[0]
     selected_user_id = user_info['id']
     
-    tab_weekly, tab_daily, tab_activity = st.tabs(["📅 Weekly Timesheets", "✅ Daily Checklists", "🕵️ User Activity"])
+    tab_weekly, tab_pending, tab_history, tab_activity = st.tabs(["📅 Weekly Timesheets", "⏳ Pending Approvals", "📊 Checklist History", "🕵️ User Activity"])
 
-    with tab_daily:
+    with tab_pending:
         # Section 1: All Pending Approvals (Across all dates)
         st.write("### ⏳ Pending Approvals (All Dates)")
         pending_subs = get_all_pending_daily_submissions_for_manager(conn, st.session_state.user_id)
@@ -2853,9 +2866,8 @@ def manager_dashboard(conn):
             for _, row in user_pending.iterrows():
                 st.write(f"📅 **Date: {row['date'].strftime('%B %d, %Y')}**")
                 render_daily_checklist_inline(conn, row, is_manager=True, is_admin=(st.session_state.role == 'admin'))
-        
-        st.write("---")
-        
+
+    with tab_history:
         # Section 2: Checklist Calendar
         st.write("### 📅 Checklist Calendar")
         
@@ -2900,11 +2912,6 @@ def manager_dashboard(conn):
                     is_future = day_date > datetime.now().date()
                     daily_data = daily_summary.get(day_date, {})
                     render_checklist_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
-                    
-                    # Direct Detail Access (1-Click) for Manager
-                    if is_current_month and not is_future and daily_data:
-                        if st.button("👁️ Details", key=f"mgr_qview_{day_date}", use_container_width=True):
-                            show_daily_checklist_dialog(conn, selected_user_id, selected_user, day_date, is_manager=True)
 
             with cols[6]:
                 if any(d.month == sel_m for d in week):
@@ -3030,8 +3037,42 @@ def manager_dashboard(conn):
                         st.caption(f"Week {week_number}", unsafe_allow_html=True)
 
     with tab_activity:
+        # Get allowed actions for this manager for the selected user
+        allowed_actions = []
+        is_admin_user = st.session_state.get("role") == 'admin'
+        curr_user_id = st.session_state.get("user_id")
+        
+        if not is_admin_user:
+            try:
+                # Ensure IDs are integers for robust database matching
+                uid_int = int(selected_user_id)
+                mid_int = int(curr_user_id)
+                
+                resp_logs_df = conn.query("""
+                    SELECT log_actions FROM daily_responsibilities 
+                    WHERE user_id = :uid 
+                    AND (manager_id = :mid OR manager_id IS NULL) 
+                    AND is_active = 1
+                """, params={"uid": uid_int, "mid": mid_int}, ttl=0)
+                
+                if not resp_logs_df.empty:
+                    for actions in resp_logs_df['log_actions'].dropna():
+                        # Extract and clean actions from the comma-separated string
+                        allowed_actions.extend([a.strip() for a in actions.split(',') if a.strip()])
+                
+                allowed_actions = list(set(allowed_actions)) # Deduplicate
+            except Exception as e:
+                st.error(f"Error fetching allowed actions: {e}")
+
         selected_date_act = st.date_input("Select Date", value=get_ist_date(), key="mgr_act_date")
-        df_logs = get_activity_log_for_user(conn, selected_date_act, selected_user)
+        
+        if is_admin_user:
+            df_logs = get_activity_log_for_user(conn, selected_date_act, selected_user)
+        elif not allowed_actions:
+            st.info(f"No specific activity logs assigned to you for {selected_user}.")
+            df_logs = pd.DataFrame()
+        else:
+            df_logs = get_activity_log_for_user(conn, selected_date_act, selected_user, allowed_actions=allowed_actions)
         
         if not df_logs.empty:
             st.caption(f"📊 {len(df_logs)} activities found")
@@ -3419,7 +3460,12 @@ def determine_checklist_date_to_display(conn, user_id):
     return today, False
 
 def get_checklist_logs(conn, submission_id):
-    query = "SELECT * FROM daily_checklist_logs WHERE submission_id = :submission_id"
+    query = """
+        SELECT l.*, u.username as manager_name 
+        FROM daily_checklist_logs l 
+        LEFT JOIN userss u ON l.manager_id = u.id 
+        WHERE l.submission_id = :submission_id
+    """
     return conn.query(query, params={"submission_id": submission_id}, ttl=0)
 
 @st.dialog("Weekly Checklist Summary", width="large")
@@ -3438,7 +3484,7 @@ def show_weekly_checklist_summary_dialog(conn, user_id, username, week_dates, is
             if submission_df.empty:
                 st.info(f"No checklist data for {date_obj.strftime('%A, %b %d')}.")
             else:
-                render_daily_checklist_inline(conn, submission_df.iloc[0], is_manager=is_manager, is_admin=is_admin)
+                render_daily_checklist_inline(conn, submission_df.iloc[0], is_manager=is_manager, is_admin=is_admin, key_suffix="_weekly")
 
 def daily_checklist_page(conn):
     st.subheader(f"✅ Daily Responsibilities Checklist", anchor=False, divider="rainbow")
@@ -3490,11 +3536,6 @@ def daily_checklist_page(conn):
                     daily_data = daily_summary.get(day_date, {})
                     render_checklist_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
                     
-                    # Direct Detail Access (1-Click)
-                    if is_current_month and not is_future and daily_data:
-                        if st.button("👁️ Details", key=f"user_qview_{day_date}", use_container_width=True):
-                            show_daily_checklist_dialog(conn, user_id, username, day_date)
-
             with cols[6]:
                 if any(d.month == sel_m for d in week):
                     week_dates = [d for d in week[:-1] if d.month == sel_m]
@@ -3687,7 +3728,7 @@ def daily_checklist_page(conn):
                 col_badge.markdown(f"<div style='text-align:right; padding-top:10px'>{badge_html}</div>", unsafe_allow_html=True)
 
                 # Metadata columns for the latest attempt
-                m1, m2, m3, m4 = st.columns(4)
+                m1, m2, m3, m4, m5 = st.columns(5)
                 
                 def render_meta_col(col, label, val):
                     col.markdown(f"""
@@ -3706,11 +3747,14 @@ def daily_checklist_page(conn):
                     dur = pd.to_datetime(latest['end_time']) - pd.to_datetime(latest['start_time'])
                     mins = int(dur.total_seconds() // 60)
                     duration_val = f"{mins} mins" if mins < 60 else f"{mins//60}h {mins%60}m"
+                
+                mgr_val = latest.get('manager_name') if pd.notna(latest.get('manager_name')) else "Default"
 
-                render_meta_col(m1, "Start Time", start_val)
-                render_meta_col(m2, "End Time", end_val)
-                render_meta_col(m3, "Submitted At", sub_val)
-                render_meta_col(m4, "Duration", duration_val)
+                render_meta_col(m1, "Reporting To", mgr_val)
+                render_meta_col(m2, "Start Time", start_val)
+                render_meta_col(m3, "End Time", end_val)
+                render_meta_col(m4, "Submitted At", sub_val)
+                render_meta_col(m5, "Duration", duration_val)
 
                 # Notes and Feedback for LATEST attempt
                 if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \

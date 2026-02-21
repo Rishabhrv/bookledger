@@ -989,7 +989,7 @@ if main_section == "Manage Users":
                                     st.error(f"❌ Database error: {str(e)}")
 
         elif selected_user_tab == "Responsibilities":
-            # Ensure description column exists
+            # Ensure description and log_actions columns exist
             try:
                 with conn.session as s:
                     s.execute(text("SELECT description FROM daily_responsibilities LIMIT 1"))
@@ -999,7 +999,18 @@ if main_section == "Manage Users":
                         s.execute(text("ALTER TABLE daily_responsibilities ADD COLUMN description TEXT"))
                         s.commit()
                 except Exception as e:
-                    st.error(f"Error updating daily_responsibilities schema: {e}")
+                    st.error(f"Error updating daily_responsibilities schema (description): {e}")
+
+            try:
+                with conn.session as s:
+                    s.execute(text("SELECT log_actions FROM daily_responsibilities LIMIT 1"))
+            except Exception:
+                try:
+                    with conn.session as s:
+                        s.execute(text("ALTER TABLE daily_responsibilities ADD COLUMN log_actions TEXT"))
+                        s.commit()
+                except Exception as e:
+                    st.error(f"Error updating daily_responsibilities schema (log_actions): {e}")
 
             col1, col2 = st.columns([5,1])
             with col1:
@@ -1026,7 +1037,7 @@ if main_section == "Manage Users":
                         # Fetch current responsibilities
                         try:
                             resp_df = conn.query("""
-                                SELECT dr.id, dr.task_name, dr.description, dr.manager_id, u.username as manager_name 
+                                SELECT dr.id, dr.task_name, dr.description, dr.log_actions, dr.manager_id, u.username as manager_name 
                                 FROM daily_responsibilities dr 
                                 LEFT JOIN userss u ON dr.manager_id = u.id 
                                 WHERE dr.user_id = :uid AND dr.is_active = 1
@@ -1042,6 +1053,9 @@ if main_section == "Manage Users":
                                     if r.get('description'):
                                         col_name.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;*<small>{r['description']}</small>*", unsafe_allow_html=True)
                                     
+                                    if r.get('log_actions'):
+                                        col_name.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**Logs:** <small>{r['log_actions']}</small>", unsafe_allow_html=True)
+
                                     manager_display = r['manager_name'] if r['manager_name'] else "Default Manager"
                                     col_manager.write(f"Manager: **{manager_display}**")
 
@@ -1084,12 +1098,24 @@ if main_section == "Manage Users":
                             new_manager_key = col_m.selectbox("Manager", options=manager_options, index=manager_options.index(default_manager_display) if default_manager_display in manager_options else 0, key="new_resp_manager")
                             new_manager_id = manager_dict[new_manager_key].id if new_manager_key != "Default Manager" else None
 
+                            # Fetch unique actions from activity_log table
+                            try:
+                                with conn.session as s:
+                                    actions_res = s.execute(text("SELECT DISTINCT action FROM activity_log WHERE action IS NOT NULL AND action != '' ORDER BY action")).fetchall()
+                                    db_actions = [row[0] for row in actions_res]
+                            except Exception as e:
+                                st.error(f"Error fetching activity actions: {e}")
+                                db_actions = []
+
+                            new_actions = st.multiselect("Allowed Activity Logs", options=db_actions, key="new_resp_actions")
+
                             if st.button("➕ Add Responsibility", key="add_resp_btn", type="primary", use_container_width=True):
                                 if new_task.strip():
                                     try:
+                                        actions_str = ",".join(new_actions) if new_actions else None
                                         with conn.session as s:
-                                            s.execute(text("INSERT INTO daily_responsibilities (user_id, task_name, description, manager_id) VALUES (:uid, :name, :desc, :mid)"),
-                                                        {"uid": target_user_id, "name": new_task.strip(), "desc": new_desc.strip() if new_desc else None, "mid": new_manager_id})
+                                            s.execute(text("INSERT INTO daily_responsibilities (user_id, task_name, description, manager_id, log_actions) VALUES (:uid, :name, :desc, :mid, :actions)"),
+                                                        {"uid": target_user_id, "name": new_task.strip(), "desc": new_desc.strip() if new_desc else None, "mid": new_manager_id, "actions": actions_str})
                                             s.commit()
                                         log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added responsibility", f"Assigned '{new_task.strip()}' to {target_user.username} (Report to: {new_manager_key})")
                                         st.success("✅ Responsibility added!")
