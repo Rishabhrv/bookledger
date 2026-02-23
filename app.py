@@ -424,7 +424,8 @@ def update_button_counts(conn):
         welcome_pending_count = conn.query(welcome_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
         cover_pending_count = conn.query(cover_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
         ops_pending_count = conn.query(ops_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
-        total_pending_checklist = welcome_pending_count + cover_pending_count + ops_pending_count
+        print_pending_count = len(first_print_books) + len(reprint_books)
+        total_pending_checklist = welcome_pending_count + cover_pending_count + ops_pending_count + print_pending_count
         
         if "pending_checklist" in BUTTON_CONFIG and total_pending_checklist > 0:
             BUTTON_CONFIG["pending_checklist"]["label"] += f" 🔴 ({total_pending_checklist})"
@@ -962,6 +963,9 @@ def pending_checklist_dialog(conn):
     """
     ops_complete_data = conn.query(ops_complete_query, show_spinner=False, ttl=0)
 
+    # 4. Print pending (First Print + Reprint)
+    print_pending_data = pd.concat([first_print_books, reprint_books], ignore_index=True) if not (first_print_books.empty and reprint_books.empty) else pd.DataFrame()
+
     # --- Callback ---
     def update_status_silent(ba_id, field, book_id, author_id, label):
         try:
@@ -1051,6 +1055,40 @@ def pending_checklist_dialog(conn):
                 
                 st.markdown("<hr style='margin: 10px 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
 
+    def render_book_only_list(df, description_text, type_context):
+        if df.empty:
+            st.success("✨ All caught up!")
+            return
+
+        st.info(f"💡 {description_text}")
+
+        with st.container(height=400, border=True):
+            for _, row in df.iterrows():
+                book_id = row['book_id']
+                title = row['title']
+                
+                pending_date = pd.to_datetime(row.get('pending_since', row.get('date')))
+                days_pending = (datetime.now().date() - pending_date.date()).days if pd.notnull(pending_date) else 0
+                
+                urgency_color = "#3b82f6"
+                urgency_label = ""
+                
+                if days_pending > 7:
+                    urgency_color = "#ef4444"
+                    urgency_label = f"<span style='background-color: #fef2f2; color: #ef4444; padding: 2px 6px; border-radius: 4px; font-size: 0.6em; font-weight: bold;'>🔥 {days_pending} days</span>"
+                elif days_pending > 3:
+                    urgency_color = "#f59e0b"
+                    urgency_label = f"<span style='background-color: #fffbeb; color: #d97706; padding: 2px 6px; border-radius: 4px; font-size: 0.6em; font-weight: bold;'>⏳ {days_pending} days</span>"
+                else:
+                    urgency_label = f"<span style='color: #94a3b8; font-size: 0.6em; font-weight: 500;'>{days_pending} days</span>"
+
+                st.markdown(f"""<div style='padding: 6px 10px; border-radius: 8px; border-left: 4px solid {urgency_color}; background-color: {urgency_color}08; margin-top: 8px; margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between;'><div style='display: flex; align-items: center; gap: 8px;'><div style='font-size: 0.8em; font-weight: bold; color: #64748b;'>{book_id}</div><div style='font-size: 0.95em; font-weight: 600; color: #1e293b;'>{title}</div></div>{urgency_label}</div>""", unsafe_allow_html=True)
+                
+                if type_context == "print":
+                    st.markdown(f"""<div style='padding-left: 10px; margin-bottom: 8px; font-size: 0.85em; color: #64748b;'>Type: <span style='color: #3b82f6; font-weight: 600;'>{row.get('print_type', 'N/A')}</span> | Copies: <b>{row.get('num_copies', row.get('copies_planned', '-'))}</b> | Size: {row.get('book_size', '-')}</div>""", unsafe_allow_html=True)
+                
+                st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
+
     # --- Tabs Layout ---
     w_count = len(welcome_mail_data)
     w_book_count = welcome_mail_data['book_id'].nunique() if not welcome_mail_data.empty else 0
@@ -1061,23 +1099,27 @@ def pending_checklist_dialog(conn):
     o_count = len(ops_complete_data)
     o_book_count = ops_complete_data['book_id'].nunique() if not ops_complete_data.empty else 0
 
-    tab0, tab1, tab2 = st.tabs([
+    p_count = len(print_pending_data)
+
+    c_tab, d_tab, w_tab, p_tab, = st.tabs([
         f"🎨 Cover ({c_book_count})", 
         f"📚 Digital ({o_book_count})",
-        f"📧 Welcome ({w_book_count})"
+        f"📧 Welcome ({w_book_count})",
+        f"🖨️ Print ({p_count})",
     ])
 
-    with tab2:
-        desc = f"Welcome mail is not yet sent to {w_count} authors across {w_book_count} books."
-        render_checklist(welcome_mail_data, "welcome_mail_sent", "w_mail", "Welcome Mail Sent", desc)
-
-    with tab0:
+    with c_tab:
         desc = f"Cover page is ready but not sent to {c_count} authors across {c_book_count} books."
         render_checklist(cover_ready_data, "cover_agreement_sent", "c_sent", "Cover Agreement Sent", desc)
-
-    with tab1:
+    with d_tab:
         desc = f"Operations complete but Digital Book not sent to {o_count} authors across {o_book_count} books."
         render_checklist(ops_complete_data, "digital_book_sent", "d_book", "Digital Book Sent", desc)
+    with w_tab:
+        desc = f"Welcome mail is not yet sent to {w_count} authors across {w_book_count} books."
+        render_checklist(welcome_mail_data, "welcome_mail_sent", "w_mail", "Welcome Mail Sent", desc)
+    with p_tab:
+        desc = f"Books ready for first print or reprint ({p_count} entries)."
+        render_book_only_list(print_pending_data, desc, "print")
 
 
 ###################################################################################################################################
@@ -8755,7 +8797,8 @@ with srcol_pending:
         w_b_count = conn.query(w_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
         c_b_count = conn.query(c_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
         o_b_count = conn.query(o_p_q, ttl=0, show_spinner=False).iloc[0]["count"]
-        t_b_count = w_b_count + c_b_count + o_b_count
+        p_p_count = len(first_print_books) + len(reprint_books)
+        t_b_count = w_b_count + c_b_count + o_b_count + p_p_count
         
         label = "Pending"
         if t_b_count > 0:
