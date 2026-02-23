@@ -818,23 +818,25 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped, correc
 
     # Determine status based on current stage or completed stages
     required_stages = [s for s, _, _, _ in operations]
-    if len(completed_stages) == len(required_stages):
-        # Initial Operations Complete - Check for Corrections
-        if correction_status and correction_status != "None":
-            active_corr = corrections_grouped.get(book_id, pd.DataFrame())
-            if not active_corr.empty:
-                # Show active task in correction cycle
-                task = active_corr.iloc[0]
-                ops_status = f"Correction: {task['section'].capitalize()} by {task['worker']}"
-                ops_colour = "amber"
-                ops_emoji = task['section'].lower()
-            else:
-                # Pending start of correction stage
-                ops_status = f"Correction: Pending in {correction_status}"
-                ops_colour = "blue"
-                ops_emoji = correction_status.lower()
-        else:
-            ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
+    
+    # 1. Check for active corrections (Highest priority)
+    active_corr = corrections_grouped.get(book_id, pd.DataFrame())
+    if not active_corr.empty:
+        # Show active task in correction cycle
+        task = active_corr.iloc[0]
+        ops_status = f"Correction: {task['section'].capitalize()} by {task['worker']}"
+        ops_colour = "amber"
+        ops_emoji = task['section'].lower()
+    
+    # 2. Check for pending corrections
+    elif correction_status and correction_status != "None":
+        ops_status = f"Correction: Pending in {correction_status}"
+        ops_colour = "blue"
+        ops_emoji = "cover" if "cover" in correction_status.lower() else correction_status.lower()
+        
+    # 3. Normal stages
+    elif len(completed_stages) == len(required_stages):
+        ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
     elif current_stage:
         in_prog, _, col_key, stage, name = current_stage
         ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
@@ -925,7 +927,9 @@ def pending_checklist_dialog(conn):
 
     # 2. Cover ready (Calculate from cover end date)
     cover_ready_query = """
-    SELECT b.book_id, b.title, b.cover_end AS pending_since, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position
+    SELECT b.book_id, b.title, b.cover_end AS pending_since, ba.id as ba_id, ba.author_id, a.name AS author_name, ba.author_position,
+           b.correction_status,
+           (SELECT COUNT(*) FROM corrections WHERE book_id = b.book_id AND correction_end IS NULL) as active_corrections
     FROM books b
     JOIN book_authors ba ON b.book_id = ba.book_id
     JOIN authors a ON ba.author_id = a.author_id
@@ -1005,11 +1009,16 @@ def pending_checklist_dialog(conn):
                 else:
                     urgency_label = f"<span style='color: #94a3b8; font-size: 0.6em; font-weight: 500;'>{days_pending} days</span>"
 
-                # Check for correction cycle (for Digital Book Sent section)
+                # Check for correction cycle (for Digital Book and Cover section)
                 is_in_correction = False
+                correction_status = row.get('correction_status', 'None')
+                active_corrections = row.get('active_corrections', 0)
+                
                 if field == "digital_book_sent":
-                    correction_status = row.get('correction_status', 'None')
-                    active_corrections = row.get('active_corrections', 0)
+                    is_in_correction = (correction_status is not None and correction_status != 'None') or active_corrections > 0
+                elif field == "cover_agreement_sent":
+                    # Only block cover if the correction is actually for the cover OR there's an active correction task
+                    # (Usually if correction_status is not 'None', it blocks operations)
                     is_in_correction = (correction_status is not None and correction_status != 'None') or active_corrections > 0
 
                 # Book Card Style Header

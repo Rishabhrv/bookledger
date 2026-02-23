@@ -555,7 +555,8 @@ def fetch_correction_books(section: str) -> pd.DataFrame:
     status_map = {
         "writing": "Writing",
         "proofreading": "Proofreading",
-        "formatting": "Formatting"
+        "formatting": "Formatting",
+        "cover": "Cover"
     }
     target_status = status_map.get(section)
     
@@ -950,7 +951,7 @@ def render_correction_hub(conn):
             b.correction_status AS `Current Lifecycle`,
             (SELECT COALESCE(MAX(round_number), 0) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Total Rounds`,
             (SELECT section FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS `Active Section`,
-            (SELECT is_internal FROM corrections c WHERE c.book_id = b.book_id AND c.correction_end IS NULL LIMIT 1) AS `Is Internal`,
+            (SELECT is_internal FROM corrections c WHERE c.book_id = b.book_id ORDER BY correction_start DESC LIMIT 1) AS `Is Internal`,
             (SELECT MAX(created_at) FROM author_corrections ac WHERE ac.book_id = b.book_id) AS `Last Request`,
             (SELECT GREATEST(COALESCE(MAX(correction_start), '1970-01-01'), COALESCE(MAX(correction_end), '1970-01-01')) FROM corrections c WHERE c.book_id = b.book_id) AS `Last Action`
         FROM books b
@@ -1721,7 +1722,7 @@ def correction_dialog(book_id, conn, section):
                         }
                         s.execute(text(query), params)
                         
-                        # 2. Advance Lifecycle State ONLY IF NOT INTERNAL
+                        # 2. Advance Lifecycle State
                         next_status = None
                         if not is_internal_task:
                             if section == 'writing':
@@ -1730,12 +1731,21 @@ def correction_dialog(book_id, conn, section):
                                 next_status = 'Formatting'
                             elif section == 'formatting':
                                 next_status = 'None' # Cycle Closed
+                            elif section == 'cover':
+                                next_status = 'None' # Cycle Closed
                             
                             if next_status:
                                 s.execute(
                                     text("UPDATE books SET correction_status = :status WHERE book_id = :book_id"),
                                     {"status": next_status, "book_id": book_id}
                                 )
+                        else:
+                            # Internal Task: End the cycle immediately for this book
+                            next_status = 'None'
+                            s.execute(
+                                text("UPDATE books SET correction_status = 'None' WHERE book_id = :book_id"),
+                                {"book_id": book_id}
+                            )
 
                         s.commit()
 
@@ -1940,7 +1950,7 @@ def internal_correction_dialog(book_id, conn, section):
                             """),
                             {
                                 "book_id": book_id,
-                                "correction_text": f"[INTERNAL] {notes}" if notes else "[INTERNAL] No details provided",
+                                "correction_text": f"{notes}" if notes else "No details provided",
                                 "round_number": current_round
                             }
                         )

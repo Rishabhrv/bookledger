@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-import datetime
+from datetime import datetime
 import re
 import io
 import random
