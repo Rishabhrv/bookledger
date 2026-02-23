@@ -27,7 +27,7 @@ logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
 small_logo = "logo/favicon_white.ico"
 
-st.set_page_config(page_title='Settings', page_icon="⚙️", layout="wide",initial_sidebar_state=200)
+st.set_page_config(page_title='Settings', page_icon="⚙️", layout="wide")
 
 
 st.logo(logo,
