@@ -27,7 +27,7 @@ logo = "logo/logo_black.png"
 fevicon = "logo/favicon_black.ico"
 small_logo = "logo/favicon_white.ico"
 
-st.set_page_config(page_title='Settings', page_icon="⚙️", layout="wide")
+st.set_page_config(page_title='Settings', page_icon="⚙️", layout="wide",initial_sidebar_state=200)
 
 
 st.logo(logo,
@@ -44,23 +44,117 @@ user_access = st.session_state.get("access", None)
 session_id = st.session_state.session_id
 click_id = st.session_state.get("click_id", None)
 
+st.markdown("""
+    <style>
+            
+        /* Remove Streamlit's default top padding */
+        .main > div {
+            padding-top: 0px !important;
+        }
+        /* Ensure the first element has minimal spacing */
+        .block-container {
+            padding-top: 28px !important;  /* Small padding for breathing room */
+        }
+            """, unsafe_allow_html=True)
+
 
 if user_role != "admin":
     st.error("You do not have permission to access this page.")
     st.stop()
 
-# st.markdown("""
-#     <style>
-            
-#         /* Remove Streamlit's default top padding */
-#         .main > div {
-#             padding-top: 0px !important;
-#         }
-#         /* Ensure the first element has minimal spacing */
-#         .block-container {
-#             padding-top: 7px !important;  /* Small padding for breathing room */
-#         }
-#             """, unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    .data-row {
+        margin-bottom: 0px;
+        font-size: 14px;
+        color: #212529;
+        padding: 12px 0;
+        transition: background-color 0.2s ease;
+    }
+    .data-row:hover {
+        background-color: #f8f9fa;
+    }
+    .user-name {
+        font-weight: 600;
+        color: #333;
+        font-size: 16px;
+    }
+    .user-sub {
+        font-size: 12px;
+        color: #666;
+        margin-top: 2px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .app-badge {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 12px;
+        display: inline-block;
+        margin-bottom: 4px;
+        letter-spacing: 0.3px;
+        text-transform: uppercase;
+        color: white;
+    }
+    .app-main { background-color: #ff922b; }
+    .app-operations { background-color: #51cf66; }
+    .app-ijisem { background-color: #cc5de8; }
+    .app-tasks { background-color: #339af0;}
+    .app-sales { background-color: #f06595; }
+    .access-badge {
+        font-size: 11px;
+        font-weight: 500;
+        color: #495057;
+        background-color: #f1f3f5;
+        border: 1px solid #dee2e6;
+        padding: 2px 8px;
+        border-radius: 10px;
+        display: inline-block;
+        margin-bottom: 3px;
+        margin-right: 3px;
+    }
+    .role-badge {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 20px;
+        display: inline-flex;
+        align-items: center;
+        vertical-align: middle;
+    }
+    .role-admin {
+        background-color: #f3f0ff;
+        color: #6741d9;
+        border: 1px solid #d0bfff;
+    }
+    .role-user {
+        background-color: #ebfbee;
+        color: #2b8a3e;
+        border: 1px solid #b2f2bb;
+    }
+    .table-header {
+        font-size: 13px;
+        font-weight: 700;
+        text-transform: uppercase;
+        color: #6c757d;
+        padding: 10px 0;
+        border-bottom: 2px solid #dee2e6;
+        margin-bottom: 10px;
+    }
+    .row-divider {
+        border-top: 1px solid #e9ecef;
+        margin: 0;
+        padding: 0;
+    }
+    code {
+        color: #e83e8c;
+        word-break: break-word;
+    }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:FILL@1" rel="stylesheet" />
+""", unsafe_allow_html=True)
 
 st.cache_data.clear()
 
@@ -374,7 +468,7 @@ if main_section == "Manage Users":
                     FROM userss u
                     LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
                     GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role
-                    ORDER BY u.username
+                    ORDER BY u.id DESC
                 """)
             ).fetchall()
     except Exception as e:
@@ -393,56 +487,73 @@ if main_section == "Manage Users":
             st.write("### Users Overview")
             if not users:
                 st.error("❌ No users found in database.")
-            else:
-                show_passwords = st.checkbox(
-                    "🔓 Show Passwords",
-                    value=st.session_state.show_passwords,
-                    key="toggle_passwords",
-                    help="Check to reveal all passwords in the table"
-                )
-                if show_passwords:
-                    st.toast("⚠️ Warning: Passwords are visible. Ensure you are in a secure environment.", icon="⚠️")
 
-                if show_passwords != st.session_state.show_passwords_prev:
-                    try:
-                        log_activity(
-                            conn, st.session_state.user_id, st.session_state.username,
-                            st.session_state.session_id, "toggled checkbox",
-                            f"Show Passwords changed to '{show_passwords}'"
-                        )
-                        st.session_state.show_passwords = show_passwords
-                        st.session_state.show_passwords_prev = show_passwords
-                    except Exception as e:
-                        st.error(f"❌ Error logging activity: {str(e)}")
+            # Table Header
+            col_sizes = [0.4, 1.2, 2.0, 0.7, 0.5]
+            header_cols = st.columns(col_sizes)
+            headers = ["ID", "User Profile", "App Access", "Organization", "Password"]
+            for col, header in zip(header_cols, headers):
+                col.markdown(f'<div class="table-header">{header}</div>', unsafe_allow_html=True)
 
-                user_data = [{
-                    "ID": user.id, "Username": user.username, "Email": user.email or "",
-                    "Associate ID": user.associate_id or "", "Designation": user.designation or "",
-                    "Password": user.password if st.session_state.show_passwords else "••••••••",
-                    "Real_Password": user.password, "Role": user.role.capitalize() if user.role else "",
-                    "Apps": user.apps or "", "Access Types": user.access_types or "",
-                    "Levels": user.levels or "", "Reports To": user.report_to or "",
-                    "Start Date": user.start_date
-                } for user in users]
-    
-                df = pd.DataFrame(user_data)
-                st.data_editor(
-                    df, width="stretch", hide_index=True,
-                    disabled=["ID", "Username", "Email", "Associate ID", "Designation", 
-                                "Password", "Real_Password", "Role", "Apps", "Access Types", 
-                                "Levels", "Reports To", "Start Date"],
-                    column_config={
-                        "ID": st.column_config.NumberColumn("ID", disabled=True),
-                        "Password": st.column_config.TextColumn("Password"),
-                        "Real_Password": None,
-                        "Role": st.column_config.SelectboxColumn("Role", options=["Admin", "User"]),
-                        "Start Date": st.column_config.DateColumn("Start Date")
-                    },
-                    column_order=["ID", "Username", "Email", "Password", "Associate ID", "Designation", 
-                                    "Role", "Apps", "Access Types", "Levels", "Reports To", 
-                                    "Start Date"],
-                    num_rows="fixed", key="user_table"
-                )
+            for user in users:
+                with st.container():
+                    cols = st.columns(col_sizes, vertical_alignment="center")
+                    
+                    # ID
+                    cols[0].markdown(f"<span style='color:#888; font-weight:500'>#{user.id}</span>", unsafe_allow_html=True)
+                    
+                    # User Profile
+                    with cols[1]:
+                        st.markdown(f"""
+                            <div class="user-name">{user.username}</div>
+                            <div class="user-sub">
+                                <span class="material-symbols-rounded" style="font-size:14px">mail</span> {user.email or "No Email"}
+                            </div>
+                            <div class="user-sub">
+                                <span class="material-symbols-rounded" style="font-size:14px">badge</span> {user.designation or "No Designation"} | {user.associate_id or "N/A"}
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                        # App Access
+                        with cols[2]:
+                            apps_list = user.apps.split(',') if user.apps else []
+                            # Create map for class assignment
+                            app_class_map = {
+                                "main": "app-main",
+                                "operations": "app-operations",
+                                "ijisem": "app-ijisem",
+                                "tasks": "app-tasks",
+                                "sales": "app-sales"
+                            }
+                            apps_html = " ".join([f'<span class="app-badge {app_class_map.get(app.strip().lower(), "")}">{app.strip()}</span>' for app in apps_list])
+                            
+                            access_list = user.access_types.split(',') if user.access_types else []
+                            access_html = " ".join([f'<span class="access-badge">{acc.strip()}</span>' for acc in access_list]) if access_list else '<span style="color:#999; font-size:11px;">None</span>'
+
+                            st.markdown(f"""
+                                <div>{apps_html}</div>
+                                <div style="margin-top:4px;">{access_html}</div>
+                                <div style="font-size:12px; color:#666; margin-top:4px;">
+                                    <b>Level:</b> {user.levels or "None"}
+                                </div>
+                            """, unsafe_allow_html=True)                    
+                    # Organization
+                    with cols[3]:
+                        role_class = "role-admin" if user.role.lower() == "admin" else "role-user"
+                        role_html = f'<span class="role-badge {role_class}">{user.role.capitalize()}</span>'
+                        report_to_name = user.report_to if user.report_to else "None"
+                        st.markdown(f"""
+                            <div>{role_html}</div>
+                            <div class="user-sub"><b>Reports to:</b> {report_to_name}</div>
+                            <div class="user-sub"><b>Joined:</b> {user.start_date or "-"}</div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Password
+                    with cols[4]:
+                        with st.popover("View"):
+                            st.code(user.password, language=None)
+
+                    st.markdown('<div class="row-divider"></div>', unsafe_allow_html=True)
 
         elif selected_user_tab == "Edit User":
 
@@ -1268,13 +1379,20 @@ if main_section == "Export Data":
                 # Subject filter
                 selected_subject = st.selectbox("Subject", ["All"] + VALID_SUBJECTS, index=0, key="filter_subject")
                 
+                # --- NEW FILTERS ---
+                col_d1, col_d2 = st.columns([1.5, 1], gap="small")
+                with col_d1:
+                    selected_dates = st.date_input("Date Range", value=[], help="Select start and end date for book registration", key="filter_date_range")
+                with col_d2:
+                    image_filter = st.selectbox("Image Filter", ["All", "With Image", "Without Image"], index=0, key="filter_image_presence")
+                
                 # Tags filter (multiselect below)
                 sorted_tags = fetch_tags(conn)
                 selected_tags = st.multiselect("Tags", sorted_tags, help="Select tags to filter books", key="filter_tags")
                 
                 # Build query with filters, joining book_authors and authors to get author names and positions
                 query = """
-                SELECT b.images, b.title, b.isbn, b.book_mrp, b.publisher,
+                SELECT b.images, b.title, b.isbn, b.book_mrp, b.publisher, b.date,
                     GROUP_CONCAT(CONCAT(a.name, ' (', ba.author_position, ')')) AS authors
                 FROM books b
                 LEFT JOIN book_authors ba ON b.book_id = ba.book_id
@@ -1299,16 +1417,57 @@ if main_section == "Export Data":
                     query += " AND b.subject = :subject"
                     params["subject"] = selected_subject
                 
-                query += " GROUP BY b.book_id, b.publisher, b.images, b.title, b.isbn, b.book_mrp"
+                # Image Filter Logic
+                if image_filter == "With Image":
+                    query += " AND b.images IS NOT NULL AND b.images != ''"
+                elif image_filter == "Without Image":
+                    query += " AND (b.images IS NULL OR b.images = '')"
+                
+                # Date Range Logic
+                if len(selected_dates) == 2:
+                    query += " AND b.date BETWEEN :start_date AND :end_date"
+                    params["start_date"] = selected_dates[0]
+                    params["end_date"] = selected_dates[1]
+                
+                query += " GROUP BY b.book_id, b.publisher, b.images, b.title, b.isbn, b.book_mrp, b.date"
                 
                 # Fetch filtered data for preview
                 df = conn.query(query, params=params)
+                if not df.empty:
+                    df.insert(0, 'Select', True)
 
+        with global_col2:
+            # Display preview of filtered data
+            if df.empty:
+                st.warning("No books match the selected filters.")
+                edited_df = df
+            else:
+                edited_df = st.data_editor(
+                    df,
+                    column_config={
+                        "Select": st.column_config.CheckboxColumn("Select", default=True),
+                        "images": st.column_config.ImageColumn("Image"),
+                        "title": "Book Title",
+                        "authors": "Authors",
+                        "isbn": "ISBN",
+                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f"),
+                        "publisher": "Publisher",
+                        "date": "Registration Date"
+                    },
+                    width="stretch",
+                    hide_index=True,
+                    key="pdf_export_editor"
+                )
+
+        with global_col1:
             button_col1, button_col2 = st.columns([3.9,1.9], gap="small")   
 
             with button_col1:
+                # Filter for selected books
+                selected_df = edited_df[edited_df['Select'] == True] if not edited_df.empty else pd.DataFrame()
+                
                 # Export button
-                if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=df.empty):
+                if st.button("Export to PDF", key="export_pdf_button", type="primary", disabled=selected_df.empty):
                     with st.spinner("Generating PDF (This may take while)..."):
                         # Generate PDF using reportlab
                         pdf_output = io.BytesIO()
@@ -1328,19 +1487,23 @@ if main_section == "Export Data":
                         elements.append(Spacer(1, 8))
                         
                         # Add summary
-                        book_count = len(df)
+                        book_count = len(selected_df)
                         publisher_text = selected_publisher if selected_publisher != "All" else "All Publishers"
                         tags_text = ", ".join(selected_tags) if selected_tags else "None"
                         subject_text = selected_subject if selected_subject != "All" else "All Subjects"
+                        date_range_text = f"{selected_dates[0]} to {selected_dates[1]}" if len(selected_dates) == 2 else "All Time"
+                        
                         elements.append(Paragraph(f"Publisher: {publisher_text}", summary_style))
                         elements.append(Paragraph(f"Subject: {subject_text}", summary_style))
+                        elements.append(Paragraph(f"Date Range: {date_range_text}", summary_style))
+                        elements.append(Paragraph(f"Image Filter: {image_filter}", summary_style))
                         elements.append(Paragraph(f"Tags: {tags_text}", summary_style))
-                        elements.append(Paragraph(f"Number of Books: {book_count}", summary_style))
+                        elements.append(Paragraph(f"Number of Books Selected: {book_count}", summary_style))
                         elements.append(Spacer(1, 8))
                         
                         # Table data
                         table_data = [["Image", "Title", "Authors", "ISBN", "MRP", "Publisher"]]
-                        for idx, row in df.iterrows():
+                        for idx, row in selected_df.iterrows():
                             image_url = row['images'] if pd.notna(row['images']) else ''
                             title = row['title'] if pd.notna(row['title']) else ''
                             authors = row['authors'] if pd.notna(row['authors']) else 'No Authors'
@@ -1429,7 +1592,7 @@ if main_section == "Export Data":
                             log_activity(
                                 conn, st.session_state.user_id, st.session_state.username,
                                 st.session_state.session_id, "exported pdf",
-                                f"Publisher: {selected_publisher}, Subject: {selected_subject}, Status: {delivery_status}"
+                                f"Publisher: {selected_publisher}, Subject: {selected_subject}, Status: {delivery_status}, Dates: {date_range_text}, Image Filter: {image_filter}"
                             )
                             st.success(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}")
                             st.toast(f"PDF exported successfully and sent to Admin Email: {ADMIN_EMAIL}", icon="✔️", duration="long")
@@ -1439,26 +1602,7 @@ if main_section == "Export Data":
                             st.toast("Failed to send export email", icon="❌", duration="long")
 
             with button_col2:
-                st.markdown(f"**Total Books: <span style='color:red;'>{len(df)}</span>**", unsafe_allow_html=True)
-            
-        with global_col2:
-            # Display preview of filtered data
-            if df.empty:
-                st.warning("No books match the selected filters.")
-            else:
-                st.dataframe(
-                    df[['images', 'title', 'authors', 'isbn', 'book_mrp', 'publisher']],
-                    column_config={
-                        "images": st.column_config.ImageColumn("Image"),
-                        "title": "Book Title",
-                        "authors": "Authors",
-                        "isbn": "ISBN",
-                        "book_mrp": st.column_config.NumberColumn("MRP", format="₹%.2f"),
-                        "publisher": "Publisher",
-                    },
-                    width="stretch",
-                    hide_index=True,
-                )
+                st.markdown(f"**Total Books: <span style='color:red;'>{len(selected_df)}</span>**", unsafe_allow_html=True)
 
     col_exp_content = st.container()
     with col_exp_content:

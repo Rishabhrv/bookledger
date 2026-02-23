@@ -195,14 +195,14 @@ BUTTON_CONFIG = {
         "permission": "messages",
         "type": "new_tab",
     },
-    "amazon": {
-        "label": "Amazon",
-        "icon": "📦",
-        "page_path": "amazon",
-        "permission": "amazon",
-        "type": "new_tab",
-        "admin_only": True,
-    },
+    # "amazon": {
+    #     "label": "Amazon",
+    #     "icon": "📦",
+    #     "page_path": "amazon",
+    #     "permission": "amazon",
+    #     "type": "new_tab",
+    #     "admin_only": True,
+    # },
 
     "team_dashboard": {
         "label": "Operations",
@@ -345,11 +345,6 @@ def update_button_counts(conn):
         if "pending_books" in BUTTON_CONFIG and pending_count > 0:
             BUTTON_CONFIG["pending_books"]["label"] += f" 🔴 ({pending_count})"
 
-        # 3. Operations (Pending Writing)
-        ops_count = conn.query("SELECT COUNT(*) AS count FROM books WHERE writing_start IS NULL AND is_publish_only = 0 AND is_thesis_to_book = 0 AND is_cancelled = 0", ttl=0,show_spinner = False).iloc[0]["count"]
-        if "team_dashboard" in BUTTON_CONFIG and ops_count > 0:
-            BUTTON_CONFIG["team_dashboard"]["label"] += f" 🔴 ({ops_count})"
-
         # 3.1 Payments (Pending Approval)
         if "payments" in BUTTON_CONFIG:
             pay_count = conn.query("SELECT COUNT(*) AS count FROM author_payments WHERE status = 'Pending'", ttl=0, show_spinner=False).iloc[0]["count"]
@@ -484,7 +479,7 @@ elif user_role != "admin":
 def fetch_book_details(book_id, conn):
     query = f"""
     SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, 
-    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price, writing_start, is_cancelled, cancellation_reason, correction_status
+    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price, writing_start, is_cancelled, cancellation_reason, correction_status, deliver
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -2414,6 +2409,7 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
     current_date = book_details.iloc[0]['date']
     current_is_publish_only = book_details.iloc[0].get('is_publish_only', 0) == 1
     current_is_thesis_to_book = book_details.iloc[0].get('is_thesis_to_book', 0) == 1
+    current_deliver = book_details.iloc[0].get('deliver', 0) == 1
     current_publisher = book_details.iloc[0].get('publisher', '')
     current_isbn_receive_date = book_details.iloc[0].get('isbn_receive_date', None)
     current_tags = book_details.iloc[0].get('tags', '')
@@ -2842,51 +2838,54 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                     
                     # --- Surrender ISBN Feature ---
                     with st.popover("🏳️ Surrender ISBN", width="stretch"):
-                        st.warning("⚠️ This action will permanently remove the current ISBN and reset author progress related to it.")
-                        st.markdown("""
-                        **The following will occur:**
-                        - ISBN record will be cleared (Apply, Received, Number, Date)
-                        - ISBN Email status for all authors will be reset
-                        - **Author Checklist Reset:** Digital Book Sent, Cover Agreement Sent, Agreement Received, and Printing Confirmation will be unchecked for all authors.
-                        """)
-                        if st.button("Confirm Surrender", key=f"confirm_surrender_{book_id}", type="primary", use_container_width=True):
-                            with st.spinner("Surrendering ISBN..."):
-                                try:
-                                    with conn.session as s_surrender:
-                                        # 1. Update Books Table
-                                        s_surrender.execute(
-                                            text("""
-                                                UPDATE books 
-                                                SET apply_isbn = 0, 
-                                                    isbn = NULL, 
-                                                    isbn_receive_date = NULL 
-                                                WHERE book_id = :book_id
-                                            """), {"book_id": book_id}
+                        if current_deliver:
+                            st.error("🚫 Delivered books cannot surrender ISBN.")
+                        else:
+                            st.warning("⚠️ This action will permanently remove the current ISBN and reset author progress related to it.")
+                            st.markdown("""
+                            **The following will occur:**
+                            - ISBN record will be cleared (Apply, Received, Number, Date)
+                            - ISBN Email status for all authors will be reset
+                            - **Author Checklist Reset:** Digital Book Sent, Cover Agreement Sent, Agreement Received, and Printing Confirmation will be unchecked for all authors.
+                            """)
+                            if st.button("Confirm Surrender", key=f"confirm_surrender_{book_id}", type="primary", use_container_width=True):
+                                with st.spinner("Surrendering ISBN..."):
+                                    try:
+                                        with conn.session as s_surrender:
+                                            # 1. Update Books Table
+                                            s_surrender.execute(
+                                                text("""
+                                                    UPDATE books 
+                                                    SET apply_isbn = 0, 
+                                                        isbn = NULL, 
+                                                        isbn_receive_date = NULL 
+                                                    WHERE book_id = :book_id
+                                                """), {"book_id": book_id}
+                                            )
+                                            
+                                            # 2. Update Book Authors Table
+                                            s_surrender.execute(
+                                                text("""
+                                                    UPDATE book_authors 
+                                                    SET isbn_sent_at = NULL,
+                                                        digital_book_sent = 0,
+                                                        cover_agreement_sent = 0,
+                                                        agreement_received = 0,
+                                                        printing_confirmation = 0
+                                                    WHERE book_id = :book_id
+                                                """), {"book_id": book_id}
+                                            )
+                                            s_surrender.commit()
+                                            
+                                        log_activity(
+                                            conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                                            "surrendered isbn", f"Book ID: {book_id}, ISBN: {current_isbn} has been surrendered and author progress reset."
                                         )
-                                        
-                                        # 2. Update Book Authors Table
-                                        s_surrender.execute(
-                                            text("""
-                                                UPDATE book_authors 
-                                                SET isbn_sent_at = NULL,
-                                                    digital_book_sent = 0,
-                                                    cover_agreement_sent = 0,
-                                                    agreement_received = 0,
-                                                    printing_confirmation = 0
-                                                WHERE book_id = :book_id
-                                            """), {"book_id": book_id}
-                                        )
-                                        s_surrender.commit()
-                                        
-                                    log_activity(
-                                        conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
-                                        "surrendered isbn", f"Book ID: {book_id}, ISBN: {current_isbn} has been surrendered and author progress reset."
-                                    )
-                                    st.success("ISBN Surrendered Successfully! The dialog will now refresh.")
-                                    time.sleep(4)
-                                    st.toast("ISBN surrendered and author progress reset successfully!", icon="✔️", duration="long")
-                                except Exception as e:
-                                    st.error(f"Error surrendering ISBN: {e}")
+                                        st.success("ISBN Surrendered Successfully! The dialog will now refresh.")
+                                        time.sleep(4)
+                                        st.toast("ISBN surrendered and author progress reset successfully!", icon="✔️", duration="long")
+                                    except Exception as e:
+                                        st.error(f"Error surrendering ISBN: {e}")
                 else:
                     new_isbn = None
                     isbn_receive_date = None
