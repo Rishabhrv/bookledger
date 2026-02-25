@@ -745,28 +745,58 @@ def manage_price_dialog(book_id, conn):
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-    # Section 1: Book Price
+    # Section 1: Manage Pricing & Remarks
     with st.container(border=True):
-        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
-        with col1:
+        st.markdown("<h5 style='color: #4CAF50;'>Manage Pricing & Remarks</h5>", unsafe_allow_html=True)
+        
+        # Sync callback for single author
+        def sync_single_author_price():
+            if not book_authors.empty and len(book_authors) == 1:
+                ba_id = book_authors.iloc[0]['id']
+                st.session_state[f"total_{ba_id}"] = st.session_state[f"price_{book_id}"]
+
+        # Row 1: Book Price
+        pcol1, pcol2 = st.columns([2, 1], gap="small", vertical_alignment="bottom")
+        with pcol1:
             price_str = st.text_input(
                 "Book Price (₹)",
                 value=str(int(current_price)) if pd.notna(current_price) else "",
                 key=f"price_{book_id}",
-                placeholder="Enter whole amount"
+                placeholder="Enter total amount",
+                on_change=sync_single_author_price
             )
-
-        with col2:
-            if st.button("Save Price", key=f"save_price_{book_id}"):
-                with st.spinner("Saving..."):
-                    import time
-                    time.sleep(1)
-                    try:
-                        price = int(price_str) if price_str.strip() else None
-                        if price is not None and price < 0:
-                            st.error("Price cannot be negative")
-                            return
+        
+        st.write("---")
+        
+        # Rows for each author
+        if not book_authors.empty:
+            for _, row in book_authors.iterrows():
+                cur_ba_id = row['id']
+                mcol1, mcol2 = st.columns([1, 2])
+                with mcol1:
+                    st.text_input(
+                        f"₹ Total ({row['name']})",
+                        value=str(int(row['total_amount'] or 0)) if (row['total_amount'] or 0) > 0 else "",
+                        key=f"total_{cur_ba_id}",
+                        placeholder="Amount"
+                    )
+                with mcol2:
+                    st.text_input(
+                        f"Remark ({row['name']})",
+                        value=row.get('remark', '') or "",
+                        key=f"remark_{cur_ba_id}",
+                        placeholder="Notes..."
+                    )
+        
+        # Single Save Button for everything above
+        if st.button("💾 Save All Changes", key=f"save_all_metadata_{book_id}", type="primary", use_container_width=True):
+            with st.spinner("Saving all changes..."):
+                try:
+                    # 1. Save Book Price
+                    price = int(price_str) if price_str.strip() else None
+                    if price is not None and price < 0:
+                        st.error("Price cannot be negative")
+                    else:
                         with conn.session as s:
                             s.execute(
                                 text("UPDATE books SET price = :price WHERE book_id = :book_id"),
@@ -774,171 +804,163 @@ def manage_price_dialog(book_id, conn):
                             )
                             s.commit()
                         
+                        # 2. Save Author Totals & Remarks
+                        for _, row in book_authors.iterrows():
+                            aid = row['id']
+                            nt_str = st.session_state.get(f"total_{aid}", "0")
+                            nr = st.session_state.get(f"remark_{aid}", "")
+                            try:
+                                nt = int(nt_str) if nt_str.strip() else 0
+                                update_book_authors(aid, {"total_amount": nt, "remark": nr}, conn)
+                            except ValueError:
+                                st.error(f"Invalid amount for {row['name']}")
+                        
                         log_activity(
                             conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
-                            "updated book price", f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+                            "updated book pricing & author metadata",
+                            f"Book: {book_id}, New Price: ₹{price}"
                         )
-                        st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
+                        
+                        st.toast("All changes saved successfully!", icon="✔️")
                         st.cache_data.clear()
-                    except ValueError:
-                        st.error("Please enter a valid whole number", icon="🚨")
-    
-    # Section 2: Author Payments with Tabs
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving changes: {e}")
+
+    # Section 2: Payment History & Records
     with st.container(border=True):
-        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
+        st.markdown("<h5 style='color: #4CAF50;'>Payment History & Add Records</h5>", unsafe_allow_html=True)
         if not book_authors.empty:
-                total_author_amounts = 0
-                updated_authors = []
+            # Sort groups to keep them consistent
+            groups = book_authors.groupby('payment_group')
+            
+            # Prepare tab names
+            tab_names = []
+            group_keys = []
+            for name, group_df in groups:
+                if name.startswith("INDV_"):
+                    tab_names.append(group_df.iloc[0]['name'])
+                else:
+                    tab_names.append(f"👤 {name} (Agent)")
+                group_keys.append(name)
 
-                # Create tabs for each author
-                tab_titles = [f"{row['name']} (ID: {row['author_id']})" for _, row in book_authors.iterrows()]
-                tabs = st.tabs(tab_titles)
+            tabs = st.tabs(tab_names)
 
-                for tab, (_, row) in zip(tabs, book_authors.iterrows()):
-                    with tab:
-                        ba_id = row['id']
-                        total_amount = int(row.get('total_amount', 0) or 0)
-                        remark_val = row.get('remark', '') or ""
-                        
-                        # Calculate amount paid from the new table
-                        amount_paid = float(row.get('amount_paid', 0) or 0)
-                        
-                        # Payment status
-                        if amount_paid >= total_amount and total_amount > 0:
-                            status = '<span class="payment-status status-paid">Fully Paid</span>'
-                        elif amount_paid > 0:
-                            status = '<span class="payment-status status-partial">Partially Paid</span>'
-                        else:
-                            status = '<span class="payment-status status-pending">Pending</span>'
-                        st.markdown(f"**Payment Status:** {status}", unsafe_allow_html=True)
+            for tab, group_id in zip(tabs, group_keys):
+                group_df = groups.get_group(group_id)
+                with tab:
+                    # Lead author for anchoring payments
+                    if group_id.startswith("INDV_"):
+                        lead_author = group_df.iloc[0]
+                        is_group = False
+                    else:
+                        # Prefer author whose name matches the agent name, else first in group
+                        matches = group_df[group_df['name'] == group_id]
+                        lead_author = matches.iloc[0] if not matches.empty else group_df.iloc[0]
+                        is_group = True
+                    
+                    ba_ids = tuple(group_df['id'].tolist())
+                    anchor_ba_id = lead_author['id']
+                    
+                    # Totals for the group/individual
+                    total_amount_sum = int(group_df['total_amount'].sum() or 0)
+                    total_paid_sum = float(group_df['amount_paid'].sum() or 0)
+                    
+                    # Payment status
+                    if total_paid_sum >= total_amount_sum and total_amount_sum > 0:
+                        status_html = '<span class="payment-status status-paid">Fully Paid</span>'
+                    elif total_paid_sum > 0:
+                        status_html = '<span class="payment-status status-partial">Partially Paid</span>'
+                    else:
+                        status_html = '<span class="payment-status status-pending">Pending</span>'
+                    
+                    st.markdown(f"**Payment Status:** {status_html}", unsafe_allow_html=True)
+                    if is_group:
+                        st.info(f"**Authors Covered by {group_id}:** {', '.join(group_df['name'].tolist())}")
 
-                        # --- Section: Author Metadata ---
-                        col_m1, col_m2 = st.columns([1, 2])
-                        with col_m1:
-                            new_total_str = st.text_input(
-                                "Total Amount Due (₹)",
-                                value=str(total_amount) if total_amount > 0 else "",
-                                key=f"total_{ba_id}",
-                                placeholder="Enter whole amount"
-                            )
-                        with col_m2:
-                            new_remark = st.text_input(
-                                "Payment Remark",
-                                value=remark_val,
-                                key=f"remark_{ba_id}",
-                                placeholder="General notes about author payment..."
-                            )
-                        
-                        if st.button("Update Total & Remark", key=f"update_meta_{ba_id}"):
-                            try:
-                                nt = int(new_total_str) if new_total_str.strip() else 0
-                                update_book_authors(ba_id, {"total_amount": nt, "remark": new_remark}, conn)
-                                log_activity(
-                                    conn,
-                                    st.session_state.user_id,
-                                    st.session_state.username,
-                                    st.session_state.session_id,
-                                    "updated author total & remark",
-                                    f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Total: ₹{nt}, Remark: {new_remark}"
-                                )
-                                st.success("Updated successfully!")
-                                st.rerun()
-                            except ValueError:
-                                st.error("Invalid amount")
-
-                        st.write("---")
-
-                        # --- Section: Payment History ---
-                        st.markdown("##### 🧾 Payment History")
-                        history_query = "SELECT * FROM author_payments WHERE book_author_id = :ba_id ORDER BY payment_date DESC"
-                        history = conn.query(history_query, params={"ba_id": ba_id}, ttl=0, show_spinner=False)
-                        
-                        if not history.empty:
-                            for _, p in history.iterrows():
-                                hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
-                                with hcol1:
-                                    st.write(f"₹{p['amount']}")
-                                with hcol2:
-                                    st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
-                                with hcol3:
-                                    st.write(f"**{p['payment_mode']}**")
-                                with hcol4:
-                                    st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
-                                with hcol5:
-                                    status = p.get('status', 'Pending')
-                                    if status == 'Approved':
-                                        status_color = "green"
-                                    elif status == 'Rejected':
-                                        status_color = "red"
-                                    else:
-                                        status_color = "orange"
-                                    st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
-                                    if status == 'Rejected' and p.get('rejection_reason'):
-                                        st.caption(f"Reason: {p['rejection_reason']}")
-                                with hcol6:
-                                    if st.button(":material/delete:", key=f"del_pay_{p['id']}", help="Delete this payment"):
-                                        with conn.session as s:
-                                            s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
-                                            s.commit()
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "deleted payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{p['amount']} ({p['payment_mode']})")
-                                        st.rerun()
-                        else:
-                            st.info("No individual payment records found.")
-
-                        st.write("---")
-                        
-                        # --- Section: Add New Payment ---
-                        st.markdown("##### ➕ Add New Payment")
-                        payment_modes = ["Cash", "UPI", "Bank Deposit"]
-                        acol1, acol2, acol3 = st.columns([1, 1, 1])
-                        with acol1:
-                            add_amt = st.text_input("Amount (₹)", key=f"add_amt_{ba_id}", placeholder="0")
-                        with acol2:
-                            add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_{ba_id}")
-                        with acol3:
-                            add_mode = st.selectbox("Mode", payment_modes, key=f"add_mode_{ba_id}")
-                        
-                        add_txn = ""
-                        if add_mode in ["UPI", "Bank Deposit"]:
-                            add_txn = st.text_input("Transaction ID", key=f"add_txn_{ba_id}", placeholder="Ref No.")
-                        
-                        add_rem = st.text_input("Payment Specific Note", key=f"add_rem_{ba_id}", placeholder="e.g. Received via WhatsApp")
-
-                        if st.button("➕ Register Payment", key=f"btn_add_{ba_id}", type="primary", use_container_width=True):
-                            try:
-                                amt = float(add_amt) if add_amt.strip() else 0
-                                if amt <= 0:
-                                    st.error("Enter a valid amount")
+                    # --- Section: Payment History ---
+                    st.markdown(f"##### 🧾 Payment History {'(Group)' if is_group else ''}")
+                    history_query = "SELECT * FROM author_payments WHERE book_author_id IN :ba_ids ORDER BY payment_date DESC"
+                    history = conn.query(history_query, params={"ba_ids": ba_ids}, ttl=0, show_spinner=False)
+                    
+                    if not history.empty:
+                        for _, p in history.iterrows():
+                            # Find which author this payment was recorded under
+                            pay_ba_row = group_df[group_df['id'] == p['book_author_id']]
+                            pay_author_name = pay_ba_row.iloc[0]['name'] if not pay_ba_row.empty else "Unknown"
+                            
+                            hcol1, hcol2, hcol3, hcol4, hcol5, hcol6 = st.columns([1, 1, 1, 1, 1, 0.4])
+                            with hcol1:
+                                st.write(f"₹{p['amount']}")
+                                if is_group: st.caption(f"Ref: {pay_author_name}")
+                            with hcol2:
+                                st.write(p['payment_date'].strftime('%d %b %Y') if p['payment_date'] else "-")
+                            with hcol3:
+                                st.write(f"**{p['payment_mode']}**")
+                            with hcol4:
+                                st.write(f"ID: {p['transaction_id']}" if p['transaction_id'] else "-")
+                            with hcol5:
+                                status = p.get('status', 'Pending')
+                                if status == 'Approved':
+                                    status_color = "green"
+                                elif status == 'Rejected':
+                                    status_color = "red"
                                 else:
-                                    # Determine status based on role
-                                    is_admin = st.session_state.get("role") == "admin"
-                                    initial_status = 'Approved' if is_admin else 'Pending'
-                                    
+                                    status_color = "orange"
+                                st.markdown(f"<span style='color:{status_color}'>{status}</span>", unsafe_allow_html=True)
+                                if status == 'Rejected' and p.get('rejection_reason'):
+                                    st.caption(f"Reason: {p['rejection_reason']}")
+                            with hcol6:
+                                if st.button(":material/delete:", key=f"del_pay_{p['id']}"):
                                     with conn.session as s:
-                                        s.execute(text("""
-                                            INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
-                                            VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
-                                        """), {
-                                            "ba_id": ba_id, 
-                                            "amt": amt, 
-                                            "date": add_date, 
-                                            "mode": add_mode, 
-                                            "txn": add_txn, 
-                                            "remark": add_rem,
-                                            "status": initial_status,
-                                            "created_by": st.session_state.get("user_id"),
-                                            "requested_by": st.session_state.get("username", "Unknown"),
-                                            "approved_by": st.session_state.get("username") if is_admin else None,
-                                            "approved_at": datetime.now() if is_admin else None
-                                        })
+                                        s.execute(text("DELETE FROM author_payments WHERE id = :pid"), {"pid": p['id']})
                                         s.commit()
-                                    
-                                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "registered payment", f"Book: {book_title} ({book_id}), Author: {row['name']} (ID: {row['author_id']}), Amount: ₹{amt}, Mode: {add_mode}")
-                                    st.toast(f"Registered ₹{amt} for {row['name']}", icon="✅")
-                                    time.sleep(1)
                                     st.rerun()
-                            except ValueError:
-                                st.error("Invalid amount")
+                    else:
+                        st.info("No payment records found.")
+
+                    st.write("---")
+                    
+                    # --- Section: Add New Payment ---
+                    st.markdown(f"##### ➕ Add New Payment {'(Group)' if is_group else ''}")
+                    acol1, acol2, acol3 = st.columns([1, 1, 1])
+                    with acol1:
+                        add_amt = st.text_input("Amount (₹)", key=f"add_amt_ui_{group_id}", placeholder="0")
+                    with acol2:
+                        add_date = st.date_input("Date", value=datetime.now(), key=f"add_date_ui_{group_id}")
+                    with acol3:
+                        add_mode = st.selectbox("Mode", ["Cash", "UPI", "Bank Deposit"], key=f"add_mode_ui_{group_id}")
+                    
+                    add_txn = st.text_input("Transaction ID", key=f"add_txn_ui_{group_id}") if add_mode in ["UPI", "Bank Deposit"] else ""
+                    add_rem = st.text_input("Note", key=f"add_rem_ui_{group_id}")
+
+                    if st.button(f"➕ Register {'Group ' if is_group else ''}Payment", key=f"btn_add_ui_{group_id}", type="primary", use_container_width=True):
+                        try:
+                            amt = float(add_amt) if add_amt.strip() else 0
+                            if amt <= 0:
+                                st.error("Enter a valid amount")
+                            else:
+                                is_admin = st.session_state.get("role") == "admin"
+                                initial_status = 'Approved' if is_admin else 'Pending'
+                                with conn.session as s:
+                                    s.execute(text("""
+                                        INSERT INTO author_payments (book_author_id, amount, payment_date, payment_mode, transaction_id, remark, status, created_by, requested_by, approved_by, approved_at)
+                                        VALUES (:ba_id, :amt, :date, :mode, :txn, :remark, :status, :created_by, :requested_by, :approved_by, :approved_at)
+                                    """), {
+                                        "ba_id": anchor_ba_id, "amt": amt, "date": add_date, "mode": add_mode, "txn": add_txn, "remark": add_rem,
+                                        "status": initial_status, "created_by": st.session_state.get("user_id"),
+                                        "requested_by": st.session_state.get("username", "Unknown"),
+                                        "approved_by": st.session_state.get("username") if is_admin else None,
+                                        "approved_at": datetime.now() if is_admin else None
+                                    })
+                                    s.commit()
+                                st.success("Payment registered!")
+                                st.rerun()
+                        except ValueError:
+                            st.error("Invalid amount")
+
+                    remaining = total_amount_sum - total_paid_sum
+                    st.markdown(f"<div style='text-align:right; font-size:16px; margin-top:10px;'><b>Total Paid:</b> <span style='color:green'>₹{int(total_paid_sum)}</span> | <b>Remaining:</b> <span style='color:red'>₹{int(remaining)}</span></div>", unsafe_allow_html=True)
 
 # New function to fetch detailed print information for a specific book_id
 def fetch_print_details(book_id, conn):

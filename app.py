@@ -3521,28 +3521,58 @@ def manage_price_dialog(book_id, conn):
                 """
                 st.markdown(html, unsafe_allow_html=True)
 
-    # Section 1: Book Price
+    # Section 1: Manage Pricing & Remarks
     with st.container(border=True):
-        st.markdown("<h5 style='color: #4CAF50;'>Book Price</h5>", unsafe_allow_html=True)
-        col1,col2 = st.columns([1,1], gap="small", vertical_alignment="bottom")
-        with col1:
+        st.markdown("<h5 style='color: #4CAF50;'>Manage Pricing & Remarks</h5>", unsafe_allow_html=True)
+        
+        # Sync callback for single author
+        def sync_single_author_price():
+            if not book_authors.empty and len(book_authors) == 1:
+                ba_id = book_authors.iloc[0]['id']
+                st.session_state[f"total_{ba_id}"] = st.session_state[f"price_{book_id}"]
+
+        # Row 1: Book Price
+        pcol1, pcol2 = st.columns([2, 1], gap="small", vertical_alignment="bottom")
+        with pcol1:
             price_str = st.text_input(
                 "₹ Total Book Price",
                 value=str(int(current_price)) if pd.notna(current_price) else "",
                 key=f"price_{book_id}",
-                placeholder="Enter whole amount"
+                placeholder="Enter total amount",
+                on_change=sync_single_author_price
             )
-
-        with col2:
-            if st.button("Save Price", key=f"save_price_{book_id}"):
-                with st.spinner("Saving..."):
-                    import time
-                    time.sleep(1)
-                    try:
-                        price = int(price_str) if price_str.strip() else None
-                        if price is not None and price < 0:
-                            st.error("Price cannot be negative")
-                            return
+        
+        st.write("---")
+        
+        # Rows for each author
+        if not book_authors.empty:
+            for _, row in book_authors.iterrows():
+                cur_ba_id = row['id']
+                mcol1, mcol2 = st.columns([1, 2])
+                with mcol1:
+                    st.text_input(
+                        f"₹ Total ({row['name']})",
+                        value=str(int(row['total_amount'] or 0)) if (row['total_amount'] or 0) > 0 else "",
+                        key=f"total_{cur_ba_id}",
+                        placeholder="Amount"
+                    )
+                with mcol2:
+                    st.text_input(
+                        f"Remark ({row['name']})",
+                        value=row.get('remark', '') or "",
+                        key=f"remark_{cur_ba_id}",
+                        placeholder="Notes..."
+                    )
+        
+        # Single Save Button for everything above
+        if st.button("💾 Save All Changes", key=f"save_all_metadata_{book_id}", type="primary", use_container_width=True):
+            with st.spinner("Saving all changes..."):
+                try:
+                    # 1. Save Book Price
+                    price = int(price_str) if price_str.strip() else None
+                    if price is not None and price < 0:
+                        st.error("Price cannot be negative")
+                    else:
                         with conn.session as s:
                             s.execute(
                                 text("UPDATE books SET price = :price WHERE book_id = :book_id"),
@@ -3550,23 +3580,32 @@ def manage_price_dialog(book_id, conn):
                             )
                             s.commit()
                         
+                        # 2. Save Author Totals & Remarks
+                        for _, row in book_authors.iterrows():
+                            aid = row['id']
+                            nt_str = st.session_state.get(f"total_{aid}", "0")
+                            nr = st.session_state.get(f"remark_{aid}", "")
+                            try:
+                                nt = int(nt_str) if nt_str.strip() else 0
+                                update_book_authors(aid, {"total_amount": nt, "remark": nr}, conn)
+                            except ValueError:
+                                st.error(f"Invalid amount for {row['name']}")
+                        
                         log_activity(
-                            conn,
-                            st.session_state.user_id,
-                            st.session_state.username,
-                            st.session_state.session_id,
-                            "updated book price",
-                            f"Book: {book_title} ({book_id}), New Price: ₹{price}"
+                            conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                            "updated book pricing & author metadata",
+                            f"Book: {book_id}, New Price: ₹{price}"
                         )
                         
-                        st.toast("Book Price Updated Successfully", icon="✔️", duration="long")
+                        st.toast("All changes saved successfully!", icon="✔️")
                         st.cache_data.clear()
-                    except ValueError:
-                        st.error("Please enter a valid whole number", icon="🚨")
-    
-    # Section 2: Author Payments with Tabs
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving changes: {e}")
+
+    # Section 2: Payment History & Records
     with st.container(border=True):
-        st.markdown("<h5 style='color: #4CAF50;'>Author Payments</h5>", unsafe_allow_html=True)
+        st.markdown("<h5 style='color: #4CAF50;'>Payment History & Add Records</h5>", unsafe_allow_html=True)
         if not book_authors.empty:
             # Sort groups to keep them consistent
             groups = book_authors.groupby('payment_group')
@@ -3614,43 +3653,6 @@ def manage_price_dialog(book_id, conn):
                     st.markdown(f"**Payment Status:** {status_html}", unsafe_allow_html=True)
                     if is_group:
                         st.info(f"**Authors Covered by {group_id}:** {', '.join(group_df['name'].tolist())}")
-
-                    # --- Section: Individual Author Metadata ---
-                    st.markdown("##### 📝 Manage Amounts")
-                    for _, row in group_df.iterrows():
-                        cur_ba_id = row['id']
-                        mcol1, mcol2, mcol3 = st.columns([1, 2, 0.5])
-                        with mcol1:
-                            new_total_str = st.text_input(
-                                f"₹ Total ({row['name']})",
-                                value=str(int(row['total_amount'] or 0)) if (row['total_amount'] or 0) > 0 else "",
-                                key=f"total_{cur_ba_id}",
-                                placeholder="Amount"
-                            )
-                        with mcol2:
-                            new_remark = st.text_input(
-                                f"Remark ({row['name']})",
-                                value=row.get('remark', '') or "",
-                                key=f"remark_{cur_ba_id}",
-                                placeholder="Notes..."
-                            )
-                        with mcol3:
-                            st.write("") # Padding
-                            if st.button("Save", key=f"save_meta_{cur_ba_id}", use_container_width=True):
-                                try:
-                                    nt = int(new_total_str) if new_total_str.strip() else 0
-                                    update_book_authors(cur_ba_id, {"total_amount": nt, "remark": new_remark}, conn)
-                                    log_activity(
-                                        conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
-                                        "updated author total & remark",
-                                        f"Book: {book_id}, Author: {row['name']}, Total: ₹{nt}"
-                                    )
-                                    st.toast(f"Updated {row['name']}!", icon="✔️")
-                                    st.cache_data.clear()
-                                except ValueError:
-                                    st.error("Invalid amount")
-
-                    st.write("---")
 
                     # --- Section: Payment History ---
                     st.markdown(f"##### 🧾 Payment History {'(Group)' if is_group else ''}")
@@ -8493,7 +8495,7 @@ with srcol3:
             ('isbn_filter', None), ('author_type_filter', None), ('multiple_open_positions_filter', None),
             ('publish_only_filter', None), ('thesis_to_book_filter', None), ('tags_filter', []),
             ('subject_filter', None), ('consultant_filter', None), ('clear_filters_trigger', 0),
-            ('active_filter_section', None)
+            ('active_filter_section', None), ('sort_by', 'Date'), ('sort_order', 'Descending')
         ]:
             if key not in st.session_state:
                 st.session_state[key] = default
@@ -8507,13 +8509,15 @@ with srcol3:
                         'subject_filter', 'consultant_filter', 'active_filter_section']:
                 st.session_state[key] = None
             st.session_state.tags_filter = []
+            st.session_state.sort_by = 'Date'
+            st.session_state.sort_order = 'Descending'
             st.session_state.clear_filters_trigger += 1
             st.rerun()
         st.write("**Filter By:**")
 
         # Filter category pills
         filter_categories = [
-            "Date", "Publisher", "Book Status", "ISBN Status", 
+            "Sorting", "Date", "Publisher", "Book Status", "ISBN Status", 
             "Subject", "Tags", "Consultant", "Author Type", "Book Type"
         ]
         
@@ -8529,7 +8533,29 @@ with srcol3:
 
 
         # Show selected filter section
-        if st.session_state.active_filter_section == "Date":
+        if st.session_state.active_filter_section == "Sorting":
+            st.subheader("🔃 Sorting Options")
+            col_s1, col_s2 = st.columns(2)
+            with col_s1:
+                sort_by_options = ["Date", "Book ID"]
+                selected_sort_by = st.pills(
+                    "Sort By",
+                    options=sort_by_options,
+                    key=f"sort_by_pills_{st.session_state.clear_filters_trigger}"
+                )
+                if selected_sort_by:
+                    st.session_state.sort_by = selected_sort_by
+            with col_s2:
+                sort_order_options = ["Ascending", "Descending"]
+                selected_sort_order = st.pills(
+                    "Order",
+                    options=sort_order_options,
+                    key=f"sort_order_pills_{st.session_state.clear_filters_trigger}"
+                )
+                if selected_sort_order:
+                    st.session_state.sort_order = selected_sort_order
+
+        elif st.session_state.active_filter_section == "Date":
             st.subheader("📅 Date Filters")
             col_y1, col_y2 = st.columns(2)
             with col_y1:
@@ -8716,6 +8742,9 @@ with srcol3:
             applied_filters.append(f"Subject: {st.session_state.subject_filter}")
         if st.session_state.consultant_filter:
             applied_filters.append(f"Consultant: {st.session_state.consultant_filter}")
+        # Only show sorting in summary if it's not the default (Date Descending)
+        if st.session_state.get('sort_by') != 'Date' or st.session_state.get('sort_order') != 'Descending':
+            applied_filters.append(f"Sort: {st.session_state.sort_by} ({st.session_state.sort_order})")
         if st.session_state.tags_filter:
             tag_display = ', '.join(st.session_state.tags_filter[:2])
             if len(st.session_state.tags_filter) > 2:
@@ -9033,8 +9062,10 @@ details_icon = ":material/info:"
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 1
 
-# Apply sorting to the filtered books (sort by date in descending order)
-filtered_books = filtered_books.sort_values(by='date', ascending=False)
+# Apply sorting to the filtered books
+sort_col = 'date' if st.session_state.get('sort_by', 'Date') == 'Date' else 'book_id'
+ascending = st.session_state.get('sort_order', 'Descending') == 'Ascending'
+filtered_books = filtered_books.sort_values(by=sort_col, ascending=ascending)
 
 # Apply pagination with fixed page size of 40
 page_size = 40
@@ -9070,15 +9101,26 @@ with st.container(border=False):
         printeditions_grouped = {book_id: group for book_id, group in printeditions_df.groupby('book_id')}
         corrections_grouped = {book_id: group for book_id, group in corrections_df.groupby('book_id')}
 
-        grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
-        reversed_grouped_books = reversed(list(grouped_books))
+        # Group and sort books for display based on user selection
+        if st.session_state.get('sort_by', 'Date') == 'Date':
+            grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
+            display_groups = reversed(list(grouped_books))
+        else:
+            # For Book ID sorting, display as a single flat list
+            display_groups = [(None, paginated_books)]
 
-        for month, monthly_books in reversed_grouped_books:
-            monthly_books = monthly_books.sort_values(by='date', ascending=False)
-            num_books = len(monthly_books)
-            st.markdown(f'<div class="month-header">{month.strftime("%B %Y")} ({num_books} books)</div>', unsafe_allow_html=True)
+        for group_key, group_data in display_groups:
+            if group_key is not None:
+                ascending = st.session_state.get('sort_order', 'Descending') == 'Ascending'
+                current_group_books = group_data.sort_values(by='date', ascending=ascending)
+                header_text = f"{group_key.strftime('%B %Y')} ({len(current_group_books)} books)"
+            else:
+                current_group_books = group_data
+                header_text = f"Sorted by Book ID ({len(current_group_books)} books)"
+            
+            st.markdown(f'<div class="month-header">{header_text}</div>', unsafe_allow_html=True)
 
-            for _, row in monthly_books.iterrows():
+            for _, row in current_group_books.iterrows():
                 st.markdown('<div class="data-row">', unsafe_allow_html=True)
                 authors_display = author_names_dict.get(row['book_id'], "No authors")
                 col1, col2, col3, col4, col5, col6 = st.columns(column_size, vertical_alignment="center")

@@ -134,6 +134,28 @@ st.markdown("""
         color: #2b8a3e;
         border: 1px solid #b2f2bb;
     }
+    .status-active {
+        background-color: #e6fcf5;
+        color: #0ca678;
+        border: 1px solid #96f2d7;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 8px;
+        border-radius: 12px;
+        display: inline-block;
+        margin-left: 5px;
+    }
+    .status-inactive {
+        background-color: #fff5f5;
+        color: #fa5252;
+        border: 1px solid #ffc9c9;
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 8px;
+        border-radius: 12px;
+        display: inline-block;
+        margin-left: 5px;
+    }
     .table-header {
         font-size: 13px;
         font-weight: 700;
@@ -202,6 +224,14 @@ if "selected_user_for_edit" not in st.session_state:
     st.session_state.selected_user_for_edit = None
 
 st.write("### ⚙️ Settings")
+
+# Success/Error message persistence handler
+if "settings_success" in st.session_state:
+    st.success(st.session_state.settings_success)
+    del st.session_state.settings_success
+if "settings_error" in st.session_state:
+    st.error(st.session_state.settings_error)
+    del st.session_state.settings_error
 
 with st.sidebar:
     st.markdown("### ⚙️ Settings")
@@ -458,6 +488,7 @@ if main_section == "Manage Users":
             users = s.execute(
                 text("""
                     SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
+                            u.login_time_start, u.login_time_end, u.status,
                             GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
                             GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
                             GROUP_CONCAT(DISTINCT 
@@ -467,7 +498,7 @@ if main_section == "Manage Users":
                             ) as report_to
                     FROM userss u
                     LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
-                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role
+                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, u.login_time_start, u.login_time_end, u.status
                     ORDER BY u.id DESC
                 """)
             ).fetchall()
@@ -541,9 +572,20 @@ if main_section == "Manage Users":
                     with cols[3]:
                         role_class = "role-admin" if user.role.lower() == "admin" else "role-user"
                         role_html = f'<span class="role-badge {role_class}">{user.role.capitalize()}</span>'
+                        
+                        status_val = user.status.lower() if user.status else "active"
+                        status_class = "status-active" if status_val == "active" else "status-inactive"
+                        status_html = f'<span class="{status_class}">{status_val.capitalize()}</span>'
+                        
+                        login_start = user.login_time_start if user.login_time_start else "09:00:00"
+                        login_end = user.login_time_end if user.login_time_end else "18:00:00"
+                        
                         report_to_name = user.report_to if user.report_to else "None"
                         st.markdown(f"""
-                            <div>{role_html}</div>
+                            <div>{role_html} {status_html}</div>
+                            <div class="user-sub" style="margin-top:4px;">
+                                <span class="material-symbols-rounded" style="font-size:14px">schedule</span> {login_start} - {login_end}
+                            </div>
                             <div class="user-sub"><b>Reports to:</b> {report_to_name}</div>
                             <div class="user-sub"><b>Joined:</b> {user.start_date or "-"}</div>
                         """, unsafe_allow_html=True)
@@ -761,6 +803,63 @@ if main_section == "Manage Users":
                             key=f"edit_designation_{selected_user.id}"
                         )
 
+                    # User Status & Login Hours
+                    st.write("---")
+                    st.subheader("⏳ Status & Login Hours")
+                    col_status1, col_status2, col_status3 = st.columns(3)
+                    with col_status1:
+                        status_options = ["active", "inactive"]
+                        current_status = selected_user.status if selected_user.status in status_options else "active"
+                        new_status = st.selectbox(
+                            "User Status", options=status_options,
+                            index=status_options.index(current_status),
+                            key=f"edit_status_{selected_user.id}"
+                        )
+                    with col_status2:
+                        default_start = datetime.strptime("09:00:00", "%H:%M:%S").time()
+                        start_time_val = default_start
+                        if selected_user.login_time_start:
+                            try:
+                                val = selected_user.login_time_start
+                                if isinstance(val, str):
+                                    start_time_val = datetime.strptime(val, "%H:%M:%S").time()
+                                elif isinstance(val, datetime):
+                                    start_time_val = val.time()
+                                elif hasattr(val, "total_seconds"): # timedelta
+                                    seconds = int(val.total_seconds())
+                                    start_time_val = (datetime.min + pd.Timedelta(seconds=seconds)).time()
+                                else:
+                                    start_time_val = val
+                            except:
+                                start_time_val = default_start
+                            
+                        new_login_start = st.time_input(
+                            "Login Start Time", value=start_time_val,
+                            key=f"edit_login_start_{selected_user.id}"
+                        )
+                    with col_status3:
+                        default_end = datetime.strptime("18:00:00", "%H:%M:%S").time()
+                        end_time_val = default_end
+                        if selected_user.login_time_end:
+                            try:
+                                val = selected_user.login_time_end
+                                if isinstance(val, str):
+                                    end_time_val = datetime.strptime(val, "%H:%M:%S").time()
+                                elif isinstance(val, datetime):
+                                    end_time_val = val.time()
+                                elif hasattr(val, "total_seconds"): # timedelta
+                                    seconds = int(val.total_seconds())
+                                    end_time_val = (datetime.min + pd.Timedelta(seconds=seconds)).time()
+                                else:
+                                    end_time_val = val
+                            except:
+                                end_time_val = default_end
+                            
+                        new_login_end = st.time_input(
+                            "Login End Time", value=end_time_val,
+                            key=f"edit_login_end_{selected_user.id}"
+                        )
+
                     # Level and Reports To
                     show_level_report = new_app in LEVEL_SUPPORT_APPS or (new_app == "Main" and isinstance(new_access_type, list) and new_access_type and "Tasks" in new_access_type)
                     if show_level_report:
@@ -823,13 +922,18 @@ if main_section == "Manage Users":
                             else:
                                 try:
                                     with st.spinner("Saving changes..."):
+                                        import time
+                                        time.sleep(3)
                                         with conn.session as s:
                                             # Update users table
                                             s.execute(
                                                 text("""
                                                     UPDATE userss SET username = :username, email = :email,
                                                     associate_id = :associate_id, designation = :designation,
-                                                    password = :password, role = :role WHERE id = :id
+                                                    password = :password, role = :role,
+                                                    login_time_start = :login_time_start, login_time_end = :login_time_end,
+                                                    status = :status
+                                                    WHERE id = :id
                                                 """),
                                                 {
                                                     "username": new_username,
@@ -838,6 +942,9 @@ if main_section == "Manage Users":
                                                     "designation": new_designation or None,
                                                     "password": new_password if new_password else selected_user.password,
                                                     "role": new_role.lower(),
+                                                    "login_time_start": new_login_start,
+                                                    "login_time_end": new_login_end,
+                                                    "status": new_status,
                                                     "id": selected_user.id
                                                 }
                                             )
@@ -870,7 +977,7 @@ if main_section == "Manage Users":
                                             st.session_state.session_id, "updated user",
                                             f"User ID: {selected_user.id}, Username: {new_username}"
                                         )
-                                        st.success("✅ User Updated Successfully!")
+                                        st.session_state.settings_success = "✅ User Updated Successfully!"
                                         st.rerun()
                                 except Exception as e:
                                     error_message = str(e).lower()
@@ -903,7 +1010,7 @@ if main_section == "Manage Users":
                                             st.session_state.session_id, "deleted user",
                                             f"User ID: {selected_user.id}, Username: {selected_user.username}"
                                         )
-                                        st.success("✅ User Deleted Successfully!")
+                                        st.session_state.settings_success = "✅ User Deleted Successfully!"
                                         st.rerun()
                                 except Exception as e:
                                     st.error(f"❌ Database error: {str(e)}")
@@ -972,6 +1079,28 @@ if main_section == "Manage Users":
                         new_associate_id = st.text_input("Associate ID", key="add_associate_id", placeholder="Enter associate ID")
                     with col_add2:
                         new_designation = st.text_input("Designation", key="add_designation", placeholder="Enter designation")
+
+                    # User Status & Login Hours
+                    st.write("---")
+                    st.subheader("⏳ Status & Login Hours")
+                    col_status1, col_status2, col_status3 = st.columns(3)
+                    with col_status1:
+                        new_status = st.selectbox(
+                            "User Status", options=["active", "inactive"],
+                            index=0, key="add_status"
+                        )
+                    with col_status2:
+                        new_login_start = st.time_input(
+                            "Login Start Time", 
+                            value=datetime.strptime("09:00:00", "%H:%M:%S").time(),
+                            key="add_login_start"
+                        )
+                    with col_status3:
+                        new_login_end = st.time_input(
+                            "Login End Time", 
+                            value=datetime.strptime("18:00:00", "%H:%M:%S").time(),
+                            key="add_login_end"
+                        )
 
                     # Access Permissions
                     if new_role != "Admin":
@@ -1045,17 +1174,22 @@ if main_section == "Manage Users":
                         else:
                             try:
                                 with st.spinner("Adding user..."):
+                                    import time
+                                    time.sleep(3)
                                     with conn.session as s:
                                         s.execute(
                                             text("""
-                                                INSERT INTO userss (username, email, associate_id, designation, password, role)
-                                                VALUES (:username, :email, :associate_id, :designation, :password, :role)
+                                                INSERT INTO userss (username, email, associate_id, designation, password, role, login_time_start, login_time_end, status)
+                                                VALUES (:username, :email, :associate_id, :designation, :password, :role, :login_time_start, :login_time_end, :status)
                                             """),
                                             {
                                                 "username": new_username, "email": new_email or None,
                                                 "associate_id": new_associate_id or None,
                                                 "designation": new_designation or None,
-                                                "password": new_password, "role": new_role.lower()
+                                                "password": new_password, "role": new_role.lower(),
+                                                "login_time_start": new_login_start,
+                                                "login_time_end": new_login_end,
+                                                "status": new_status
                                             }
                                         )
                                         new_user_id = s.execute(text("SELECT LAST_INSERT_ID()")).fetchone()[0]
@@ -1085,9 +1219,9 @@ if main_section == "Manage Users":
                                         st.session_state.session_id, "added user",
                                         f"User ID: {new_user_id}, Username: {new_username}, Role: {new_role}, App: {new_app}"
                                     )
-                                    st.success("✅ User Added Successfully!")
+                                    st.session_state.settings_success = "✅ User Added Successfully!"
                                     st.rerun()
-                            except Exception as e:
+                            except Exception as e:                                
                                 error_message = str(e).lower()
                                 if "duplicate entry" in error_message:
                                     if "'username'" in error_message:
