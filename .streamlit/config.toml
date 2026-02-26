@@ -11,3 +11,4 @@ enableCORS = false
 enableXsrfProtection = false
 headless = true
 maxUploadSize = 30
+enableWebsocketCompression = true

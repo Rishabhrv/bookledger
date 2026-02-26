@@ -204,3 +204,6 @@ ict/build/
 ict/node_modules/
 .streamlit/secrets copy.toml
 test.ipynb
+service_account.json
+credentials.json
+token.pickle
