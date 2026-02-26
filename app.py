@@ -706,19 +706,19 @@ def fetch_all_author_names(book_ids, _conn):
         return {book_id: f"Database error: {str(e)}" for book_id in book_ids}
 
 @st.cache_data
-def fetch_active_corrections(book_ids, _conn):
+def fetch_corrections_data(book_ids, _conn):
     if not book_ids:
-        return pd.DataFrame(columns=['book_id', 'section', 'worker'])
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
     query = """
-    SELECT book_id, section, worker
+    SELECT book_id, section, worker, correction_end
     FROM corrections
-    WHERE book_id IN :book_ids AND correction_end IS NULL
+    WHERE book_id IN :book_ids
     """
     try:
         return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
     except Exception as e:
-        st.error(f"Error fetching active corrections: {e}")
-        return pd.DataFrame(columns=['book_id', 'section', 'worker'])
+        st.error(f"Error fetching corrections: {e}")
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
 
 # ------------------------------------------------------------------
 # 1.  Harmonised palette  (light bg → dark text)
@@ -821,7 +821,10 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped, correc
     required_stages = [s for s, _, _, _ in operations]
     
     # 1. Check for active corrections (Highest priority)
-    active_corr = corrections_grouped.get(book_id, pd.DataFrame())
+    all_corr = corrections_grouped.get(book_id, pd.DataFrame())
+    active_corr = all_corr[all_corr['correction_end'].isnull()] if not all_corr.empty else pd.DataFrame()
+    has_completed_corrections = not all_corr[all_corr['correction_end'].notnull()].empty if not all_corr.empty else False
+
     if not active_corr.empty:
         # Show active task in correction cycle
         task = active_corr.iloc[0]
@@ -837,7 +840,10 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped, correc
         
     # 3. Normal stages
     elif len(completed_stages) == len(required_stages):
-        ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
+        if has_completed_corrections:
+            ops_status, ops_colour, ops_emoji = "Corrections Complete", "green", "complete"
+        else:
+            ops_status, ops_colour, ops_emoji = "Operations Complete", "green", "complete"
     elif current_stage:
         in_prog, _, col_key, stage, name = current_stage
         ops_status, ops_colour, ops_emoji = f"{in_prog} by {name}", col_key, stage
@@ -2888,55 +2894,65 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
                         )
                     
                     # --- Surrender ISBN Feature ---
-                    with st.popover("🏳️ Surrender ISBN", width="stretch"):
-                        if current_deliver:
-                            st.error("🚫 Delivered books cannot surrender ISBN.")
-                        else:
-                            st.warning("⚠️ This action will permanently remove the current ISBN and reset author progress related to it.")
-                            st.markdown("""
-                            **The following will occur:**
-                            - ISBN record will be cleared (Apply, Received, Number, Date)
-                            - ISBN Email status for all authors will be reset
-                            - **Author Checklist Reset:** Digital Book Sent, Cover Agreement Sent, Agreement Received, and Printing Confirmation will be unchecked for all authors.
-                            """)
-                            if st.button("Confirm Surrender", key=f"confirm_surrender_{book_id}", type="primary", use_container_width=True):
-                                with st.spinner("Surrendering ISBN..."):
-                                    try:
-                                        with conn.session as s_surrender:
-                                            # 1. Update Books Table
-                                            s_surrender.execute(
-                                                text("""
-                                                    UPDATE books 
-                                                    SET apply_isbn = 0, 
-                                                        isbn = NULL, 
-                                                        isbn_receive_date = NULL 
-                                                    WHERE book_id = :book_id
-                                                """), {"book_id": book_id}
-                                            )
-                                            
-                                            # 2. Update Book Authors Table
-                                            s_surrender.execute(
-                                                text("""
-                                                    UPDATE book_authors 
-                                                    SET isbn_sent_at = NULL,
-                                                        digital_book_sent = 0,
-                                                        cover_agreement_sent = 0,
-                                                        agreement_received = 0,
-                                                        printing_confirmation = 0
-                                                    WHERE book_id = :book_id
-                                                """), {"book_id": book_id}
-                                            )
-                                            s_surrender.commit()
-                                            
-                                        log_activity(
-                                            conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
-                                            "surrendered isbn", f"Book ID: {book_id}, ISBN: {current_isbn} has been surrendered and author progress reset."
-                                        )
-                                        st.success("ISBN Surrendered Successfully! The dialog will now refresh.")
-                                        time.sleep(4)
-                                        st.toast("ISBN surrendered and author progress reset successfully!", icon="✔️", duration="long")
-                                    except Exception as e:
-                                        st.error(f"Error surrendering ISBN: {e}")
+                    if user_role == "admin":
+                        with st.popover("🏳️ Surrender ISBN", width="stretch"):
+                            if current_deliver:
+                                st.error("🚫 Delivered books cannot surrender ISBN.")
+                            else:
+                                st.warning("⚠️ This action will permanently remove the current ISBN and reset author progress related to it.")
+                                st.markdown("""
+                                **The following will occur:**
+                                - ISBN record will be cleared (Apply, Received, Number, Date)
+                                - ISBN Email status for all authors will be reset
+                                - **Author Checklist Reset:** Digital Book Sent, Cover Agreement Sent, Agreement Received, and Printing Confirmation will be unchecked for all authors.
+                                """)
+                                surrender_isbn_reason = st.text_area(
+                                    "Reason for Surrendering ISBN (Required)", 
+                                    key=f"surrender_isbn_reason_{book_id}",
+                                    placeholder="e.g. ISBN misallocated, Author requested change, etc."
+                                )
+                                if st.button("Confirm Surrender", key=f"confirm_surrender_{book_id}", type="primary", use_container_width=True):
+                                    if not surrender_isbn_reason.strip():
+                                        st.error("Please provide a reason for surrendering the ISBN.")
+                                    else:
+                                        with st.spinner("Surrendering ISBN..."):
+                                            try:
+                                                with conn.session as s_surrender:
+                                                    # 1. Update Books Table
+                                                    s_surrender.execute(
+                                                        text("""
+                                                            UPDATE books 
+                                                            SET apply_isbn = 0, 
+                                                                isbn = NULL, 
+                                                                isbn_receive_date = NULL,
+                                                                surrender_isbn_reason = :reason
+                                                            WHERE book_id = :book_id
+                                                        """), {"book_id": book_id, "reason": surrender_isbn_reason}
+                                                    )
+                                                    
+                                                    # 2. Update Book Authors Table
+                                                    s_surrender.execute(
+                                                        text("""
+                                                            UPDATE book_authors 
+                                                            SET isbn_sent_at = NULL,
+                                                                digital_book_sent = 0,
+                                                                cover_agreement_sent = 0,
+                                                                agreement_received = 0,
+                                                                printing_confirmation = 0
+                                                            WHERE book_id = :book_id
+                                                        """), {"book_id": book_id}
+                                                    )
+                                                    s_surrender.commit()
+                                                    
+                                                log_activity(
+                                                    conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                                                    "surrendered isbn", f"Book ID: {book_id}, ISBN: {current_isbn}, Reason: {surrender_isbn_reason}"
+                                                )
+                                                st.success("ISBN Surrendered Successfully! The dialog will now refresh.")
+                                                time.sleep(2)
+                                                st.rerun()
+                                            except Exception as e:
+                                                st.error(f"Error surrendering ISBN: {e}")
                 else:
                     new_isbn = None
                     isbn_receive_date = None
@@ -2987,130 +3003,131 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
         # -------------------- CANCEL BOOK FEATURE --------------------
         #st.markdown("<h5 style='color: #D32F2F;'>Danger Zone</h5>", unsafe_allow_html=True)
 
-        with st.popover("🚫 Cancel Book", width="stretch"):
-            # Fetch latest status
-            current_book_details = fetch_book_details(book_id, conn)
-            if not current_book_details.empty:
-                writing_start_val = current_book_details.iloc[0].get('writing_start')
-            else:
-                writing_start_val = None
-            
-            # Check digital_book_sent status
-            authors_df = fetch_book_authors(book_id, conn)
-            digital_sent_count = 0
-            if not authors_df.empty and 'digital_book_sent' in authors_df.columns:
-                digital_sent_count = authors_df['digital_book_sent'].sum()
-            
-            if digital_sent_count > 0:
-                st.error(f"❌ Cannot cancel the book once digital book has been sent to author(s).")
-            else:
-                st.caption("Cancel this book if it is no longer needed or the author has withdrawn.")
-                cancel_reason = st.text_area(
-                    "Reason for Cancellation (Required)", 
-                    key=f"cancel_reason_{book_id}",
-                    placeholder="e.g. Author withdrew, Duplicate entry, etc."
-                )
+        if user_role == "admin":
+            with st.popover("🚫 Cancel Book", width="stretch"):
+                # Fetch latest status
+                current_book_details = fetch_book_details(book_id, conn)
+                if not current_book_details.empty:
+                    writing_start_val = current_book_details.iloc[0].get('writing_start')
+                else:
+                    writing_start_val = None
                 
-                if st.button("🗑️ Confirm Cancel", key=f"confirm_cancel_{book_id}", type="primary"):
-                    if not cancel_reason.strip():
-                        st.error("Please provide a reason for cancellation.")
-                    else:
-                        with st.spinner("Cancelling book..."):
-                            time.sleep(5)
-                            # Determine target status
+                # Check digital_book_sent status
+                authors_df = fetch_book_authors(book_id, conn)
+                digital_sent_count = 0
+                if not authors_df.empty and 'digital_book_sent' in authors_df.columns:
+                    digital_sent_count = authors_df['digital_book_sent'].sum()
+                
+                if digital_sent_count > 0:
+                    st.error(f"❌ Cannot cancel the book once digital book has been sent to author(s).")
+                else:
+                    st.caption("Cancel this book if it is no longer needed or the author has withdrawn.")
+                    cancel_reason = st.text_area(
+                        "Reason for Cancellation (Required)", 
+                        key=f"cancel_reason_{book_id}",
+                        placeholder="e.g. Author withdrew, Duplicate entry, etc."
+                    )
+                    
+                    if st.button("🗑️ Confirm Cancel", key=f"confirm_cancel_{book_id}", type="primary"):
+                        if not cancel_reason.strip():
+                            st.error("Please provide a reason for cancellation.")
+                        else:
+                            with st.spinner("Cancelling book..."):
+                                time.sleep(5)
+                                # Determine target status
 
-                            has_writing = pd.notna(writing_start_val)
-                            
-                            try:
-                                with conn.session as s:
-                                    if has_writing:
-                                        # Archive to extra_books
-                                        s.execute(text("""
-                                            INSERT INTO extra_books (
-                                                book_id, title, date, reason,
-                                                writing_start, writing_end, writing_by,
-                                                proofreading_start, proofreading_end, proofreading_by,
-                                                formatting_start, formatting_end, formatting_by,
-                                                book_pages
-                                            )
-                                            SELECT 
-                                                book_id, title, date, :reason,
-                                                writing_start, writing_end, writing_by,
-                                                proofreading_start, proofreading_end, proofreading_by,
-                                                formatting_start, formatting_end, formatting_by,
-                                                book_pages
-                                            FROM books
-                                            WHERE book_id = :book_id
-                                        """), {"book_id": book_id, "reason": cancel_reason})
-                                        
-                                        # Set as deleted and clear operations in original book
-                                        s.execute(text("""
-                                            UPDATE books SET 
-                                                is_cancelled = 2, 
-                                                cancellation_reason = :reason,
-                                                writing_start = NULL, writing_end = NULL, writing_by = NULL,
-                                                proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
-                                                formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
-                                                cover_start = NULL, cover_end = NULL, cover_by = NULL,
-                                                book_pages = 0
-                                            WHERE book_id = :book_id
-                                        """), {"status": 2, "reason": cancel_reason, "book_id": book_id})
-                                        
-                                        status_label = "Extra Books (Archived)"
-                                    else:
-                                        # 1. Fetch Authors
-                                        authors_rows = s.execute(text("SELECT * FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id}).mappings().all()
-                                        authors_list = [dict(row) for row in authors_rows]
-                                        # Handle date serialization
-                                        def json_serial(obj):
-                                            if isinstance(obj, (datetime, date)):
-                                                return obj.isoformat()
-                                            if isinstance(obj, Decimal):
-                                                return float(obj)
-                                            raise TypeError (f"Type {type(obj)} not serializable")
-                                        
-                                        authors_json_str = json.dumps(authors_list, default=json_serial)
-                                        
-                                        # 2. Update reason in books (so it copies correctly)
-                                        s.execute(text("UPDATE books SET cancellation_reason = :reason WHERE book_id = :book_id"), {"reason": cancel_reason, "book_id": book_id})
-
-                                        # 3. Insert into deleted_books
-                                        s.execute(text("""
-                                            INSERT INTO deleted_books
-                                            SELECT b.*, :authors, NOW()
-                                            FROM books b
-                                            WHERE b.book_id = :book_id
-                                        """), {"book_id": book_id, "authors": authors_json_str})
-                                        
-                                        # 4. Delete Authors
-                                        s.execute(text("DELETE FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id})
-                                        
-                                        # 5. Clear Books Data (Soft Delete)
-                                        s.execute(text("""
-                                            UPDATE books SET 
-                                                is_cancelled = 2, 
-                                                cancellation_reason = :reason,
-                                                isbn = NULL,
-                                                isbn_receive_date = NULL,
-                                                writing_start = NULL, writing_end = NULL, writing_by = NULL,
-                                                proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
-                                                formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
-                                                cover_start = NULL, cover_end = NULL, cover_by = NULL,
-                                                book_pages = 0
-                                            WHERE book_id = :book_id
-                                        """), {"reason": cancel_reason, "book_id": book_id})
-                                        
-                                        status_label = "Deleted Books"
-                                        
-                                    s.commit()
+                                has_writing = pd.notna(writing_start_val)
                                 
-                                log_activity(
-                                    conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
-                                    "cancelled book", f"Book ID: {book_id}, Status: {status_label}, Reason: {cancel_reason}"
-                                )
-                                st.success(f"Book moved to {status_label}.")
-                            except Exception as e:
-                                st.error(f"Error cancelling book: {e}")
+                                try:
+                                    with conn.session as s:
+                                        if has_writing:
+                                            # Archive to extra_books
+                                            s.execute(text("""
+                                                INSERT INTO extra_books (
+                                                    book_id, title, date, reason,
+                                                    writing_start, writing_end, writing_by,
+                                                    proofreading_start, proofreading_end, proofreading_by,
+                                                    formatting_start, formatting_end, formatting_by,
+                                                    book_pages
+                                                )
+                                                SELECT 
+                                                    book_id, title, date, :reason,
+                                                    writing_start, writing_end, writing_by,
+                                                    proofreading_start, proofreading_end, proofreading_by,
+                                                    formatting_start, formatting_end, formatting_by,
+                                                    book_pages
+                                                FROM books
+                                                WHERE book_id = :book_id
+                                            """), {"book_id": book_id, "reason": cancel_reason})
+                                            
+                                            # Set as deleted and clear operations in original book
+                                            s.execute(text("""
+                                                UPDATE books SET 
+                                                    is_cancelled = 2, 
+                                                    cancellation_reason = :reason,
+                                                    writing_start = NULL, writing_end = NULL, writing_by = NULL,
+                                                    proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
+                                                    formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
+                                                    cover_start = NULL, cover_end = NULL, cover_by = NULL,
+                                                    book_pages = 0
+                                                WHERE book_id = :book_id
+                                            """), {"status": 2, "reason": cancel_reason, "book_id": book_id})
+                                            
+                                            status_label = "Extra Books (Archived)"
+                                        else:
+                                            # 1. Fetch Authors
+                                            authors_rows = s.execute(text("SELECT * FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id}).mappings().all()
+                                            authors_list = [dict(row) for row in authors_rows]
+                                            # Handle date serialization
+                                            def json_serial(obj):
+                                                if isinstance(obj, (datetime, date)):
+                                                    return obj.isoformat()
+                                                if isinstance(obj, Decimal):
+                                                    return float(obj)
+                                                raise TypeError (f"Type {type(obj)} not serializable")
+                                            
+                                            authors_json_str = json.dumps(authors_list, default=json_serial)
+                                            
+                                            # 2. Update reason in books (so it copies correctly)
+                                            s.execute(text("UPDATE books SET cancellation_reason = :reason WHERE book_id = :book_id"), {"reason": cancel_reason, "book_id": book_id})
+
+                                            # 3. Insert into deleted_books
+                                            s.execute(text("""
+                                                INSERT INTO deleted_books
+                                                SELECT b.*, :authors, NOW()
+                                                FROM books b
+                                                WHERE b.book_id = :book_id
+                                            """), {"book_id": book_id, "authors": authors_json_str})
+                                            
+                                            # 4. Delete Authors
+                                            s.execute(text("DELETE FROM book_authors WHERE book_id = :book_id"), {"book_id": book_id})
+                                            
+                                            # 5. Clear Books Data (Soft Delete)
+                                            s.execute(text("""
+                                                UPDATE books SET 
+                                                    is_cancelled = 2, 
+                                                    cancellation_reason = :reason,
+                                                    isbn = NULL,
+                                                    isbn_receive_date = NULL,
+                                                    writing_start = NULL, writing_end = NULL, writing_by = NULL,
+                                                    proofreading_start = NULL, proofreading_end = NULL, proofreading_by = NULL,
+                                                    formatting_start = NULL, formatting_end = NULL, formatting_by = NULL,
+                                                    cover_start = NULL, cover_end = NULL, cover_by = NULL,
+                                                    book_pages = 0
+                                                WHERE book_id = :book_id
+                                            """), {"reason": cancel_reason, "book_id": book_id})
+                                            
+                                            status_label = "Deleted Books"
+                                            
+                                        s.commit()
+                                    
+                                    log_activity(
+                                        conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id,
+                                        "cancelled book", f"Book ID: {book_id}, Status: {status_label}, Reason: {cancel_reason}"
+                                    )
+                                    st.success(f"Book moved to {status_label}.")
+                                except Exception as e:
+                                    st.error(f"Error cancelling book: {e}")
         
 
     # Save Button
@@ -3565,7 +3582,7 @@ def manage_price_dialog(book_id, conn):
                     )
         
         # Single Save Button for everything above
-        if st.button("💾 Save All Changes", key=f"save_all_metadata_{book_id}", type="primary", use_container_width=True):
+        if st.button("💾 Save All Changes", key=f"save_all_metadata_{book_id}", type="primary", use_container_width=True, shortcut="Shift+Enter"):
             with st.spinner("Saving all changes..."):
                 try:
                     # 1. Save Book Price
@@ -3599,7 +3616,6 @@ def manage_price_dialog(book_id, conn):
                         
                         st.toast("All changes saved successfully!", icon="✔️")
                         st.cache_data.clear()
-                        st.rerun()
                 except Exception as e:
                     st.error(f"Error saving changes: {e}")
 
@@ -3706,7 +3722,7 @@ def manage_price_dialog(book_id, conn):
                     
                     add_rem = st.text_input("Note", key=f"add_rem_ui_{group_id}", placeholder="e.g. Received via WhatsApp")
 
-                    if st.button(f"➕ Register {'Group ' if is_group else ''}Payment", key=f"btn_add_ui_{group_id}", type="primary", use_container_width=True):
+                    if st.button(f"➕ Register {'Group ' if is_group else ''}Payment", key=f"btn_add_ui_{group_id}", type="primary", use_container_width=True, shortcut="Enter"):
                         try:
                             amt = float(add_amt) if add_amt.strip() else 0
                             if amt <= 0:
@@ -8194,7 +8210,7 @@ st.markdown("""
     <style>
 
         .data-row {
-            margin-bottom: 25px;
+            margin-bottom: 18px;
             border-top: 1px solid #e9ecef;
             font-size: 11px;
             color: #212529;
@@ -9008,6 +9024,13 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
         "color: #b91c1c; "             # Darker red text
     )
 
+    # NEW: Style for 'resend' (blue to distinguish from normal pending)
+    resend_style = (
+        f"{base_pill_style} "
+        "background-color: #ffffff; "
+        "color: #1d4ed8; "             # Blue text
+    )
+
     # --- Checklist Logic ---
 
     checklist_sequence = [
@@ -9022,31 +9045,67 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
     ]
 
     book_authors = authors_grouped.get(book_id, pd.DataFrame())
-    if book_authors.empty:
-        return (
-            f"<div style='{container_style}'>"
-            f"<span style='font-size: 10px; color: #6b7280; font-style: italic;'>No authors</span>"
-            f"</div>"
-        )
-
+    
     html_pills = []
-    for field, label in checklist_sequence:
-        all_complete = all(author.get(field) for _, author in book_authors.iterrows())
+    if not book_authors.empty:
+        for field, label in checklist_sequence:
+            all_complete = all(author.get(field) for _, author in book_authors.iterrows())
 
-        if all_complete:
-            # Checkmark icon ✔ for completed items
+            if all_complete:
+                # Checkmark icon ✔ for completed items
+                pill_content = f"<span>&#10004;</span><span>{label}</span>"
+                style = complete_style
+                title = f"{label}: Completed"
+            else:
+                # Special cue for Digital proof during corrections
+                if field == "digital_book_sent" and row.get("correction_status", "None") != "None":
+                    # Refresh icon ↺ for resend
+                    pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
+                    style = resend_style
+                    title = f"{label}: Needs to be resent after correction"
+                else:
+                    # NEW: Cross mark icon ✗ for pending items
+                    pill_content = f"<span>&#10007;</span><span>{label}</span>"
+                    style = pending_style
+                    title = f"{label}: Pending"
+            
+            html_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
+    else:
+        html_pills.append(f"<span style='font-size: 10px; color: #6b7280; font-style: italic;'>No authors checklist available</span>")
+
+    # --- Operations Checklist ---
+    is_publish_only = row.get("is_publish_only", 0) == 1
+    is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
+    skip_writing = is_publish_only or is_thesis_to_book
+
+    ops_sequence = [
+        ("writing_end", "Writing"),
+        ("proofreading_end", "Proofreading"),
+        ("formatting_end", "Formatting"),
+        ("cover_end", "Cover Design")
+    ]
+
+    ops_pills = []
+    for field, label in ops_sequence:
+        if field == "writing_end" and skip_writing:
+            continue
+        
+        is_complete = pd.notnull(row.get(field))
+        if is_complete:
             pill_content = f"<span>&#10004;</span><span>{label}</span>"
             style = complete_style
             title = f"{label}: Completed"
         else:
-            # NEW: Cross mark icon ✗ for pending items
             pill_content = f"<span>&#10007;</span><span>{label}</span>"
             style = pending_style
             title = f"{label}: Pending"
         
-        html_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
+        ops_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
 
-    return f"<div style=\"{container_style}\">{''.join(html_pills)}</div>"
+    author_row = f"<div style='{container_style}'>{''.join(html_pills)}</div>"
+    ops_row = f"<div style='{container_style}; margin-top: 2px;'>{''.join(ops_pills)}</div>"
+
+    return f"<div>{author_row}{ops_row}</div>"
 
 
 #actual icons
@@ -9093,7 +9152,7 @@ with st.container(border=False):
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
-        corrections_df = fetch_active_corrections(book_ids, conn)
+        corrections_df = fetch_corrections_data(book_ids, conn)
         author_names_dict = fetch_all_author_names(book_ids, conn)
 
         # Preprocess DataFrames to group by book_id

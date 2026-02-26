@@ -426,6 +426,13 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
         "color: #b91c1c; "             # Darker red text
     )
 
+    # NEW: Style for 'resend' (blue to distinguish from normal pending)
+    resend_style = (
+        f"{base_pill_style} "
+        "background-color: #ffffff; "
+        "color: #1d4ed8; "             # Blue text
+    )
+
     # --- Checklist Logic ---
 
     checklist_sequence = [
@@ -440,31 +447,67 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
     ]
 
     book_authors = authors_grouped.get(book_id, pd.DataFrame())
-    if book_authors.empty:
-        return (
-            f"<div style='{container_style}'>"
-            f"<span style='font-size: 10px; color: #6b7280; font-style: italic;'>No authors</span>"
-            f"</div>"
-        )
-
+    
     html_pills = []
-    for field, label in checklist_sequence:
-        all_complete = all(author.get(field) for _, author in book_authors.iterrows())
+    if not book_authors.empty:
+        for field, label in checklist_sequence:
+            all_complete = all(author.get(field) for _, author in book_authors.iterrows())
 
-        if all_complete:
-            # Checkmark icon ✔ for completed items
+            if all_complete:
+                # Checkmark icon ✔ for completed items
+                pill_content = f"<span>&#10004;</span><span>{label}</span>"
+                style = complete_style
+                title = f"{label}: Completed"
+            else:
+                # Special cue for Digital proof during corrections
+                if field == "digital_book_sent" and row.get("correction_status", "None") != "None":
+                    # Refresh icon ↺ for resend
+                    pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
+                    style = resend_style
+                    title = f"{label}: Needs to be resent after correction"
+                else:
+                    # NEW: Cross mark icon ✗ for pending items
+                    pill_content = f"<span>&#10007;</span><span>{label}</span>"
+                    style = pending_style
+                    title = f"{label}: Pending"
+            
+            html_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
+    else:
+        html_pills.append(f"<span style='font-size: 10px; color: #6b7280; font-style: italic;'>No authors checklist available</span>")
+
+    # --- Operations Checklist ---
+    is_publish_only = row.get("is_publish_only", 0) == 1
+    is_thesis_to_book = row.get("is_thesis_to_book", 0) == 1
+    skip_writing = is_publish_only or is_thesis_to_book
+
+    ops_sequence = [
+        ("writing_end", "Writing"),
+        ("proofreading_end", "Proofreading"),
+        ("formatting_end", "Formatting"),
+        ("cover_end", "Cover Design")
+    ]
+
+    ops_pills = []
+    for field, label in ops_sequence:
+        if field == "writing_end" and skip_writing:
+            continue
+        
+        is_complete = pd.notnull(row.get(field))
+        if is_complete:
             pill_content = f"<span>&#10004;</span><span>{label}</span>"
             style = complete_style
             title = f"{label}: Completed"
         else:
-            # NEW: Cross mark icon ✗ for pending items
             pill_content = f"<span>&#10007;</span><span>{label}</span>"
             style = pending_style
             title = f"{label}: Pending"
         
-        html_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
+        ops_pills.append(f'<div style="{style}" title="{title}">{pill_content}</div>')
 
-    return f"<div style=\"{container_style}\">{''.join(html_pills)}</div>"
+    author_row = f"<div style='{container_style}'>{''.join(html_pills)}</div>"
+    ops_row = f"<div style='{container_style}; margin-top: 2px;'>{''.join(ops_pills)}</div>"
+
+    return f"<div>{author_row}{ops_row}</div>"
 
 
 # Author type-specific styles
@@ -1466,7 +1509,8 @@ query = """
     SUM(ba.total_amount) as total_amount,
     COALESCE(SUM(ap_agg.paid), 0) as amount_paid,
     COALESCE(MAX(ap_agg.has_rejected), 0) as has_rejected,
-    ba.publishing_consultant
+    ba.publishing_consultant,
+    b.correction_status
 FROM books b
 INNER JOIN book_authors ba ON b.book_id = ba.book_id
 LEFT JOIN (
@@ -1482,10 +1526,24 @@ GROUP BY
     b.book_id, b.title, b.date, b.writing_start, b.writing_end,
     b.proofreading_start, b.proofreading_end, b.formatting_start, b.formatting_end,
     b.cover_start, b.cover_end, b.publisher, b.is_thesis_to_book, b.author_type,
-    b.is_publish_only, b.apply_isbn, b.isbn, b.price, ba.publishing_consultant
+    b.is_publish_only, b.apply_isbn, b.isbn, b.price, ba.publishing_consultant, b.correction_status
 ORDER BY b.date DESC
 """
 
+@st.cache_data
+def fetch_corrections_data(book_ids, _conn):
+    if not book_ids:
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
+    query = """
+    SELECT book_id, section, worker, correction_end
+    FROM corrections
+    WHERE book_id IN :book_ids
+    """
+    try:
+        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
+    except Exception as e:
+        st.error(f"Error fetching corrections: {e}")
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
 
 try:
     books = conn.query(query, params={"user_name": user_name}, show_spinner=False)
@@ -1858,8 +1916,10 @@ with st.container(border=False):
         book_ids = paginated_books['book_id'].tolist()
         authors_df = fetch_all_book_authors(book_ids, conn)
         printeditions_df = fetch_all_printeditions(book_ids, conn)
+        corrections_df = fetch_corrections_data(book_ids, conn)
         author_names_dict = fetch_all_author_names(book_ids, conn)
         authors_grouped = {book_id: group for book_id, group in authors_df.groupby('book_id')}
+        corrections_grouped = {book_id: group for book_id, group in corrections_df.groupby('book_id')}
 
         grouped_books = paginated_books.groupby(pd.Grouper(key='date', freq='ME'))
         reversed_grouped_books = reversed(list(grouped_books))
