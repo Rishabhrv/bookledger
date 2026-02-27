@@ -2187,6 +2187,14 @@ def add_book_dialog(conn):
             active_positions = [author["author_position"] for author in active_authors]
             if len(active_positions) != len(set(active_positions)):
                 errors.append("All active authors must have unique positions.")
+        
+        # Check for duplicate title within the same publisher
+        if book_data["title"] and book_data["publisher"]:
+            with conn.session as s:
+                duplicate_query = text("SELECT COUNT(*) FROM books WHERE LOWER(title) = LOWER(:title) AND publisher = :publisher AND is_cancelled = 0")
+                is_duplicate = s.execute(duplicate_query, {"title": book_data["title"].strip(), "publisher": book_data["publisher"]}).scalar()
+                if is_duplicate > 0:
+                    errors.append(f"A book with the title '{book_data['title']}' already exists for publisher '{book_data['publisher']}'.")
                 
         return errors
 
@@ -3155,6 +3163,43 @@ def manage_isbn_dialog(conn, book_id, current_apply_isbn, current_isbn):
 
                     # Convert tags list to JSON string for database
                     new_tags_json = json.dumps(st.session_state[f"tags_{book_id}"]) if st.session_state[f"tags_{book_id}"] else '[]'
+
+                    # Uniqueness Checks
+                    new_publisher = st.session_state[f"publisher_{book_id}"]
+                    with conn.session as s_check:
+                        # Check Title & Publisher Uniqueness (excluding current book)
+                        title_dup_query = text("""
+                            SELECT COUNT(*) FROM books 
+                            WHERE LOWER(title) = LOWER(:title) 
+                            AND publisher = :publisher 
+                            AND book_id != :book_id 
+                            AND is_cancelled = 0
+                        """)
+                        title_dup = s_check.execute(title_dup_query, {
+                            "title": new_title.strip(), 
+                            "publisher": new_publisher, 
+                            "book_id": book_id
+                        }).scalar()
+                        
+                        if title_dup > 0:
+                            st.warning(f"⚠️ A book with the title '{new_title}' already exists for publisher '{new_publisher}'.")
+                            return
+
+                        # Check ISBN Uniqueness (if provided)
+                        if apply_isbn and receive_isbn and new_isbn:
+                            isbn_dup_query = text("""
+                                SELECT COUNT(*) FROM books 
+                                WHERE isbn = :isbn 
+                                AND book_id != :book_id
+                            """)
+                            isbn_dup = s_check.execute(isbn_dup_query, {
+                                "isbn": new_isbn.strip(), 
+                                "book_id": book_id
+                            }).scalar()
+                            
+                            if isbn_dup > 0:
+                                st.warning(f"⚠️ The ISBN '{new_isbn}' is already assigned to another book.")
+                                return
 
                     # Track changes for logging
                     changes = []
@@ -9122,12 +9167,12 @@ if 'current_page' not in st.session_state:
     st.session_state.current_page = 1
 
 # Apply sorting to the filtered books
-sort_col = 'date' if st.session_state.get('sort_by', 'Date') == 'Date' else 'book_id'
+sort_cols = ['date', 'book_id'] if st.session_state.get('sort_by', 'Date') == 'Date' else ['book_id']
 ascending = st.session_state.get('sort_order', 'Descending') == 'Ascending'
-filtered_books = filtered_books.sort_values(by=sort_col, ascending=ascending)
+filtered_books = filtered_books.sort_values(by=sort_cols, ascending=[ascending] * len(sort_cols))
 
 # Apply pagination with fixed page size of 40
-page_size = 40
+page_size = 50
 total_books = len(filtered_books)
 total_pages = max(1, (total_books + page_size - 1) // page_size)  # Ceiling division
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages))  # Clamp current page
@@ -9171,7 +9216,7 @@ with st.container(border=False):
         for group_key, group_data in display_groups:
             if group_key is not None:
                 ascending = st.session_state.get('sort_order', 'Descending') == 'Ascending'
-                current_group_books = group_data.sort_values(by='date', ascending=ascending)
+                current_group_books = group_data.sort_values(by=['date', 'book_id'], ascending=[ascending, ascending])
                 header_text = f"{group_key.strftime('%B %Y')} ({len(current_group_books)} books)"
             else:
                 current_group_books = group_data

@@ -21,6 +21,7 @@ from reportlab.lib.units import cm
 from reportlab.lib import colors
 from PIL import Image as PILImage
 import requests
+from werkzeug.security import generate_password_hash
 
 
 logo = "logo/logo_black.png"
@@ -487,7 +488,7 @@ if main_section == "Manage Users":
         with conn.session as s:
             users = s.execute(
                 text("""
-                    SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, 
+                    SELECT u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.password_hash, u.role, 
                             u.login_time_start, u.login_time_end, u.status,
                             GROUP_CONCAT(uaa.app) as apps, GROUP_CONCAT(uaa.access_type) as access_types,
                             GROUP_CONCAT(uaa.level) as levels, MIN(uaa.start_date) as start_date,
@@ -498,7 +499,7 @@ if main_section == "Manage Users":
                             ) as report_to
                     FROM userss u
                     LEFT JOIN user_app_access uaa ON u.id = uaa.user_id
-                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.role, u.login_time_start, u.login_time_end, u.status
+                    GROUP BY u.id, u.username, u.email, u.associate_id, u.designation, u.password, u.password_hash, u.role, u.login_time_start, u.login_time_end, u.status
                     ORDER BY u.id DESC
                 """)
             ).fetchall()
@@ -930,7 +931,7 @@ if main_section == "Manage Users":
                                                 text("""
                                                     UPDATE userss SET username = :username, email = :email,
                                                     associate_id = :associate_id, designation = :designation,
-                                                    password = :password, role = :role,
+                                                    password = :password, password_hash = :password_hash, role = :role,
                                                     login_time_start = :login_time_start, login_time_end = :login_time_end,
                                                     status = :status
                                                     WHERE id = :id
@@ -941,6 +942,7 @@ if main_section == "Manage Users":
                                                     "associate_id": new_associate_id or None,
                                                     "designation": new_designation or None,
                                                     "password": new_password if new_password else selected_user.password,
+                                                    "password_hash": generate_password_hash(new_password) if new_password else selected_user.password_hash,
                                                     "role": new_role.lower(),
                                                     "login_time_start": new_login_start,
                                                     "login_time_end": new_login_end,
@@ -1179,14 +1181,16 @@ if main_section == "Manage Users":
                                     with conn.session as s:
                                         s.execute(
                                             text("""
-                                                INSERT INTO userss (username, email, associate_id, designation, password, role, login_time_start, login_time_end, status)
-                                                VALUES (:username, :email, :associate_id, :designation, :password, :role, :login_time_start, :login_time_end, :status)
+                                                INSERT INTO userss (username, email, associate_id, designation, password, password_hash, role, login_time_start, login_time_end, status)
+                                                VALUES (:username, :email, :associate_id, :designation, :password, :password_hash, :role, :login_time_start, :login_time_end, :status)
                                             """),
                                             {
                                                 "username": new_username, "email": new_email or None,
                                                 "associate_id": new_associate_id or None,
                                                 "designation": new_designation or None,
-                                                "password": new_password, "role": new_role.lower(),
+                                                "password": new_password,
+                                                "password_hash": generate_password_hash(new_password),
+                                                "role": new_role.lower(),
                                                 "login_time_start": new_login_start,
                                                 "login_time_end": new_login_end,
                                                 "status": new_status

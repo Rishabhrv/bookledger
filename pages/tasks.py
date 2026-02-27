@@ -922,6 +922,30 @@ def get_available_months_years(conn, user_id: int) -> tuple:
         st.error(f"Error fetching available months/years: {e}")
         return [], {}
 
+def get_checklist_available_months_years(conn, user_id: int) -> tuple:
+    try:
+        query = """
+            SELECT DISTINCT
+                EXTRACT(YEAR FROM date) AS year,
+                EXTRACT(MONTH FROM date) AS month
+            FROM daily_checklist_submissions
+            WHERE user_id = :user_id
+            ORDER BY year, month;
+        """
+        params = {"user_id": user_id}
+        df = conn.query(sql=query, params=params, ttl=0)
+        
+        if df.empty:
+            return [], {}
+        
+        years = sorted(df['year'].astype(int).unique().tolist())
+        month_by_year = {y: sorted(df[df['year']==y]['month'].astype(int).tolist()) for y in years}
+        return years, month_by_year
+
+    except Exception as e:
+        st.error(f"Error fetching checklist available months/years: {e}")
+        return [], {}
+
 def get_work_for_week(conn, user_id: int, week_start_date: date) -> pd.DataFrame:
     try:
         week_end_date = week_start_date + timedelta(days=6)
@@ -1543,6 +1567,9 @@ def show_daily_checklist_dialog(conn, user_id, username, selected_date, is_manag
     status = sub_row['status']
     start_time = sub_row['start_time']
     end_time = sub_row['end_time']
+    
+    # Robustly identify if current user is an admin to grant oversight
+    is_admin = is_admin or st.session_state.get("role") == "admin"
     
     # Header Metrics (Compact)
     c1, c2, c3, c4 = st.columns(4)
@@ -2587,6 +2614,9 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
     status = sub_row['status']
     start_time = sub_row['start_time']
     end_time = sub_row['end_time']
+    
+    # Robustly identify if current user is an admin to grant oversight
+    is_admin = is_admin or st.session_state.get("role") == "admin"
 
     status_icons = {"pending": "🕒", "started": "▶️", "completed": "⏹️", "submitted": "📤", "approved": "✅", "rejected": "❌"}
     status_colors = {
@@ -3158,67 +3188,68 @@ def admin_dashboard(conn):
     tab_weekly, tab_daily = st.tabs(["📅 Weekly Timesheets", "✅ Daily Checklists"])
 
     with tab_daily:
-        # Upgrade Admin's Daily Checklist view to use the same calendar system
-        c_daily_1, c_daily_2 = st.columns(2)
-        with c_daily_1:
-            y_options = [datetime.now().year, datetime.now().year - 1]
-            sel_y = st.selectbox("Year", options=y_options, key="admin_daily_cal_year")
-        with c_daily_2:
-            m_options = list(range(1, 13))
-            sel_m = st.selectbox("Month", options=m_options, format_func=lambda x: calendar.month_name[x], index=datetime.now().month-1, key="admin_daily_cal_month")
-
-        daily_summary = get_daily_checklist_monthly_summary(conn, selected_user_id, sel_y, sel_m)
+        available_checklist_years, checklist_month_by_year = get_checklist_available_months_years(conn, selected_user_id)
         
-        # Display summary metrics
-        total_days_in_month = calendar.monthrange(sel_y, sel_m)[1]
-        expected_working_days = sum(1 for d in range(1, total_days_in_month + 1) if date(sel_y, sel_m, d).weekday() != 6)
-        display_checklist_monthly_stats(daily_summary, sel_y, sel_m, expected_working_days)
-        
-        st.write("---")
+        if not available_checklist_years:
+            st.info("No checklist data available for this user.")
+        else:
+            # Upgrade Admin's Daily Checklist view to use the same calendar system
+            c_daily_1, c_daily_2 = st.columns(2)
+            with c_daily_1:
+                sel_y = st.selectbox("Year", options=available_checklist_years, index=len(available_checklist_years)-1, key="admin_daily_cal_year")
+            with c_daily_2:
+                m_options = checklist_month_by_year.get(sel_y, [])
+                current_month = datetime.now().month
+                default_m_index = m_options.index(current_month) if current_month in m_options else len(m_options)-1
+                sel_m = st.selectbox("Month", options=m_options, format_func=lambda x: calendar.month_name[x], index=default_m_index, key="admin_daily_cal_month")
 
-        # Render Calendar Grid
-        days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        header_cols = st.columns([1,1,1,1,1,1,0.8])
-        for i, header in enumerate(days_headers):
-            with header_cols[i]: st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
-        with header_cols[6]: st.markdown(f'<div class="header-card">Week View</div>', unsafe_allow_html=True)
+            daily_summary = get_daily_checklist_monthly_summary(conn, selected_user_id, sel_y, sel_m)
+            
+            # Display summary metrics
+            total_days_in_month = calendar.monthrange(sel_y, sel_m)[1]
+            expected_working_days = sum(1 for d in range(1, total_days_in_month + 1) if date(sel_y, sel_m, d).weekday() != 6)
+            display_checklist_monthly_stats(daily_summary, sel_y, sel_m, expected_working_days)
+            
+            st.write("---")
 
-        status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
-        status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "pending": "Pending", "started": "Started"}
+            # Render Calendar Grid
+            days_headers = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+            header_cols = st.columns([1,1,1,1,1,1,0.8])
+            for i, header in enumerate(days_headers):
+                with header_cols[i]: st.markdown(f'<div class="header-card">{header}</div>', unsafe_allow_html=True)
+            with header_cols[6]: st.markdown(f'<div class="header-card">Week View</div>', unsafe_allow_html=True)
 
-        cal = calendar.Calendar()
-        for week in cal.monthdatescalendar(sel_y, sel_m):
-            cols = st.columns([1,1,1,1,1,1,0.8])
-            for i, day_date in enumerate(week[:-1]):
-                with cols[i]:
-                    is_current_month = (day_date.month == sel_m)
-                    is_weekend = (day_date.weekday() == 6)
-                    is_future = day_date > datetime.now().date()
-                    daily_data = daily_summary.get(day_date, {})
-                    render_checklist_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
-                    
-                    # Direct Detail Access (1-Click) for Admin
-                    if is_current_month and not is_future and daily_data:
-                        if st.button("👁️ Details", key=f"admin_qview_{day_date}", use_container_width=True):
-                            show_daily_checklist_dialog(conn, selected_user_id, selected_user, day_date, is_admin=True)
+            status_map = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
+            status_display = {"approved": "Approved", "submitted": "Submitted", "rejected": "Rejected", "pending": "Pending", "started": "Started"}
 
-            with cols[6]:
-                if any(d.month == sel_m for d in week):
-                    week_dates = [d for d in week[:-1] if d.month == sel_m]
-                    if week_dates:
-                        # aggregated status for the week
-                        week_status = get_week_checklist_status(week_dates, daily_summary)
-                        has_data = week_status is not None
+            cal = calendar.Calendar()
+            for week in cal.monthdatescalendar(sel_y, sel_m):
+                cols = st.columns([1,1,1,1,1,1,0.8])
+                for i, day_date in enumerate(week[:-1]):
+                    with cols[i]:
+                        is_current_month = (day_date.month == sel_m)
+                        is_weekend = (day_date.weekday() == 6)
+                        is_future = day_date > datetime.now().date()
+                        daily_data = daily_summary.get(day_date, {})
+                        render_checklist_day_card(day_date, daily_data, is_current_month, is_weekend, is_future)
+
+                with cols[6]:
+                    if any(d.month == sel_m for d in week):
+                        week_dates = [d for d in week[:-1] if d.month == sel_m]
+                        if week_dates:
+                            # aggregated status for the week
+                            week_status = get_week_checklist_status(week_dates, daily_summary)
+                            has_data = week_status is not None
+                            
+                            if not has_data:
+                                st.button("No Data", key=f"admin_view_daily_week_{week[0]}_nodata", width='stretch', disabled=True)
+                            else:
+                                status_emoji = status_map.get(week_status, '⚪️')
+                                status_label = status_display.get(week_status, "Summary")
+                                if st.button(f"{status_emoji} {status_label}", key=f"admin_view_daily_week_{week[0]}", width='stretch', help="Click to see summary for this whole week"):
+                                    show_weekly_checklist_summary_dialog(conn, selected_user_id, selected_user, week_dates, is_admin=True)
                         
-                        if not has_data:
-                            st.button("No Data", key=f"admin_view_daily_week_{week[0]}_nodata", width='stretch', disabled=True)
-                        else:
-                            status_emoji = status_map.get(week_status, '⚪️')
-                            status_label = status_display.get(week_status, "Summary")
-                            if st.button(f"{status_emoji} {status_label}", key=f"admin_view_daily_week_{week[0]}", width='stretch', help="Click to see summary for this whole week"):
-                                show_weekly_checklist_summary_dialog(conn, selected_user_id, selected_user, week_dates, is_admin=True)
-                    
-                    st.caption(f"Week {week[0].isocalendar().week}", unsafe_allow_html=True)
+                        st.caption(f"Week {week[0].isocalendar().week}", unsafe_allow_html=True)
 
     with tab_weekly:
         available_years, month_by_year = get_available_months_years(conn, selected_user_id)
@@ -3417,13 +3448,24 @@ def determine_checklist_date_to_display(conn, user_id):
     
     try:
         # Get all existing checklists for this user (limited to last 30 days for performance)
-        lookback_date = today - timedelta(days=0)
+        lookback_date = today - timedelta(days=30)
+        
+        # Enhanced query using CTE to find the latest status of EACH responsibility
         existing_query = """
-            SELECT date, status 
-            FROM daily_checklist_submissions 
-            WHERE user_id = :user_id
-            AND date >= :lookback_date
-            ORDER BY date ASC
+            WITH LatestLogs AS (
+                SELECT submission_id, responsibility_id, status,
+                       ROW_NUMBER() OVER(PARTITION BY submission_id, responsibility_id ORDER BY id DESC) as rn
+                FROM daily_checklist_logs
+            )
+            SELECT s.date, s.status as sub_status,
+                   COUNT(l.responsibility_id) as total_tasks,
+                   COUNT(CASE WHEN l.status IN ('submitted', 'approved') THEN 1 END) as completed_tasks
+            FROM daily_checklist_submissions s
+            LEFT JOIN LatestLogs l ON s.id = l.submission_id AND l.rn = 1
+            WHERE s.user_id = :user_id
+            AND s.date >= :lookback_date
+            GROUP BY s.date, s.status
+            ORDER BY s.date ASC
         """
         existing_df = conn.query(existing_query, params={"user_id": user_id, "lookback_date": lookback_date}, ttl=0)
         
@@ -3447,10 +3489,17 @@ def determine_checklist_date_to_display(conn, user_id):
                     st.warning(f"⚠️ **Missing Daily Checklist:** You must complete the checklist for **{curr.strftime('%A, %b %d')}** before accessing today's.")
                     return curr, True
                 else:
-                    # Exists, check status
-                    status = day_match.iloc[0]['status']
-                    if status in ['pending', 'rejected', 'started']:
-                        st.warning(f"⚠️ **Pending Daily Checklist:** Your checklist for **{curr.strftime('%A, %b %d')}** is in **{status.upper()}** status. Please submit it first.")
+                    # Check if all tasks are submitted or approved
+                    row = day_match.iloc[0]
+                    if row['total_tasks'] == 0:
+                        # Day initialized but no tasks? Might happen if admin just added responsibility
+                        # Let them proceed to it to trigger sync
+                        st.warning(f"⚠️ **Pending Daily Checklist:** Your checklist for **{curr.strftime('%A, %b %d')}** has no tasks yet. Please initialize it.")
+                        return curr, True
+                    
+                    if row['completed_tasks'] < row['total_tasks']:
+                        # Some tasks are still pending, started, completed (but not submitted), or rejected
+                        st.warning(f"⚠️ **Pending Daily Checklist:** You have **{row['total_tasks'] - row['completed_tasks']}** tasks pending or rejected for **{curr.strftime('%A, %b %d')}**. Please finish them first.")
                         return curr, True
             curr += timedelta(days=1)
             
@@ -3472,6 +3521,9 @@ def get_checklist_logs(conn, submission_id):
 def show_weekly_checklist_summary_dialog(conn, user_id, username, week_dates, is_manager=False, is_admin=False):
     """Dialog that shows all checklist entries for a week using tabs for quick navigation."""
     st.subheader(f"📅 Weekly Summary: {username}", anchor=False)
+    
+    # Robustly identify if current user is an admin to grant oversight
+    is_admin = is_admin or st.session_state.get("role") == "admin"
     
     # Filter for dates in the current month to match the calendar week
     active_dates = [d for d in week_dates]
@@ -3831,32 +3883,41 @@ def daily_checklist_page(conn):
                         if st.button("⏹️ End Task", key=f"end_{row['id']}", type="primary", use_container_width=True):
                             try:
                                 now = get_ist_time()
-                                # 1. Get/Create Timesheet for current week
-                                f_week, _, _ = get_current_week_details()
-                                ts_id, _, _ = get_or_create_timesheet(conn, user_id, f_week)
+                                # 1. Get/Create Timesheet for the checklist date
+                                f_week = today.isocalendar()[1]
+                                ts_id, ts_status, _ = get_or_create_timesheet(conn, user_id, f_week)
                                 
-                                if not ts_id:
-                                    # get_or_create_timesheet already shows st.error if blocked
-                                    return
-
-                                # 2. Calculate duration
+                                # DUR CALCULATION: Consistent across both cases
                                 duration = 0.0
                                 if row['start_time']:
                                     start_time = pd.to_datetime(row['start_time'])
-                                    # Ensure timezone consistency for subtraction
                                     if start_time.tzinfo is None:
                                         start_time = pytz.timezone('Asia/Kolkata').localize(start_time)
                                     diff = now - start_time
                                     duration = max(0.0, diff.total_seconds() / 3600.0)
+
+                                if not ts_id:
+                                    # Still allow ending the task in Checklist Logs to avoid deadlock
+                                    with conn.session as s:
+                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'completed', end_time = :now WHERE id = :id"),
+                                                  {"now": now, "id": row['id']})
+                                        s.execute(text("UPDATE daily_checklist_submissions SET end_time = :now WHERE id = :id"),
+                                                  {"now": now, "id": sub_id})
+                                        s.commit()
+                                    st.warning("⚠️ **Task Ended, but NOT logged to Timesheet.** You have pending timesheets from previous weeks that must be submitted first. Please fix them and then manually log this duration.")
+                                    time.sleep(3)
+                                    st.rerun()
+                                    return
                                 
+                                # 3. Proceed with normal auto-log if timesheet exists
                                 with conn.session as s:
-                                    # 3. Update Daily Checklist Logs
+                                    # Update Daily Checklist Logs
                                     s.execute(text("UPDATE daily_checklist_logs SET status = 'completed', end_time = :now WHERE id = :id"),
                                               {"now": now, "id": row['id']})
                                     s.execute(text("UPDATE daily_checklist_submissions SET end_time = :now WHERE id = :id"),
                                               {"now": now, "id": sub_id})
                                     
-                                    # 4. Auto-log to Weekly Timesheet ('work' table)
+                                    # Auto-log to Weekly Timesheet ('work' table)
                                     s.execute(text("""
                                         INSERT INTO work (timesheet_id, work_date, work_name, work_description, work_duration, entry_type)
                                         VALUES (:ts_id, :w_date, :w_name, :w_desc, :w_dur, 'work')
