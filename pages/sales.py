@@ -389,7 +389,7 @@ def get_thesis_to_book_badge(is_thesis_to_book):
         return generate_badge("Thesis To Book", "#c2410c", "#fff7ed")
     return ""
 
-def get_author_checklist_pill(book_id, row, authors_grouped):
+def get_author_checklist_pill(book_id, row, authors_grouped, corrections_grouped):
 
     # --- Styles for a more compact look ---
 
@@ -462,10 +462,22 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
             else:
                 # Special cue for Digital proof during corrections
                 if field == "digital_book_sent" and row.get("correction_status", "None") != "None":
-                    # Refresh icon ↺ for resend
-                    pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
-                    style = resend_style
-                    title = f"{label}: Needs to be resent after correction"
+                    # Show 'Resend' only if there's an active correction that is NOT internal (is_internal = 0)
+                    all_corr = corrections_grouped.get(book_id, pd.DataFrame())
+                    active_author_corr = False
+                    if not all_corr.empty:
+                        active_author_corr = not all_corr[(all_corr['correction_end'].isnull()) & (all_corr['is_internal'] == 0)].empty
+                    
+                    if active_author_corr:
+                        # Refresh icon ↺ for resend
+                        pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
+                        style = resend_style
+                        title = f"{label}: Needs to be resent after correction"
+                    else:
+                        # Treat as normal pending if it's an internal correction
+                        pill_content = f"<span>&#10007;</span><span>{label}</span>"
+                        style = pending_style
+                        title = f"{label}: Pending"
                 else:
                     # NEW: Cross mark icon ✗ for pending items
                     pill_content = f"<span>&#10007;</span><span>{label}</span>"
@@ -1534,9 +1546,9 @@ ORDER BY b.date DESC
 @st.cache_data
 def fetch_corrections_data(book_ids, _conn):
     if not book_ids:
-        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end', 'is_internal'])
     query = """
-    SELECT book_id, section, worker, correction_end
+    SELECT book_id, section, worker, correction_end, is_internal
     FROM corrections
     WHERE book_id IN :book_ids
     """
@@ -1544,7 +1556,7 @@ def fetch_corrections_data(book_ids, _conn):
         return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
     except Exception as e:
         st.error(f"Error fetching corrections: {e}")
-        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end', 'is_internal'])
 
 try:
     books = conn.query(query, params={"user_name": user_name}, show_spinner=False)
@@ -1942,7 +1954,7 @@ with st.container(border=False):
                     author_badge = get_author_badge(row.get('author_type', 'Multiple'), author_count)
                     publish_badge = get_publish_badge(row.get('is_publish_only', 0))
                     thesis_to_book_badge = get_thesis_to_book_badge(row.get('is_thesis_to_book', 0))
-                    checklist_display = get_author_checklist_pill(row['book_id'], row, authors_grouped)
+                    checklist_display = get_author_checklist_pill(row['book_id'], row, authors_grouped, corrections_grouped)
                     authors_display = author_names_dict.get(row['book_id'], "No authors found")
 
                     html_content = f"""

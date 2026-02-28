@@ -481,7 +481,7 @@ elif user_role != "admin":
 def fetch_book_details(book_id, conn):
     query = f"""
     SELECT title, date, apply_isbn, isbn, is_single_author, isbn_receive_date , tags, subject, num_copies, 
-    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price, writing_start, is_cancelled, cancellation_reason, correction_status, deliver
+    syllabus_path, is_thesis_to_book, print_status,is_publish_only, publisher, price, writing_start, is_cancelled, cancellation_reason, correction_status, deliver, author_remark
     FROM books
     WHERE book_id = '{book_id}'
     """
@@ -709,9 +709,9 @@ def fetch_all_author_names(book_ids, _conn):
 @st.cache_data
 def fetch_corrections_data(book_ids, _conn):
     if not book_ids:
-        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end', 'is_internal'])
     query = """
-    SELECT book_id, section, worker, correction_end
+    SELECT book_id, section, worker, correction_end, is_internal
     FROM corrections
     WHERE book_id IN :book_ids
     """
@@ -719,7 +719,7 @@ def fetch_corrections_data(book_ids, _conn):
         return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
     except Exception as e:
         st.error(f"Error fetching corrections: {e}")
-        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end'])
+        return pd.DataFrame(columns=['book_id', 'section', 'worker', 'correction_end', 'is_internal'])
 
 # ------------------------------------------------------------------
 # 1.  Harmonised palette  (light bg → dark text)
@@ -4015,6 +4015,17 @@ MAX_EDITORS_PER_CHAPTER = 2
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large', on_dismiss = 'rerun')
 def edit_author_dialog(book_id, conn):
+    # Ensure author_remark column exists in books table
+    try:
+        with conn.session as s:
+            s.execute(text("SELECT author_remark FROM books LIMIT 1"))
+    except Exception:
+        try:
+            with conn.session as s:
+                s.execute(text("ALTER TABLE books ADD COLUMN author_remark TEXT"))
+                s.commit()
+        except Exception as e:
+             st.error(f"Error updating database schema: {e}")
 
     # Fetch book details for title, is_single_author, num_copies, and print_status
     book_details = fetch_book_details(book_id, conn)
@@ -5207,6 +5218,34 @@ def edit_author_dialog(book_id, conn):
                                                         st.rerun()
                                                 except Exception as e:
                                                     st.error(f"Error adding correction: {e}")
+
+        # Author Remark (General for the book)
+        st.write("")
+        with st.expander("📝 Author Remark", expanded=False):
+            author_remark_val = book_details.iloc[0].get('author_remark', '') or ''
+            new_remark = st.text_area(
+                "Author Remark (Internal use)",
+                value=author_remark_val,
+                height=150,
+                key=f"author_remark_input_{book_id}",
+                help="Enter general remarks for this book."
+            )
+            if st.button("💾 Save Remark", key=f"save_remark_btn_{book_id}", type="primary", use_container_width=True):
+                try:
+                    with st.spinner("Saving remark..."):
+                        import time
+                        time.sleep(2)
+                        with conn.session as s:
+                            s.execute(
+                                text("UPDATE books SET author_remark = :remark WHERE book_id = :book_id"),
+                                {"remark": new_remark, "book_id": book_id}
+                            )
+                            s.commit()
+                        st.success("✅ Remark saved successfully!")
+                        st.toast("Remark updated!", icon="✔️")
+                        st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"❌ Error saving remark: {e}")
 
     with tab2:
         publisher = book_details['publisher'].iloc[0] if 'publisher' in book_details else None
@@ -9032,7 +9071,7 @@ def get_publisher_badge(publisher):
     return ""
 
 
-def get_author_checklist_pill(book_id, row, authors_grouped):
+def get_author_checklist_pill(book_id, row, authors_grouped, corrections_grouped):
 
     # --- Styles for a more compact look ---
 
@@ -9105,10 +9144,22 @@ def get_author_checklist_pill(book_id, row, authors_grouped):
             else:
                 # Special cue for Digital proof during corrections
                 if field == "digital_book_sent" and row.get("correction_status", "None") != "None":
-                    # Refresh icon ↺ for resend
-                    pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
-                    style = resend_style
-                    title = f"{label}: Needs to be resent after correction"
+                    # Show 'Resend' only if there's an active correction that is NOT internal (is_internal = 0)
+                    all_corr = corrections_grouped.get(book_id, pd.DataFrame())
+                    active_author_corr = False
+                    if not all_corr.empty:
+                        active_author_corr = not all_corr[(all_corr['correction_end'].isnull()) & (all_corr['is_internal'] == 0)].empty
+                    
+                    if active_author_corr:
+                        # Refresh icon ↺ for resend
+                        pill_content = f"<span>&#8635;</span><span>Resend {label}</span>"
+                        style = resend_style
+                        title = f"{label}: Needs to be resent after correction"
+                    else:
+                        # Treat as normal pending if it's an internal correction
+                        pill_content = f"<span>&#10007;</span><span>{label}</span>"
+                        style = pending_style
+                        title = f"{label}: Pending"
                 else:
                     # NEW: Cross mark icon ✗ for pending items
                     pill_content = f"<span>&#10007;</span><span>{label}</span>"
@@ -9239,7 +9290,7 @@ with st.container(border=False):
                     publish_badge = get_publish_badge(row.get('is_publish_only', 0))
                     thesis_to_book_badge = get_thesis_to_book_badge(row.get('is_thesis_to_book', 0))
                     publisher_badge = get_publisher_badge(row.get('publisher', ''))
-                    checklist_display = get_author_checklist_pill(row['book_id'], row, authors_grouped)
+                    checklist_display = get_author_checklist_pill(row['book_id'], row, authors_grouped, corrections_grouped)
                     authors_display = author_names_dict.get(row['book_id'], "No authors found")
 
                     # --- The HTML for each row ---
