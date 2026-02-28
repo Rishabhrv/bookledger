@@ -29,11 +29,12 @@ user_id = st.session_state.get("user_id",0)
 user_app = st.session_state.get("app", None)
 user_name = st.session_state.get("username", "Unknown")
 user_access = st.session_state.get("access", None)[0]
+session_id = st.session_state.get("session_id", "Unknown")
 token = st.session_state.token
 
 
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+# if "session_id" not in st.session_state:
+#     st.session_state.session_id = str(uuid.uuid4())
 
 # Access control check
 if not (user_role == 'user' and user_access == 'Full Access' and user_app == 'sales'):

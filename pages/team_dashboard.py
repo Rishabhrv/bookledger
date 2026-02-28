@@ -116,11 +116,8 @@ if "activity_logged" not in st.session_state:
 
 if user_app == 'main' or role_user == 'admin':
     initialize_click_and_session_id()
-else:
-    if "session_id" not in st.session_state:
-        st.session_state.session_id = str(uuid.uuid4())
 
-session_id = st.session_state.session_id
+session_id = st.session_state.get("session_id", "Unknown")
 click_id = st.session_state.get("click_id", None)
 
 # Ensure user_id and username are set

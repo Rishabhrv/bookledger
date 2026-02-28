@@ -17,11 +17,38 @@ st.logo(logo, size="large", icon_image=small_logo)
 validate_token()
 initialize_click_and_session_id()
 
+session_id = st.session_state.get("session_id", "Unknown")
+click_id = st.session_state.get("click_id", None)
+
 user_role = st.session_state.get("role", "Unknown")
 # Allow admins and main app users
 if user_role != 'admin' and st.session_state.get("app") != 'main':
     st.error("⚠️ Access Denied.")
     st.stop()
+
+conn = connect_db()
+
+# Initialize session state
+if "logged_click_ids" not in st.session_state:
+    st.session_state.logged_click_ids = set()
+if "activity_logged" not in st.session_state:
+    st.session_state.activity_logged = False
+
+# Log navigation if click_id is present and not already logged
+if click_id and click_id not in st.session_state.logged_click_ids:
+    try:
+        log_activity(
+            conn,
+            st.session_state.user_id,
+            st.session_state.username,
+            st.session_state.session_id,
+            "navigated to page",
+            f"Page: Extra & Deleted Books"
+        )
+        st.session_state.logged_click_ids.add(click_id)
+    except Exception as e:
+        st.error(f"Error logging navigation: {str(e)}")
+
 
 st.markdown("""
     <style>

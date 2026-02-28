@@ -93,9 +93,10 @@ user_name = st.session_state.get("username", "Unknown")
 start_date = st.session_state.get("start_date", None)
 level = st.session_state.get("level", "Unknown")
 report_to = st.session_state.get("report_to", "Unknown")
+session_id = st.session_state.get("session_id", "Unknown")
 token = st.session_state.token
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
+# if "session_id" not in st.session_state:
+#     st.session_state.session_id = str(uuid.uuid4())
 
 
 # Base URL for your app
@@ -161,7 +162,7 @@ if "activity_logged" not in st.session_state:
                 st.session_state.username,
                 st.session_state.session_id,
                 "logged in",
-                f"App: {st.session_state.app}"
+                f"App: Main"
             )
     st.session_state.activity_logged = True
 

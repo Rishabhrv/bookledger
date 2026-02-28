@@ -38,11 +38,8 @@ token = st.session_state.token
 
 if user_app == 'main' or user_role == 'admin':
     initialize_click_and_session_id()
-else:
-    if "session_id" not in st.session_state:
-        st.session_state.session_id = str(uuid.uuid4())
 
-session_id = st.session_state.session_id
+session_id = st.session_state.get("session_id", "Unknown")
 click_id = st.session_state.get("click_id", None)
 
 if user_role != 'admin' and not (

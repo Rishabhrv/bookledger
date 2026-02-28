@@ -65,23 +65,21 @@ def error_dialog(error_message):
 def validate_token():
     # Check if token and user details are cached and not near expiry
     current_time = time.time()
-    if ('token' in st.session_state and 
-        'user_details' in st.session_state and 
-        'exp' in st.session_state and 
+    if ('token' in st.session_state and
+        'session_id' in st.session_state and  # ✅ Added session_id check
+        'exp' in st.session_state and
         st.session_state.exp > current_time + 300):  # 5-minute buffer
         logger.info("Using cached token validation")
-    
+        return  # Exit early if cache is valid
+
     # Token fetching
     if 'token' not in st.session_state:
         token = st.query_params.get("token")
         if not token:
             logger.error("No token provided")
             error_dialog("Access denied: Please log in first.")
+            return
         st.session_state.token = token if isinstance(token, str) else token[0]
-
-        #  # ✅ Clean URL by removing token parameter (security best practice)
-        # if "token" in st.query_params:
-        #     del st.query_params["token"]
 
     token = st.session_state.token
 
@@ -98,7 +96,11 @@ def validate_token():
             logger.error(f"Auth failed: {error}")
             raise jwt.InvalidTokenError(error)
 
-        user_details = response.json().get('user_details', {})
+        # ✅ Extract session_id and details from response
+        resp_json = response.json()
+        session_id = resp_json.get('session_id')
+        user_details = resp_json.get('user_details', {})
+
         role = user_details.get('role', '').lower()
         app = user_details.get('app', '').lower()
         access = user_details.get('access', [])
@@ -140,8 +142,9 @@ def validate_token():
                     logger.error(f"Invalid access for ijisem app: {access}")
                     raise jwt.InvalidTokenError(f"Invalid access for ijisem app: {access}")
 
-        # Cache user details
+        # ✅ Cache user details and the NEW session_id
         st.session_state.user_id = decoded['user_id']
+        st.session_state.session_id = session_id  # ✅ NEW: Store session_id for logging
         st.session_state.email = email
         st.session_state.role = role
         st.session_state.app = app
@@ -153,7 +156,8 @@ def validate_token():
         st.session_state.report_to = report_to
         st.session_state.associate_id = associate_id
         st.session_state.designation = designation
-        logger.info(f"Token validated successfully for user: {email}")
+
+        logger.info(f"Token validated successfully for user: {email}, session: {session_id}")
 
     except jwt.ExpiredSignatureError as e:
         logger.error(f"Token expired: {str(e)}", exc_info=True)
