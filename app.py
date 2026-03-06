@@ -4011,7 +4011,128 @@ MAX_AUTHORS = 4
 MAX_CHAPTERS = 30
 MAX_EDITORS_PER_CHAPTER = 2
 
-# Updated dialog for editing author details with improved UI
+# Function for rendering a delivery slip content
+def render_delivery_slip(book_title, num_copies, author_name, author_address, author_phone):
+    # Use fallback if values are missing
+    author_name = author_name or "N/A"
+    author_address = author_address or "Address not provided"
+    author_phone = author_phone or "N/A"
+    num_copies = num_copies or 0
+    
+    # Half A4 size is approx 210mm x 148mm
+    # We use CSS to ensure it fits and hides browser headers/footers
+    slip_style = """
+    <style>
+        @media print {
+            @page {
+                size: A4;
+                margin: 0;
+            }
+            body {
+                margin: 0;
+                padding: 0;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .slip-container {
+                width: 210mm;
+                height: 148.5mm;
+                padding: 10mm;
+                box-sizing: border-box;
+                page-break-after: always;
+            }
+        }
+        .slip-container {
+            width: 100%;
+            max-width: 190mm;
+            margin: auto;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: white;
+            color: black;
+            border: 2px dashed #333;
+            padding: 15px;
+            box-sizing: border-box;
+        }
+    </style>
+    """
+    
+    slip_content = f"""
+    <div class="slip-container">
+        <div style="text-align: center; border-bottom: 2px solid #1e4976; padding-bottom: 10px; margin-bottom: 15px;">
+            <h2 style="margin: 0; color: #1e4976; text-transform: uppercase; font-size: 22px;">Delivery Slip</h2>
+            <p style="margin: 3px 0; font-size: 14px; font-weight: bold; color: #555;">Author Copy Bundle</p>
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <tr>
+                    <td style="padding: 5px; font-weight: bold; width: 20%; border: 1px solid #ddd; background-color: #f9f9f9;">Book Title:</td>
+                    <td style="padding: 5px; border: 1px solid #ddd; font-weight: 600;">{book_title}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 5px; font-weight: bold; border: 1px solid #ddd; background-color: #f9f9f9;">Quantity:</td>
+                    <td style="padding: 5px; border: 1px solid #ddd;">{num_copies} Copies</td>
+                </tr>
+            </table>
+        </div>
+
+        <div style="display: flex; gap: 20px; margin-bottom: 15px;">
+            <div style="flex: 1; border: 1.5px solid #1e4976; padding: 12px; border-radius: 8px; background-color: #f8fbff; min-height: 180px;">
+                <h3 style="margin: 0 0 10px 0; color: #1e4976; border-bottom: 1.5px solid #1e4976; padding-bottom: 3px; text-transform: uppercase; font-size: 13px;">TO (Recipient):</h3>
+                <p style="margin: 5px 0; font-weight: bold; font-size: 18px;">{author_name}</p>
+                <p style="margin: 5px 0; font-size: 15px; line-height: 1.4; white-space: pre-wrap;">{author_address}</p>
+                <p style="margin: 10px 0 0 0; font-weight: bold; font-size: 15px; border-top: 1px solid #d0e3ff; padding-top: 5px;">Contact: {author_phone}</p>
+            </div>
+            <div style="flex: 1; border: 1.5px solid #ccc; padding: 12px; border-radius: 8px; background-color: #fafafa; min-height: 180px;">
+                <h3 style="margin: 0 0 10px 0; color: #333; border-bottom: 1.5px solid #ccc; padding-bottom: 3px; text-transform: uppercase; font-size: 13px;">FROM (Sender):</h3>
+                <p style="margin: 5px 0; font-weight: bold; font-size: 16px; color: #1e4976;">AGPH Books</p>
+                <p style="margin: 0; font-size: 11px; font-style: italic; color: #666;">(AG Publishing House)</p>
+                <p style="margin: 8px 0; font-size: 12px; line-height: 1.3; color: #444;">
+                    57-First Floor, Susheela Bhawan, Priyadarshini Phase-3,<br>
+                    near Meenakshi Planet City, Bagmugaliya,<br>
+                    Bhopal, Madhya Pradesh 462043
+                </p>
+                <p style="margin: 8px 0 0 0; font-weight: bold; font-size: 13px; border-top: 1px solid #ddd; padding-top: 5px;">Contact No: 9981933372</p>
+            </div>
+        </div>
+
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; font-size: 11px; color: #777;">
+            <div>
+                Date: {datetime.now().strftime('%d %b %Y')}<br>
+                AGPH Books
+            </div>
+        </div>
+    </div>
+    """
+
+    # For Streamlit preview, we use a slightly different height to avoid scrollbars in the component
+    st.components.v1.html(f"{slip_style}{slip_content}", height=450, scrolling=True)
+    
+    # Download button for printing
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Delivery Slip - {author_name}</title>
+        {slip_style}
+    </head>
+    <body onload="window.print()">
+        {slip_content}
+    </body>
+    </html>
+    """
+    
+    st.download_button(
+        f"📥 Download & Print Slip ({author_name})",
+        data=full_html,
+        file_name=f"Delivery_Slip_{author_name.replace(' ', '_')}.html",
+        mime="text/html",
+        use_container_width=True,
+        type="primary",
+        key=f"dl_slip_btn_{author_name}_{datetime.now().timestamp()}"
+    )
+
 # Updated dialog for editing author details with improved UI
 @st.dialog("Edit Author Details", width='large', on_dismiss = 'rerun')
 def edit_author_dialog(book_id, conn):
@@ -4726,14 +4847,6 @@ def edit_author_dialog(book_id, conn):
                                         help="Select the author's position in the book.",
                                         key=f"author_position_{row['id']}"
                                     )
-                                    updates['number_of_books'] = st.number_input(
-                                        "Number of Books",
-                                        min_value=0,
-                                        step=1,
-                                        value=int(row['number_of_books'] or 0),
-                                        help="Enter the number of books to deliver.",
-                                        key=f"number_of_books_{row['id']}"
-                                    )
                                 with col4:
                                     updates['publishing_consultant'] = st.text_input(
                                         "Publishing Consultant",
@@ -4742,42 +4855,35 @@ def edit_author_dialog(book_id, conn):
                                         key=f"publishing_consultant_{row['id']}"
                                     )
 
-                                    updates['corresponding_agent'] = st.text_input(
-                                        "Corresponding Author/Agent",
-                                        value=row['corresponding_agent'] or "",
-                                        help="Enter the name of the corresponding agent.",
-                                        key=f"corresponding_agent_{row['id']}"
-                                    )
+                                updates['corresponding_agent'] = st.text_input(
+                                    "Corresponding Author/Agent",
+                                    value=row['corresponding_agent'] or "",
+                                    help="Enter the name of the corresponding agent.",
+                                    key=f"corresponding_agent_{row['id']}"
+                                )
 
                             
-                                # New Fields for Author Table (collected separately as they belong to authors table)
+                                # # New Fields for Author Table (collected separately as they belong to authors table)
                                 author_updates = {}
-                                col_city, col_state = st.columns(2)
-                                with col_city:
-                                    author_updates['city'] = st.text_input(
-                                        "City",
-                                        value=row['city'] if row['city'] is not None else "",
-                                        key=f"city_{row['id']}"
-                                    )
-                                with col_state:
-                                    author_updates['state'] = st.text_input(
-                                        "State",
-                                        value=row['state'] if row['state'] is not None else "",
-                                        key=f"state_{row['id']}"
-                                    )
+                                # col_city, col_state = st.columns(2)
+                                # with col_city:
+                                #     author_updates['city'] = st.text_input(
+                                #         "City",
+                                #         value=row['city'] if row['city'] is not None else "",
+                                #         key=f"city_{row['id']}"
+                                #     )
+                                # with col_state:
+                                #     author_updates['state'] = st.text_input(
+                                #         "State",
+                                #         value=row['state'] if row['state'] is not None else "",
+                                #         key=f"state_{row['id']}"
+                                #     )
 
                                 author_updates['about_author'] = st.text_area(
                                     "About The Author",
                                     value=row['about_author'] if row['about_author'] is not None else "",
                                     key=f"about_{row['id']}",
                                     height=200
-                                )
-                                updates['delivery_address'] = st.text_area(
-                                    "Delivery Address",
-                                    value=row['delivery_address'] or "",
-                                    height=100,
-                                    help="Enter the delivery address.",
-                                    key=f"delivery_address_{row['id']}"
                                 )
 
                                 current_photo = row['author_photo'] if row['author_photo'] is not None else None
@@ -4797,6 +4903,22 @@ def edit_author_dialog(book_id, conn):
                             
                             # Tab 3: Delivery
                             with tab_objects[3]:
+                                # Check if print slip can be generated (based on saved data)
+                                has_delivery_info = bool(row['number_of_books'] and int(row['number_of_books']) > 0 and row['delivery_address'] and str(row['delivery_address']).strip())
+                                
+                                if print_status != 0:
+                                    if has_delivery_info:
+                                        with st.expander("🖨️ Print Delivery Slip", expanded=False):
+                                            render_delivery_slip(
+                                                book_title, 
+                                                row['number_of_books'], 
+                                                row['name'], 
+                                                row['delivery_address'], 
+                                                row['phone']
+                                            )
+                                    else:
+                                        st.info("💡 Print Slip will be available once **Number of Books** and **Delivery Address** are saved.")
+
                                 if print_status == 0:
                                     st.warning("⚠️ Delivery details are disabled because printing status is not confirmed.")
                                 else:
@@ -4808,12 +4930,12 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the delivery date.",
                                             key=f"delivery_date_{row['id']}"
                                         )
-                                        updates['tracking_id'] = st.text_input(
-                                            "Tracking ID",
-                                            value=row['tracking_id'] or "",
-                                            help="Enter the tracking ID for the delivery.",
-                                            key=f"tracking_id_{row['id']}"
-                                        )
+                                        # updates['tracking_id'] = st.text_input(
+                                        #     "Tracking ID",
+                                        #     value=row['tracking_id'] or "",
+                                        #     help="Enter the tracking ID for the delivery.",
+                                        #     key=f"tracking_id_{row['id']}"
+                                        # )
                                     with col8:
                                         updates['delivery_charge'] = st.number_input(
                                             "Delivery Charge (₹)",
@@ -4823,12 +4945,32 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the delivery charge in INR.",
                                             key=f"delivery_charge_{row['id']}"
                                         )
-                                        updates['delivery_vendor'] = st.text_input(
-                                            "Delivery Vendor",
-                                            value=row['delivery_vendor'] or "",
-                                            help="Enter the name of the delivery vendor.",
-                                            key=f"delivery_vendor_{row['id']}"
+                                        # updates['delivery_vendor'] = st.text_input(
+                                        #     "Delivery Vendor",
+                                        #     value=row['delivery_vendor'] or "",
+                                        #     help="Enter the name of the delivery vendor.",
+                                        #     key=f"delivery_vendor_{row['id']}"
+                                        # )
+                            # Add Number of Books and Delivery Address inputs
+                                    col_del1, col_del2 = st.columns([1, 2])
+                                    with col_del1:
+                                        updates['number_of_books'] = st.number_input(
+                                            "Number of Books",
+                                            min_value=0,
+                                            step=1,
+                                            value=int(row['number_of_books'] or 0),
+                                            help="Enter the number of books to deliver.",
+                                            key=f"number_of_books_{row['id']}"
                                         )
+                                    with col_del2:
+                                        updates['delivery_address'] = st.text_area(
+                                            "Delivery Address",
+                                            value=row['delivery_address'] or "",
+                                            height=68,
+                                            help="Enter the delivery address.",
+                                            key=f"delivery_address_{row['id']}"
+                                        )
+
                             # Submit and Remove buttons
                             col_submit, col_remove = st.columns([8, 1])
                             with col_submit:
