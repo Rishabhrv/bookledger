@@ -4865,19 +4865,19 @@ def edit_author_dialog(book_id, conn):
                             
                                 # # New Fields for Author Table (collected separately as they belong to authors table)
                                 author_updates = {}
-                                # col_city, col_state = st.columns(2)
-                                # with col_city:
-                                #     author_updates['city'] = st.text_input(
-                                #         "City",
-                                #         value=row['city'] if row['city'] is not None else "",
-                                #         key=f"city_{row['id']}"
-                                #     )
-                                # with col_state:
-                                #     author_updates['state'] = st.text_input(
-                                #         "State",
-                                #         value=row['state'] if row['state'] is not None else "",
-                                #         key=f"state_{row['id']}"
-                                #     )
+                                col_city, col_state = st.columns(2)
+                                with col_city:
+                                    author_updates['city'] = st.text_input(
+                                        "City",
+                                        value=row['city'] if row['city'] is not None else "",
+                                        key=f"city_{row['id']}"
+                                    )
+                                with col_state:
+                                    author_updates['state'] = st.text_input(
+                                        "State",
+                                        value=row['state'] if row['state'] is not None else "",
+                                        key=f"state_{row['id']}"
+                                    )
 
                                 author_updates['about_author'] = st.text_area(
                                     "About The Author",
@@ -4930,12 +4930,12 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the delivery date.",
                                             key=f"delivery_date_{row['id']}"
                                         )
-                                        # updates['tracking_id'] = st.text_input(
-                                        #     "Tracking ID",
-                                        #     value=row['tracking_id'] or "",
-                                        #     help="Enter the tracking ID for the delivery.",
-                                        #     key=f"tracking_id_{row['id']}"
-                                        # )
+                                        updates['tracking_id'] = st.text_input(
+                                            "Tracking ID",
+                                            value=row['tracking_id'] or "",
+                                            help="Enter the tracking ID for the delivery.",
+                                            key=f"tracking_id_{row['id']}"
+                                        )
                                     with col8:
                                         updates['delivery_charge'] = st.number_input(
                                             "Delivery Charge (₹)",
@@ -4945,12 +4945,12 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the delivery charge in INR.",
                                             key=f"delivery_charge_{row['id']}"
                                         )
-                                        # updates['delivery_vendor'] = st.text_input(
-                                        #     "Delivery Vendor",
-                                        #     value=row['delivery_vendor'] or "",
-                                        #     help="Enter the name of the delivery vendor.",
-                                        #     key=f"delivery_vendor_{row['id']}"
-                                        # )
+                                        updates['delivery_vendor'] = st.text_input(
+                                            "Delivery Vendor",
+                                            value=row['delivery_vendor'] or "",
+                                            help="Enter the name of the delivery vendor.",
+                                            key=f"delivery_vendor_{row['id']}"
+                                        )
                             # Add Number of Books and Delivery Address inputs
                                     col_del1, col_del2 = st.columns([1, 2])
                                     with col_del1:
