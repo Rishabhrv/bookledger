@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 from sqlalchemy import text
 from constants import connect_db, log_activity, initialize_click_and_session_id, clean_url_params
 from datetime import datetime
@@ -623,28 +624,6 @@ def fetch_book_details(book_id, conn):
     """
     return conn.query(query, show_spinner = False)
 
-def fetch_payment_overview(conn, start_date):
-    query = """
-    SELECT 
-        b.book_id,
-        b.title,
-        b.price as book_price,
-        b.date,
-        ba.id as book_author_id,
-        a.name as author_name,
-        ba.total_amount as amount_due,
-        ba.publishing_consultant,
-        ba.corresponding_agent,
-        COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid,
-        COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Pending'), 0) as amount_pending
-    FROM book_authors ba
-    JOIN books b ON ba.book_id = b.book_id
-    JOIN authors a ON ba.author_id = a.author_id
-    WHERE b.date >= :start_date
-    ORDER BY b.date DESC
-    """
-    return conn.query(query, params={"start_date": start_date}, ttl=0)
-
 def update_payment_status(payment_id, new_status, approved_by, conn, rejection_reason=None):
     try:
         with conn.session as s:
@@ -903,7 +882,7 @@ all_transactions = fetch_all_transactions(conn, start_date_filter)
 overview_df = fetch_payment_overview(conn, start_date_filter)
 
 # Define Tabs
-tab_overview, tab_history, tab_logs = st.tabs(["📊 Payment Overview", "🧾 Recent Transactions", "📜 Payment Logs"])
+tab_overview, tab_consultant, tab_history, tab_logs = st.tabs(["📊 Payment Overview", "👤 Consultant Analytics", "🧾 Recent Transactions", "📜 Payment Logs"])
 
 with tab_overview:
     if not overview_df.empty:
@@ -1128,6 +1107,156 @@ with tab_overview:
                         st.rerun()
     else:
         st.info("No payment data available from selected date.")
+
+with tab_consultant:
+    if not overview_df.empty:
+        # 1. Filtered Data for Analytics (Applying same search as overview for consistency)
+        analytics_df = overview_df.copy()
+        if search_query:
+            s = search_query.lower()
+            analytics_df = analytics_df[
+                analytics_df['book_id'].astype(str).str.lower().str.contains(s) |
+                analytics_df['title'].astype(str).str.lower().str.contains(s) |
+                analytics_df['author_name'].astype(str).str.lower().str.contains(s)
+            ]
+        
+        analytics_df['publishing_consultant'] = analytics_df['publishing_consultant'].fillna('Not Assigned').str.strip()
+        analytics_df.loc[analytics_df['publishing_consultant'] == '', 'publishing_consultant'] = 'Not Assigned'
+
+        # 2. Aggregations
+        consultant_stats = analytics_df.groupby('publishing_consultant').agg({
+            'amount_due': 'sum',
+            'amount_paid': 'sum',
+            'amount_pending': 'sum',
+            'book_author_id': 'count'
+        }).reset_index()
+        
+        consultant_stats.rename(columns={'book_author_id': 'author_count'}, inplace=True)
+        consultant_stats['balance'] = consultant_stats['amount_due'] - consultant_stats['amount_paid']
+        consultant_stats['recovery_pct'] = (consultant_stats['amount_paid'] / consultant_stats['amount_due'] * 100).fillna(0)
+        
+        # 3. High-level KPIs
+        total_due = consultant_stats['amount_due'].sum()
+        total_paid = consultant_stats['amount_paid'].sum()
+        total_pending = consultant_stats['amount_pending'].sum()
+        total_balance = consultant_stats['balance'].sum()
+        avg_recovery = (total_paid / total_due * 100) if total_due > 0 else 0
+
+        kpi_cols = st.columns(4)
+        kpi_cols[0].metric("Total Due", f"₹{total_due:,.0f}")
+        kpi_cols[1].metric("Total Paid", f"₹{total_paid:,.0f}", f"{avg_recovery:.1f}% Recovery")
+        kpi_cols[2].metric("Pending Appr.", f"₹{total_pending:,.0f}")
+        kpi_cols[3].metric("Outstanding", f"₹{total_balance:,.0f}", delta=f"-₹{total_balance:,.0f}", delta_color="inverse")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # 4. Visual Comparison
+        col_chart, col_leaderboard = st.columns([1.5, 1])
+        
+        with col_chart:
+            st.markdown("##### 📊 Collection Performance by Consultant")
+            
+            # Prepare data for stacked horizontal bar chart
+            plot_df = consultant_stats.sort_values('amount_due', ascending=True)
+            
+            # Melt for Plotly
+            melted_df = plot_df.melt(id_vars='publishing_consultant', 
+                                    value_vars=['amount_paid', 'balance'],
+                                    var_name='Type', value_name='Amount')
+            melted_df['Type'] = melted_df['Type'].replace({'amount_paid': 'Paid', 'balance': 'Remaining Due'})
+            
+            fig = px.bar(
+                melted_df, 
+                y='publishing_consultant', 
+                x='Amount', 
+                color='Type',
+                orientation='h',
+                color_discrete_map={'Paid': '#4CAF50', 'Remaining Due': '#F44336'},
+                labels={'publishing_consultant': 'Consultant', 'Amount': 'Amount (₹)'},
+                template="plotly_white",
+                height=max(400, len(consultant_stats) * 45)
+            )
+            fig.update_layout(
+                margin=dict(l=0, r=10, t=10, b=0),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)'),
+                yaxis=dict(showgrid=False)
+            )
+            st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+        with col_leaderboard:
+            st.markdown("##### 🏆 Leaderboard (by Collection)")
+            # Sort by Recovery % and Paid Amount
+            leaderboard = consultant_stats.sort_values(by=['amount_paid', 'recovery_pct'], ascending=False)
+            
+            for _, row in leaderboard.iterrows():
+                with st.container(border=True):
+                    # Consultant Header
+                    hcol1, hcol2 = st.columns([3, 1])
+                    with hcol1:
+                        st.markdown(f"**{row['publishing_consultant']}**")
+                        st.caption(f"Portfolio: {int(row['author_count'])} Authors")
+                    with hcol2:
+                        st.markdown(f"<div style='text-align:right; font-size:18px; font-weight:bold; color:#4CAF50;'>{row['recovery_pct']:.0f}%</div>", unsafe_allow_html=True)
+                    
+                    # Progress bar
+                    st.progress(min(1.0, row['recovery_pct']/100))
+                    
+                    # Mini Stats Row
+                    sc1, sc2, sc3 = st.columns(3)
+                    sc1.markdown(f"<small style='color:grey'>DUE</small><br>₹{row['amount_due']:,.0f}", unsafe_allow_html=True)
+                    sc2.markdown(f"<small style='color:grey'>PAID</small><br>₹{row['amount_paid']:,.0f}", unsafe_allow_html=True)
+                    sc3.markdown(f"<small style='color:grey'>BAL</small><br>₹{row['balance']:,.0f}", unsafe_allow_html=True)
+
+        # 5. Bottom Detailed Section - Separate Tables per Consultant
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("##### 📋 Pending Payments By Consultant")
+        
+        # Filter for rows that actually have something pending or awaiting approval
+        pending_all = analytics_df[
+            (analytics_df['amount_due'] > analytics_df['amount_paid']) | 
+            (analytics_df['amount_pending'] > 0)
+        ].copy()
+
+        if not pending_all.empty:
+            pending_all['balance'] = pending_all['amount_due'] - pending_all['amount_paid']
+            
+            # Group by Consultant
+            consultant_groups = pending_all.groupby('publishing_consultant')
+            
+            for consultant_name, group_df in consultant_groups:
+                with st.expander(f"👤 {consultant_name} - {len(group_df)} Pending Authors", expanded=True):
+                    # Sort group by balance
+                    sorted_group = group_df.sort_values('balance', ascending=False)
+                    
+                    st.dataframe(
+                        sorted_group[['author_name', 'title', 'book_id', 'amount_due', 'amount_paid', 'amount_pending', 'balance']],
+                        column_config={
+                            "author_name": "Author",
+                            "title": "Book Title",
+                            "book_id": "ID",
+                            "amount_due": st.column_config.NumberColumn("Due", format="₹%.0f"),
+                            "amount_paid": st.column_config.NumberColumn("Paid", format="₹%.0f"),
+                            "amount_pending": st.column_config.NumberColumn("Pending Appr.", format="₹%.0f"),
+                            "balance": st.column_config.NumberColumn("Outstanding", format="₹%.0f"),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                    
+                    # Group Totals
+                    g_due = sorted_group['amount_due'].sum()
+                    g_paid = sorted_group['amount_paid'].sum()
+                    g_bal = sorted_group['balance'].sum()
+                    st.markdown(f"""
+                        <div style='text-align:right; font-size:13px; color:#666;'>
+                            <b>Total Due:</b> ₹{g_due:,.0f} | <b>Total Paid:</b> ₹{g_paid:,.0f} | <b style='color:#d32f2f;'>Total Outstanding:</b> ₹{g_bal:,.0f}
+                        </div>
+                    """, unsafe_allow_html=True)
+        else:
+            st.success("🎉 All payments for the selected period are fully collected and approved!")
+    else:
+        st.info("No data available for the selected period.")
 
 with tab_history:
     if not all_transactions.empty:
