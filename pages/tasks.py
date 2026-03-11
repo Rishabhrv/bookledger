@@ -1546,195 +1546,6 @@ def add_work_dialog(conn, timesheet_id, start_date, end_date):
             except Exception as e:
                 st.error(f"Error adding entry: {e}")
 
-
-@st.dialog("Daily Checklist Details", width="large")
-def show_daily_checklist_dialog(conn, user_id, username, selected_date, is_manager=False, is_admin=False):
-    """Dialog for viewing daily checklist details with timestamps and approval actions."""
-    st.subheader(f"✅ Daily Checklist: {username}", anchor=False)
-    st.caption(f"Date: {selected_date.strftime('%B %d, %Y')}")
-
-    submission_df = get_today_submission(conn, user_id, selected_date)
-    if submission_df.empty:
-        st.info("No checklist data for this day.")
-        return
-
-    sub_row = submission_df.iloc[0]
-    sub_id = sub_row['id']
-    status = sub_row['status']
-    start_time = sub_row['start_time']
-    end_time = sub_row['end_time']
-    
-    # Robustly identify if current user is an admin to grant oversight
-    is_admin = is_admin or st.session_state.get("role") == "admin"
-    
-    # Header Metrics (Compact)
-    c1, c2, c3, c4 = st.columns(4)
-    status_map_color = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
-    
-    with c1:
-        render_compact_metric("Status", f"{status_map_color.get(status, '⚪')} {status.upper()}")
-    
-    with c2:
-        start_val = pd.to_datetime(start_time).strftime("%I:%M %p") if start_time else "—"
-        render_compact_metric("Started At", start_val)
-        
-    with c3:
-        sub_val = pd.to_datetime(sub_row['submitted_at']).strftime("%I:%M %p") if sub_row['submitted_at'] else "—"
-        render_compact_metric("Submitted At", sub_val)
-    
-    with c4:
-        total_time_str = "—"
-        if start_time and end_time:
-            duration = end_time - start_time
-            hours, remainder = divmod(duration.total_seconds(), 3600)
-            minutes, _ = divmod(remainder, 60)
-            total_time_str = f"{int(hours)}h {int(minutes)}m"
-        render_compact_metric("Total Duration", total_time_str)
-
-    st.markdown("---")
-    
-    # Detailed Logs with Hierarchy
-    logs_df = get_checklist_logs(conn, sub_id)
-    resp_df = conn.query("SELECT id, task_name, description, manager_id FROM daily_responsibilities WHERE user_id = :user_id", params={"user_id": user_id}, ttl=0)
-    merged_df = logs_df.merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
-    
-    # --- Progress bar for Manager ---
-    total_tasks = merged_df['responsibility_id'].nunique()
-    latest_per_task = merged_df.groupby('responsibility_id').last()
-    done_count = int(latest_per_task['status'].isin(['approved', 'submitted']).sum())
-    st.progress(done_count / max(total_tasks, 1), text=f"{done_count} of {total_tasks} tasks submitted or approved")
-    
-    st.write("**Tasks Breakdown:**")
-    
-    # Sort for hierarchy
-    merged_df = merged_df.sort_values(['responsibility_id', 'id'])
-
-    status_icons = {"pending": "🕒", "started": "▶️", "completed": "⏹️", "submitted": "📤", "approved": "✅", "rejected": "❌"}
-    status_colors = {
-        "pending": ("#f0f2f6", "#31333f"),
-        "started": ("#fff4e5", "#b35900"),
-        "completed": ("#e6ffed", "#22863a"),
-        "submitted": ("#f5f0ff", "#6f42c1"),
-        "approved": ("#e6ffed", "#22863a"),
-        "rejected": ("#ffeef0", "#d73a49")
-    }
-
-    for resp_id, group in merged_df.groupby('responsibility_id'):
-        group = group.reset_index(drop=True)
-        latest = group.iloc[-1]
-        
-        # Robust manager identification for visibility filtering and actions
-        if pd.notna(latest['manager_id']):
-            task_manager_id_raw = latest['manager_id']
-        elif pd.notna(latest.get('manager_id_master')):
-            task_manager_id_raw = latest['manager_id_master']
-        else:
-            task_manager_id_raw = sub_row['manager_id']
-        
-        is_this_task_manager = False
-        if pd.notna(task_manager_id_raw):
-            try:
-                is_this_task_manager = int(st.session_state.user_id) == int(task_manager_id_raw)
-            except (ValueError, TypeError):
-                is_this_task_manager = False
-        
-        # Visibility filtering: In manager context, only show assigned tasks.
-        if is_manager and not is_admin and not is_this_task_manager:
-            continue
-
-        with st.container(border=True):
-            st.markdown(f"#### 📋 {group.iloc[0]['task_name']}")
-            
-            # Show description if available
-            if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
-                st.markdown(f"""
-                    <div style='color: #64748b; font-size: 0.8rem; margin-top: -12px; margin-bottom: 12px; margin-left: 28px; font-style: italic; line-height: 1.4;'>
-                        {group.iloc[0]['description']}
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            for i, (idx, row) in enumerate(group.iterrows()):
-                status = row['status']
-                is_latest = (i == len(group) - 1)
-                
-                # Visual distinction for previous attempts
-                bg_style = "background-color: #f8f9fa;" if not is_latest else ""
-                border_style = f"border-left: 5px solid {status_colors.get(status, ('#ccc', '#ccc'))[1]};"
-                st.markdown(f'<div style="{bg_style} {border_style} padding: 15px; border-radius: 8px; margin-bottom: 10px;">', unsafe_allow_html=True)
-                
-                # Title row within the card
-                c_title, c_badge = st.columns([0.7, 0.3])
-                if not is_latest:
-                    c_title.markdown(f"**Attempt #{i+1}**")
-                
-                bg, fg = status_colors.get(status, ("#f0f2f6", "#31333f"))
-                badge_html = f"""
-                    <div style='background-color: {bg}; color: {fg}; padding: 3px 10px; 
-                    border-radius: 12px; font-size: 0.75rem; font-weight: 700; 
-                    display: inline-block; text-transform: uppercase;'>
-                        {status_icons.get(status, '')} {status}
-                    </div>
-                """
-                c_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
-
-                # Metadata row
-                m1, m2, m3, m4, m5 = st.columns(5)
-                
-                def render_meta_dlg(col, label, val):
-                    col.markdown(f"""
-                        <div style='line-height: 1.2;'>
-                            <p style='color: #808495; font-size: 0.65rem; font-weight: 600; text-transform: uppercase; margin-bottom: 2px;'>{label}</p>
-                            <p style='font-size: 0.85rem; font-weight: 500; margin-bottom: 0;'>{val}</p>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                render_meta_dlg(m1, "Reporting To", row.get('manager_name') if pd.notna(row.get('manager_name')) else "Default")
-                render_meta_dlg(m2, "Start", pd.to_datetime(row['start_time']).strftime('%I:%M %p') if pd.notna(row['start_time']) else "—")
-                render_meta_dlg(m3, "End", pd.to_datetime(row['end_time']).strftime('%I:%M %p') if pd.notna(row['end_time']) else "—")
-                render_meta_dlg(m4, "Submitted", pd.to_datetime(row['submitted_at']).strftime('%I:%M %p') if pd.notna(row['submitted_at']) else "—")
-                
-                dur_val = "—"
-                if pd.notna(row['end_time']) and pd.notna(row['start_time']):
-                    dur = pd.to_datetime(row['end_time']) - pd.to_datetime(row['start_time'])
-                    dur_val = f"{int(dur.total_seconds()//60)}m"
-                render_meta_dlg(m5, "Duration", dur_val)
-
-                # If is_manager is True, it means we are in a context where oversight is already granted (like Dashboard)
-                if (is_this_task_manager or is_admin) and row['status'] == 'submitted' and is_latest:
-                    st.markdown("<div style='margin-top: 15px;'></div>", unsafe_allow_html=True)
-                    c_app, c_rej = st.columns(2)
-                    if c_app.button("Approve", key=f"app_t_dlg_{row['id']}", type="primary", use_container_width=True):
-                        try:
-                            now = get_ist_time()
-                            with conn.session as s:
-                                s.execute(text("UPDATE daily_checklist_logs SET status = 'approved', reviewed_at = :now WHERE id = :id"),
-                                          {"now": now, "id": row['id']})
-                                s.commit()
-                            st.rerun()
-                        except Exception as e: st.error(f"Error: {e}")
-                    
-                    with c_rej.popover("Reject", use_container_width=True):
-                        notes = st.text_area("Reason for Rejection", key=f"rej_notes_dlg_{row['id']}")
-                        if st.button("Confirm Reject", key=f"rej_conf_dlg_{row['id']}", type="secondary", use_container_width=True):
-                            if not notes.strip(): st.warning("Reason is required.")
-                            else:
-                                try:
-                                    now = get_ist_time()
-                                    with conn.session as s:
-                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'rejected', reviewed_at = :now, review_notes = :notes WHERE id = :id"),
-                                                  {"now": now, "notes": notes.strip(), "id": row['id']})
-                                        s.commit()
-                                    st.rerun()
-                                except Exception as e: st.error(f"Error: {e}")
-                
-                # Notes and Feedback
-                if pd.notna(row.get('resubmission_notes')) and row.get('resubmission_notes'):
-                    st.markdown(f"<div style='margin-top: 10px; font-size: 0.85rem;'>📝 <b>Correction:</b> {row['resubmission_notes']}</div>", unsafe_allow_html=True)
-                if pd.notna(row['review_notes']) and row['review_notes']:
-                    st.markdown(f"<div style='margin-top: 5px; font-size: 0.85rem; color: #d73a49;'>💬 <b>Manager Feedback:</b> {row['review_notes']}</div>", unsafe_allow_html=True)
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-
 @st.dialog("Confirm Submission")
 def confirm_submission_dialog(conn, timesheet_id, current_status):
     """Dialog to confirm timesheet submission."""
@@ -2628,7 +2439,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
         st.markdown(f"### ✅ {username}'s Checklist")
 
         # Header Metrics (Compact)
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         
         status_map_color = {"approved": "🟢", "submitted": "🟠", "rejected": "🔴", "pending": "🔵", "started": "▶️"}
         
@@ -2638,12 +2449,8 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
         with c2:
             start_val = pd.to_datetime(start_time).strftime("%I:%M %p") if pd.notna(start_time) and start_time else "—"
             render_compact_metric("Started At", start_val)
-            
-        with c3:
-            sub_val = pd.to_datetime(sub_row['submitted_at']).strftime("%I:%M %p") if pd.notna(sub_row['submitted_at']) and sub_row['submitted_at'] else "—"
-            render_compact_metric("Submitted At", sub_val)
 
-        with c4:
+        with c3:
             total_time_str = "—"
             if pd.notna(start_time) and pd.notna(end_time) and start_time and end_time:
                 duration = pd.to_datetime(end_time) - pd.to_datetime(start_time)
@@ -2656,11 +2463,11 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
 
         # Detailed Logs
         logs_df = get_checklist_logs(conn, sub_id)
-        resp_df = conn.query("SELECT id, task_name, description, manager_id FROM daily_responsibilities WHERE user_id = :user_id",
+        resp_df = conn.query("SELECT id, task_name, description, manager_id, priority FROM daily_responsibilities WHERE user_id = :user_id",
                                 params={"user_id": user_id}, ttl=0)
         merged_df = (logs_df
                         .merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
-                        .sort_values(['responsibility_id', 'id']))
+                        .sort_values(['priority', 'id']))
 
         # --- Progress bar for Manager ---
         total_tasks = merged_df['responsibility_id'].nunique()
@@ -2668,7 +2475,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
         done_count = int(latest_per_task['status'].isin(['approved', 'submitted']).sum())
         st.progress(done_count / max(total_tasks, 1), text=f"{done_count} of {total_tasks} tasks submitted or approved")
 
-        for resp_id, group in merged_df.groupby('responsibility_id'):
+        for resp_id, group in merged_df.groupby('responsibility_id', sort=False):
             group = group.reset_index(drop=True)
             latest = group.iloc[-1]
 
@@ -2705,7 +2512,14 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
             with st.container(border=True):
                 # Task name + latest status badge
                 col_title, col_badge = st.columns([0.7, 0.3])
-                col_title.markdown(f"#### 📋 {group.iloc[0]['task_name']}")
+                prio_val = group.iloc[0].get('priority')
+                
+                if pd.notna(prio_val):
+                    p_color = "#d73a49" if prio_val <= 3 else "#f66a0a" if prio_val <= 7 else "#0366d6"
+                    prio_html = f"<span style='background-color: {p_color}22; color: {p_color}; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; margin-right: 10px; border: 1px solid {p_color}44; vertical-align: middle;'>P{int(prio_val)}</span>"
+                    col_title.markdown(f"<h4>{prio_html}{group.iloc[0]['task_name']}</h4>", unsafe_allow_html=True)
+                else:
+                    col_title.markdown(f"<h4>📋 {group.iloc[0]['task_name']}</h4>", unsafe_allow_html=True)
                 
                 # Show description if available
                 if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
@@ -2726,7 +2540,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                 col_badge.markdown(f"<div style='text-align:right'>{badge_html}</div>", unsafe_allow_html=True)
 
                 # Metadata Columns
-                m1, m2, m3, m4, m5 = st.columns(5)
+                m1, m2, m3, m4 = st.columns(4)
                 
                 def render_meta_col_mgr(col, label, val):
                     col.markdown(f"""
@@ -2738,7 +2552,6 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
 
                 start_val = pd.to_datetime(latest['start_time']).strftime('%I:%M %p') if pd.notna(latest['start_time']) else "—"
                 end_val = pd.to_datetime(latest['end_time']).strftime('%I:%M %p') if pd.notna(latest['end_time']) else "—"
-                sub_val = pd.to_datetime(latest['submitted_at']).strftime('%I:%M %p') if pd.notna(latest['submitted_at']) else "—"
                 
                 dur_val = "—"
                 if pd.notna(latest['start_time']) and pd.notna(latest['end_time']):
@@ -2748,8 +2561,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                 render_meta_col_mgr(m1, "Reporting To", latest.get('manager_name') if pd.notna(latest.get('manager_name')) else "Default")
                 render_meta_col_mgr(m2, "Start", start_val)
                 render_meta_col_mgr(m3, "End", end_val)
-                render_meta_col_mgr(m4, "Submitted", sub_val)
-                render_meta_col_mgr(m5, "Duration", dur_val)
+                render_meta_col_mgr(m4, "Duration", dur_val)
 
                 # Notes and Feedback for LATEST attempt
                 if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \
@@ -2781,8 +2593,7 @@ def render_daily_checklist_inline(conn, sub_row, is_manager=False, is_admin=Fals
                                     </div>
                                     <div style='font-size: 0.8rem; color: #555;'>
                                         Start: {pd.to_datetime(hist_row['start_time']).strftime('%I:%M %p') if pd.notna(hist_row['start_time']) else '—'} | 
-                                        End: {pd.to_datetime(hist_row['end_time']).strftime('%I:%M %p') if pd.notna(hist_row['end_time']) else '—'} |
-                                        Sub: {pd.to_datetime(hist_row['submitted_at']).strftime('%I:%M %p') if pd.notna(hist_row['submitted_at']) else '—'}
+                                        End: {pd.to_datetime(hist_row['end_time']).strftime('%I:%M %p') if pd.notna(hist_row['end_time']) else '—'}
                                         {f" | Reviewed: {pd.to_datetime(hist_row['reviewed_at']).strftime('%I:%M %p')}" if pd.notna(hist_row['reviewed_at']) else ""}
                                     </div>
                                 </div>
@@ -3372,7 +3183,7 @@ def admin_dashboard(conn):
 ###################################################################################################################################
 
 def get_daily_responsibilities(conn, user_id):
-    query = "SELECT id, task_name, description, manager_id FROM daily_responsibilities WHERE user_id = :user_id AND is_active = 1"
+    query = "SELECT id, task_name, description, manager_id, priority FROM daily_responsibilities WHERE user_id = :user_id AND is_active = 1 ORDER BY priority ASC"
     return conn.query(query, params={"user_id": user_id}, ttl=0)
 
 def get_today_submission(conn, user_id, date):
@@ -3438,14 +3249,26 @@ def get_checklist_late_submitters_for_manager(_conn, manager_id):
 def determine_checklist_date_to_display(conn, user_id):
     """
     Determines which date's checklist to display.
-    Forces user to fill missing checklists before today.
+    Forces user to fix rejected checklists from the past, 
+    but respects lookback_date for missing/pending ones.
+    Returns (date, is_historical, reason_type)
     """
     today = get_ist_date()
-    
+
     try:
-        # Get all existing checklists for this user (limited to last 30 days for performance)
-        lookback_date = today - timedelta(days=30)
-        
+        # User preference: How far back to force missing/pending checklists (set to 0 by user)
+        missing_lookback = today - timedelta(days=0)
+        # Safety: How far back to check for rejected checklists that NEED fixing
+        rejection_lookback = today - timedelta(days=7)
+
+        # Determine overall start: joining date or rejection_lookback
+        start_date_raw = st.session_state.get("start_date")
+        if start_date_raw:
+            start_date = pd.to_datetime(start_date_raw).date()
+            query_start = max(start_date, rejection_lookback)
+        else:
+            query_start = rejection_lookback
+
         # Enhanced query using CTE to find the latest status of EACH responsibility
         existing_query = """
             WITH LatestLogs AS (
@@ -3455,64 +3278,62 @@ def determine_checklist_date_to_display(conn, user_id):
             )
             SELECT s.date, s.status as sub_status,
                    COUNT(l.responsibility_id) as total_tasks,
-                   COUNT(CASE WHEN l.status IN ('submitted', 'approved') THEN 1 END) as completed_tasks
+                   COUNT(CASE WHEN l.status IN ('submitted', 'approved') THEN 1 END) as completed_tasks,
+                   COUNT(CASE WHEN l.status = 'rejected' THEN 1 END) as rejected_tasks
             FROM daily_checklist_submissions s
             LEFT JOIN LatestLogs l ON s.id = l.submission_id AND l.rn = 1
             WHERE s.user_id = :user_id
-            AND s.date >= :lookback_date
+            AND s.date >= :query_start
             GROUP BY s.date, s.status
             ORDER BY s.date ASC
         """
-        existing_df = conn.query(existing_query, params={"user_id": user_id, "lookback_date": lookback_date}, ttl=0)
-        
-        # Determine check start: joining date or lookback_date
-        start_date_raw = st.session_state.get("start_date")
-        if start_date_raw:
-            start_date = pd.to_datetime(start_date_raw).date()
-            check_start = max(start_date, lookback_date)
-        else:
-            check_start = lookback_date
+        existing_df = conn.query(existing_query, params={"user_id": user_id, "query_start": query_start}, ttl=0)
 
-        # Check each day from check_start to today
-        curr = check_start
+        if not existing_df.empty:
+            existing_df['date'] = pd.to_datetime(existing_df['date']).dt.date
+
+            # --- STEP 1: Check for REJECTED checklists anywhere in the query range ---
+            # We show the OLDEST rejection first.
+            rejected_days = existing_df[existing_df['rejected_tasks'] > 0]
+            if not rejected_days.empty:
+                oldest_rejected = rejected_days.iloc[0]
+                r_date = oldest_rejected['date']
+                if r_date < today:
+                    return r_date, True, "rejected"
+                elif r_date == today:
+                    return r_date, False, "rejected"
+
+        # --- STEP 2: Check for MISSING or PENDING checklists from missing_lookback ---
+        curr = missing_lookback
         while curr < today:
             if curr.weekday() != 6: # Not Sunday
                 # Find if checklist exists for this date
                 day_match = existing_df[existing_df['date'] == curr] if not existing_df.empty else pd.DataFrame()
-                
+
                 if day_match.empty:
-                    # Missing entirely
-                    st.warning(f"⚠️ **Missing Daily Checklist:** You must complete the checklist for **{curr.strftime('%A, %b %d')}** before accessing today's.")
-                    return curr, True
+                    return curr, True, "missing"
                 else:
                     # Check if all tasks are submitted or approved
                     row = day_match.iloc[0]
-                    if row['total_tasks'] == 0:
-                        # Day initialized but no tasks? Might happen if admin just added responsibility
-                        # Let them proceed to it to trigger sync
-                        st.warning(f"⚠️ **Pending Daily Checklist:** Your checklist for **{curr.strftime('%A, %b %d')}** has no tasks yet. Please initialize it.")
-                        return curr, True
-                    
-                    if row['completed_tasks'] < row['total_tasks']:
-                        # Some tasks are still pending, started, completed (but not submitted), or rejected
-                        st.warning(f"⚠️ **Pending Daily Checklist:** You have **{row['total_tasks'] - row['completed_tasks']}** tasks pending or rejected for **{curr.strftime('%A, %b %d')}**. Please finish them first.")
-                        return curr, True
+                    if row['total_tasks'] == 0 or row['completed_tasks'] < row['total_tasks']:
+                        return curr, True, "pending"
             curr += timedelta(days=1)
-            
-    except Exception as e:
-        pass
 
-    return today, False
+    except Exception as e:
+        st.error(f"Error determining checklist date: {e}")
+
+    return today, False, None
 
 def get_checklist_logs(conn, submission_id):
     query = """
-        SELECT l.*, u.username as manager_name 
-        FROM daily_checklist_logs l 
-        LEFT JOIN userss u ON l.manager_id = u.id 
+        SELECT l.*, u.username as manager_name, dr.priority
+        FROM daily_checklist_logs l
+        LEFT JOIN userss u ON l.manager_id = u.id
+        LEFT JOIN daily_responsibilities dr ON l.responsibility_id = dr.id
         WHERE l.submission_id = :submission_id
+        ORDER BY dr.priority ASC, l.id ASC
     """
     return conn.query(query, params={"submission_id": submission_id}, ttl=0)
-
 @st.dialog("Weekly Checklist Summary", width="large")
 def show_weekly_checklist_summary_dialog(conn, user_id, username, week_dates, is_manager=False, is_admin=False):
     """Dialog that shows all checklist entries for a week using tabs for quick navigation."""
@@ -3604,7 +3425,7 @@ def daily_checklist_page(conn):
 
     with tab_active:
         # NEW: Determine the correct date to show (missing previous days first)
-        display_date, is_historical = determine_checklist_date_to_display(conn, user_id)
+        display_date, is_historical, _ = determine_checklist_date_to_display(conn, user_id)
         
         if is_historical:
             st.info(f"📅 Showing pending checklist for **{display_date.strftime('%A, %b %d, %Y')}**")
@@ -3710,11 +3531,11 @@ def daily_checklist_page(conn):
                 pass
         
         logs_df = get_checklist_logs(conn, sub_id)
-        resp_df = conn.query("SELECT id, task_name, description, manager_id FROM daily_responsibilities WHERE user_id = :user_id", params={"user_id": user_id}, ttl=0)
+        resp_df = conn.query("SELECT id, task_name, description, manager_id, priority FROM daily_responsibilities WHERE user_id = :user_id", params={"user_id": user_id}, ttl=0)
         merged_df = logs_df.merge(resp_df, left_on='responsibility_id', right_on='id', suffixes=('', '_master'))
         
         active_activity = any(merged_df['status'] == 'started')
-        merged_df = merged_df.sort_values(['responsibility_id', 'id'])
+        merged_df = merged_df.sort_values(['priority', 'id'])
 
         # --- Progress bar ---
         total_tasks = merged_df['responsibility_id'].nunique()
@@ -3737,7 +3558,7 @@ def daily_checklist_page(conn):
             "rejected": ("#ffeef0", "#d73a49")
         }
 
-        for resp_id, group in merged_df.groupby('responsibility_id'):
+        for resp_id, group in merged_df.groupby('responsibility_id', sort=False):
             group = group.reset_index(drop=True)
             latest = group.iloc[-1]
             latest_status = latest['status']
@@ -3754,7 +3575,14 @@ def daily_checklist_page(conn):
             with st.container(border=True):
                 # Task title + current status on same line
                 col_title, col_badge = st.columns([0.7, 0.3])
-                col_title.markdown(f"### 📋 {group.iloc[0]['task_name']}")
+                prio_val = group.iloc[0].get('priority')
+
+                if pd.notna(prio_val):
+                    p_color = "#d73a49" if prio_val <= 3 else "#f66a0a" if prio_val <= 7 else "#0366d6"
+                    prio_html = f"<span style='background-color: {p_color}22; color: {p_color}; padding: 3px 10px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; margin-right: 12px; border: 1px solid {p_color}44; vertical-align: middle;'>P{int(prio_val)}</span>"
+                    col_title.markdown(f"<h3>{prio_html}{group.iloc[0]['task_name']}</h3>", unsafe_allow_html=True)
+                else:
+                    col_title.markdown(f"<h3>📋 {group.iloc[0]['task_name']}</h3>", unsafe_allow_html=True)
                 
                 # Show description if available
                 if pd.notna(group.iloc[0].get('description')) and group.iloc[0]['description']:
@@ -3776,7 +3604,7 @@ def daily_checklist_page(conn):
                 col_badge.markdown(f"<div style='text-align:right; padding-top:10px'>{badge_html}</div>", unsafe_allow_html=True)
 
                 # Metadata columns for the latest attempt
-                m1, m2, m3, m4, m5 = st.columns(5)
+                m1, m2, m3, m4 = st.columns(4)
                 
                 def render_meta_col(col, label, val):
                     col.markdown(f"""
@@ -3788,7 +3616,6 @@ def daily_checklist_page(conn):
 
                 start_val = pd.to_datetime(latest['start_time']).strftime('%I:%M %p') if pd.notna(latest['start_time']) else "—"
                 end_val = pd.to_datetime(latest['end_time']).strftime('%I:%M %p') if pd.notna(latest['end_time']) else "—"
-                sub_val = pd.to_datetime(latest['submitted_at']).strftime('%I:%M %p') if pd.notna(latest['submitted_at']) else "—"
                 
                 duration_val = "—"
                 if pd.notna(latest['start_time']) and pd.notna(latest['end_time']):
@@ -3801,8 +3628,7 @@ def daily_checklist_page(conn):
                 render_meta_col(m1, "Reporting To", mgr_val)
                 render_meta_col(m2, "Start Time", start_val)
                 render_meta_col(m3, "End Time", end_val)
-                render_meta_col(m4, "Submitted At", sub_val)
-                render_meta_col(m5, "Duration", duration_val)
+                render_meta_col(m4, "Duration", duration_val)
 
                 # Notes and Feedback for LATEST attempt
                 if (pd.notna(latest.get('resubmission_notes')) and latest.get('resubmission_notes')) or \
@@ -3839,7 +3665,6 @@ def daily_checklist_page(conn):
                                     <div style='display: flex; flex-wrap: wrap; gap: 15px; color: #555; font-size: 0.85rem; margin-bottom: 8px;'>
                                         <span><b>Start:</b> {pd.to_datetime(hist_row['start_time']).strftime('%I:%M %p') if pd.notna(hist_row['start_time']) else '—'}</span>
                                         <span><b>End:</b> {pd.to_datetime(hist_row['end_time']).strftime('%I:%M %p') if pd.notna(hist_row['end_time']) else '—'}</span>
-                                        <span><b>Submitted:</b> {pd.to_datetime(hist_row['submitted_at']).strftime('%I:%M %p') if pd.notna(hist_row['submitted_at']) else '—'}</span>
                                     </div>
                                 </div>
                             """, unsafe_allow_html=True)
@@ -3876,96 +3701,99 @@ def daily_checklist_page(conn):
                             except Exception as e: st.error(f"Error: {e}")
                     
                     elif status == 'started':
-                        if st.button("⏹️ End Task", key=f"end_{row['id']}", type="primary", use_container_width=True):
-                            try:
-                                now = get_ist_time()
-                                # 1. Get/Create Timesheet for the checklist date
-                                f_week = today.isocalendar()[1]
-                                ts_id, ts_status, _ = get_or_create_timesheet(conn, user_id, f_week)
-                                
-                                # DUR CALCULATION: Consistent across both cases
-                                duration = 0.0
-                                if row['start_time']:
-                                    start_time = pd.to_datetime(row['start_time'])
-                                    if start_time.tzinfo is None:
-                                        start_time = pytz.timezone('Asia/Kolkata').localize(start_time)
-                                    diff = now - start_time
-                                    duration = max(0.0, diff.total_seconds() / 3600.0)
-
-                                if not ts_id:
-                                    # Still allow ending the task in Checklist Logs to avoid deadlock
-                                    with conn.session as s:
-                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'completed', end_time = :now WHERE id = :id"),
-                                                  {"now": now, "id": row['id']})
-                                        s.execute(text("UPDATE daily_checklist_submissions SET end_time = :now WHERE id = :id"),
-                                                  {"now": now, "id": sub_id})
-                                        s.commit()
-                                    st.warning("⚠️ **Task Ended, but NOT logged to Timesheet.** You have pending timesheets from previous weeks that must be submitted first. Please fix them and then manually log this duration.")
-                                    time.sleep(3)
-                                    st.rerun()
-                                    return
-                                
-                                # 3. Proceed with normal auto-log if timesheet exists
-                                with conn.session as s:
-                                    # Update Daily Checklist Logs
-                                    s.execute(text("UPDATE daily_checklist_logs SET status = 'completed', end_time = :now WHERE id = :id"),
-                                              {"now": now, "id": row['id']})
-                                    s.execute(text("UPDATE daily_checklist_submissions SET end_time = :now WHERE id = :id"),
-                                              {"now": now, "id": sub_id})
-                                    
-                                    # Auto-log to Weekly Timesheet ('work' table)
-                                    s.execute(text("""
-                                        INSERT INTO work (timesheet_id, work_date, work_name, work_description, work_duration, entry_type)
-                                        VALUES (:ts_id, :w_date, :w_name, :w_desc, :w_dur, 'work')
-                                    """), {
-                                        "ts_id": ts_id,
-                                        "w_date": today,
-                                        "w_name": row['task_name'],
-                                        "w_desc": f"Completed Responsibility: {row['task_name']}",
-                                        "w_dur": round(duration, 2),
-                                    })
-                                    s.commit()
-                                
-                                log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, 
-                                             "COMPLETED_RESPONSIBILITY", f"Auto-logged {row['task_name']} to timesheet ({round(duration, 2)} hrs)")
-                                st.toast(f"Task completed and logged to timesheet! ✨")
-                                time.sleep(1)
-                                st.rerun()
-                            except Exception as e: st.error(f"Error: {e}")
-                    
-                    elif status == 'completed':
                         is_correction_attempt = (attempt_index > 0 or row.get('is_correction', False))
                         
                         if is_correction_attempt:
-                            with st.popover("📤 Submit Correction", use_container_width=True):
-                                resub_note = st.text_area("What did you correct?", placeholder="Describe what was fixed…", key=f"resub_note_submit_{row['id']}")
-                                if st.button("Confirm Submission", key=f"conf_sub_{row['id']}", type="primary", use_container_width=True):
+                            with st.popover("⏹️ End & Submit Correction", use_container_width=True):
+                                resub_note = st.text_area("What did you fix?", placeholder="Describe what was fixed…", key=f"resub_note_end_{row['id']}")
+                                if st.button("Confirm End & Submit", key=f"conf_end_sub_{row['id']}", type="primary", use_container_width=True):
                                     if not resub_note.strip():
                                         st.warning("Please describe what was corrected.")
                                     else:
                                         try:
                                             now = get_ist_time()
+                                            # DUR CALCULATION
+                                            duration = 0.0
+                                            if row['start_time']:
+                                                start_time = pd.to_datetime(row['start_time'])
+                                                if start_time.tzinfo is None:
+                                                    start_time = pytz.timezone('Asia/Kolkata').localize(start_time)
+                                                diff = now - start_time
+                                                duration = max(0.0, diff.total_seconds() / 3600.0)
+
+                                            f_week = display_date.isocalendar()[1]
+                                            ts_id, _, _ = get_or_create_timesheet(conn, user_id, f_week)
+
                                             with conn.session as s:
-                                                s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', submitted_at = :now, resubmission_notes = :note WHERE id = :id"),
+                                                s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', end_time = :now, submitted_at = :now, resubmission_notes = :note WHERE id = :id"),
                                                           {"now": now, "note": resub_note.strip(), "id": row['id']})
-                                                s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                                s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', end_time = :now, submitted_at = :now WHERE id = :id"),
                                                           {"now": now, "id": sub_id})
+                                                
+                                                if ts_id:
+                                                    s.execute(text("""
+                                                        INSERT INTO work (timesheet_id, work_date, work_name, work_description, work_duration, entry_type)
+                                                        VALUES (:ts_id, :w_date, :w_name, :w_desc, :w_dur, 'work')
+                                                    """), {
+                                                        "ts_id": ts_id, "w_date": display_date, "w_name": row['task_name'],
+                                                        "w_desc": f"Completed Correction: {row['task_name']}", "w_dur": round(duration, 2)
+                                                    })
+                                                    st.session_state.checklist_toast = ("Correction submitted & logged to timesheet! ✨", None)
+                                                else:
+                                                    st.session_state.checklist_toast = ("Correction submitted, but NOT logged to timesheet (check pending weeks). ⚠️", None)
                                                 s.commit()
                                             st.rerun()
                                         except Exception as e: st.error(f"Error: {e}")
                         else:
-                            if st.button("📤 Submit for Review", key=f"submit_{row['id']}", type="primary", use_container_width=True):
+                            if st.button("⏹️ End & Submit Task", key=f"end_submit_{row['id']}", type="primary", use_container_width=True):
                                 try:
                                     now = get_ist_time()
+                                    # DUR CALCULATION
+                                    duration = 0.0
+                                    if row['start_time']:
+                                        start_time = pd.to_datetime(row['start_time'])
+                                        if start_time.tzinfo is None:
+                                            start_time = pytz.timezone('Asia/Kolkata').localize(start_time)
+                                        diff = now - start_time
+                                        duration = max(0.0, diff.total_seconds() / 3600.0)
+
+                                    f_week = display_date.isocalendar()[1]
+                                    ts_id, _, _ = get_or_create_timesheet(conn, user_id, f_week)
+
                                     with conn.session as s:
-                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                        s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', end_time = :now, submitted_at = :now WHERE id = :id"),
                                                   {"now": now, "id": row['id']})
-                                        s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                        s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', end_time = :now, submitted_at = :now WHERE id = :id"),
                                                   {"now": now, "id": sub_id})
+                                        
+                                        if ts_id:
+                                            s.execute(text("""
+                                                INSERT INTO work (timesheet_id, work_date, work_name, work_description, work_duration, entry_type)
+                                                VALUES (:ts_id, :w_date, :w_name, :w_desc, :w_dur, 'work')
+                                            """), {
+                                                "ts_id": ts_id, "w_date": display_date, "w_name": row['task_name'],
+                                                "w_desc": f"Completed Responsibility: {row['task_name']}", "w_dur": round(duration, 2)
+                                            })
+                                            st.session_state.checklist_toast = ("Task ended, submitted & logged to timesheet! ✨", None)
+                                        else:
+                                            st.session_state.checklist_toast = ("Task ended & submitted, but NOT logged to timesheet (check pending weeks). ⚠️", None)
                                         s.commit()
                                     st.rerun()
-                                except Exception as e:
-                                    st.error(f"Error: {e}")
+                                except Exception as e: st.error(f"Error: {e}")
+                    
+                    elif status == 'completed':
+                        # This state should ideally be bypassed now, but if reached, offer manual submission
+                        if st.button("📤 Submit for Review", key=f"manual_submit_{row['id']}", type="primary", use_container_width=True):
+                            try:
+                                now = get_ist_time()
+                                with conn.session as s:
+                                    s.execute(text("UPDATE daily_checklist_logs SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                              {"now": now, "id": row['id']})
+                                    s.execute(text("UPDATE daily_checklist_submissions SET status = 'submitted', submitted_at = :now WHERE id = :id"),
+                                              {"now": now, "id": sub_id})
+                                    s.commit()
+                                st.rerun()
+                            except Exception as e: st.error(f"Error: {e}")
                     
                     elif status == 'submitted':
                         st.button("⌛ Awaiting Manager Review", key=f"wait_{row['id']}", disabled=True, use_container_width=True)

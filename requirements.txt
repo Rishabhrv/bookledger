@@ -6,7 +6,7 @@ PyJWT==2.10.1
 Requests==2.32.3
 seaborn==0.13.2
 SQLAlchemy==2.0.38
-streamlit==1.52.0
+streamlit==1.55.0
 mysqlclient
 XlsxWriter
 reportlab
@@ -16,4 +16,4 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 Werkzeug
-
+rapidfuzz

@@ -603,20 +603,22 @@ def has_open_author_position(conn, book_id):
 def fetch_all_book_authors(book_ids, _conn):
     if not book_ids:  # Handle empty book_ids
         return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'city', 'state', 'author_position',
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
             'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
-            'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'delivery_date',
+            'printing_confirmation', 'delivery_address', 
+            'address_line1', 'address_line2', 'city_del', 'state_del', 'pincode', 'country',
+            'delivery_charge', 'number_of_books', 'total_amount', 'delivery_date',
             'tracking_id', 'delivery_vendor', 'amount_paid', 'isbn_sent_at'
         ])
     query = """
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.city, a.state,
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, ba.printing_confirmation, ba.delivery_address, 
+           ba.address_line1, ba.address_line2, ba.city_del, ba.state_del, ba.pincode, ba.country,
            ba.delivery_charge, ba.number_of_books, ba.total_amount,
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor, ba.isbn_sent_at,
            COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid
@@ -629,7 +631,7 @@ def fetch_all_book_authors(book_ids, _conn):
     except Exception as e:
         st.error(f"Error fetching book authors: {e}")
         return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'city', 'state', 'author_position',
+            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
             'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
             'photo_recive', 'id_proof_recive', 'author_details_sent',
             'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
@@ -1140,7 +1142,7 @@ def edit_author_detail(conn):
     # Ensure columns exist
     try:
         with conn.session as s:
-            s.execute(text("SELECT about_author, author_photo, city, state FROM authors LIMIT 1"))
+            s.execute(text("SELECT about_author, author_photo FROM authors LIMIT 1"))
     except Exception:
         # Columns likely missing, add them
         try:
@@ -1153,22 +1155,31 @@ def edit_author_detail(conn):
                     s.execute(text("ALTER TABLE authors ADD COLUMN author_photo TEXT"))
                 except Exception:
                     pass
-                try:
-                    s.execute(text("ALTER TABLE authors ADD COLUMN city VARCHAR(255)"))
-                except Exception:
-                    pass
-                try:
-                    s.execute(text("ALTER TABLE authors ADD COLUMN state VARCHAR(255)"))
-                except Exception:
-                    pass
                 s.commit()
         except Exception as e:
              st.error(f"Error updating database schema: {e}")
 
+    # Ensure book_authors delivery columns exist
+    try:
+        with conn.session as s:
+            s.execute(text("SELECT address_line1, city_del FROM book_authors LIMIT 1"))
+    except Exception:
+        try:
+            with conn.session as s:
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN address_line1 TEXT"))
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN address_line2 TEXT"))
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN city_del VARCHAR(255)"))
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN state_del VARCHAR(255)"))
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN pincode VARCHAR(20)"))
+                s.execute(text("ALTER TABLE book_authors ADD COLUMN country VARCHAR(100) DEFAULT 'India'"))
+                s.commit()
+        except Exception as e:
+            st.error(f"Error updating book_authors schema: {e}")
+
     # Fetch all authors from database
     with conn.session as s:
         authors = s.execute(
-            text("SELECT author_id, name, email, phone, about_author, author_photo, city, state FROM authors ORDER BY name")
+            text("SELECT author_id, name, email, phone, about_author, author_photo FROM authors ORDER BY name")
         ).fetchall()
     
     if not authors:
@@ -1222,20 +1233,6 @@ def edit_author_detail(conn):
                 key=f"phone_{selected_author.author_id}"
             )
         
-        col_e3, col_e4 = st.columns(2)
-        with col_e3:
-            new_city = st.text_input(
-                "City",
-                value=selected_author.city if selected_author.city is not None else "",
-                key=f"city_{selected_author.author_id}"
-            )
-        with col_e4:
-            new_state = st.text_input(
-                "State",
-                value=selected_author.state if selected_author.state is not None else "",
-                key=f"state_{selected_author.author_id}"
-            )
-        
         # New Fields
         new_about_author = st.text_area(
             "About The Author",
@@ -1280,10 +1277,6 @@ def edit_author_detail(conn):
                             changes.append(f"Email changed from '{selected_author.email or ''}' to '{new_email}'")
                         if new_phone != (selected_author.phone or ''):
                             changes.append(f"Phone changed from '{selected_author.phone or ''}' to '{new_phone}'")
-                        if new_city != (selected_author.city or ''):
-                            changes.append(f"City changed from '{selected_author.city or ''}' to '{new_city}'")
-                        if new_state != (selected_author.state or ''):
-                            changes.append(f"State changed from '{selected_author.state or ''}' to '{new_state}'")
                         if new_about_author != (selected_author.about_author or ''):
                              changes.append("Updated About Author")
                         
@@ -1317,8 +1310,6 @@ def edit_author_detail(conn):
                                         SET name = :name, 
                                             email = :email, 
                                             phone = :phone,
-                                            city = :city,
-                                            state = :state,
                                             about_author = :about_author,
                                             author_photo = :author_photo
                                         WHERE author_id = :author_id
@@ -1327,8 +1318,6 @@ def edit_author_detail(conn):
                                         "name": new_name,
                                         "email": new_email if new_email else None,
                                         "phone": new_phone if new_phone else None,
-                                        "city": new_city if new_city else None,
-                                        "state": new_state if new_state else None,
                                         "about_author": new_about_author if new_about_author else None,
                                         "author_photo": photo_path,
                                         "author_id": selected_author.author_id
@@ -1864,8 +1853,6 @@ def add_book_dialog(conn):
             "name": "",
             "email": "",
             "phone": "",
-            "city": "",
-            "state": "",
             "author_id": None,
             "author_position": "1st",
             "corresponding_agent": "",
@@ -1984,7 +1971,7 @@ def add_book_dialog(conn):
 
         if "authors" not in st.session_state:
             st.session_state.authors = [
-                {"name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
+                {"name": "", "email": "", "phone": "", "author_id": None, "author_position": f"{i+1}{'st' if i == 0 else 'nd' if i == 1 else 'rd' if i == 2 else 'th'}", "corresponding_agent": "", "publishing_consultant": ""}
                 for i in range(4)
             ]
         else:
@@ -2101,10 +2088,6 @@ def add_book_dialog(conn):
                             col3, col4 = st.columns(2)
                             st.session_state.authors[i]["phone"] = col3.text_input(f"Phone {i+1}", st.session_state.authors[i]["phone"], key=f"phone_{i}", placeholder="Enter phone..", disabled=disabled)
                             st.session_state.authors[i]["email"] = col4.text_input(f"Email {i+1}", st.session_state.authors[i]["email"], key=f"email_{i}", placeholder="Enter email..", disabled=disabled)
-                            
-                            col_c1, col_c2 = st.columns(2)
-                            st.session_state.authors[i]["city"] = col_c1.text_input(f"City {i+1}", st.session_state.authors[i]["city"], key=f"city_{i}", placeholder="Enter city..", disabled=disabled)
-                            st.session_state.authors[i]["state"] = col_c2.text_input(f"State {i+1}", st.session_state.authors[i]["state"], key=f"state_{i}", placeholder="Enter state..", disabled=disabled)
                         
                         col5, col6 = st.columns(2)
 
@@ -2288,15 +2271,13 @@ def add_book_dialog(conn):
                                         author_id_to_link = author["author_id"]
                                     else:
                                         s.execute(text("""
-                                            INSERT INTO authors (name, email, phone, city, state)
-                                            VALUES (:name, :email, :phone, :city, :state)
+                                            INSERT INTO authors (name, email, phone)
+                                            VALUES (:name, :email, :phone)
                                             ON DUPLICATE KEY UPDATE name=name
                                         """), params={
                                             "name": author["name"], 
                                             "email": author["email"], 
-                                            "phone": author["phone"],
-                                            "city": author["city"],
-                                            "state": author["state"]
+                                            "phone": author["phone"]
                                         })
                                         author_id_to_link = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
                                         author["author_id"] = author_id_to_link
@@ -3808,12 +3789,14 @@ def manage_price_dialog(book_id, conn):
 # Function to fetch book_author details along with author details for a given book_id
 def fetch_book_authors(book_id, conn):
     query = f"""
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo, a.city, a.state,
+    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone, a.about_author, a.author_photo,
            ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
            ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
            ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
            ba.digital_book_sent, 
-           ba.printing_confirmation, ba.delivery_address, ba.delivery_charge, 
+           ba.printing_confirmation, ba.delivery_address, 
+           ba.address_line1, ba.address_line2, ba.city_del, ba.state_del, ba.pincode, ba.country,
+           ba.delivery_charge, 
            ba.number_of_books, ba.total_amount, 
            ba.delivery_date, ba.tracking_id, ba.delivery_vendor,
            ba.remark, ba.isbn_sent_at,
@@ -3824,7 +3807,7 @@ def fetch_book_authors(book_id, conn):
     """
     return conn.query(query, show_spinner = False)
 
-def insert_author(conn, name, email, phone, city=None, state=None):
+def insert_author(conn, name, email, phone):
     """Insert a new author into the database and return the author_id."""
     try:
         # Validate inputs
@@ -3843,10 +3826,10 @@ def insert_author(conn, name, email, phone, city=None, state=None):
             # Insert the author
             result = s.execute(
                 text("""
-                    INSERT INTO authors (name, email, phone, city, state)
-                    VALUES (:name, :email, :phone, :city, :state)
+                    INSERT INTO authors (name, email, phone)
+                    VALUES (:name, :email, :phone)
                 """),
-                params={"name": name, "email": email, "phone": phone, "city": city, "state": state}
+                params={"name": name, "email": email, "phone": phone}
             )
             # Check if the insert was successful
             if result.rowcount != 1:
@@ -3915,13 +3898,13 @@ def initialize_new_authors(slots):
     """Initialize new author entries."""
     return [
         {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
-         "corresponding_agent": "", "publishing_consultant": "", "city": "", "state": ""}
+         "corresponding_agent": "", "publishing_consultant": ""}
         for _ in range(slots)
     ]
 
 def initialize_new_editors(slots):
     return [
-        {"name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": None}
+        {"name": "", "email": "", "phone": "", "author_id": None, "author_position": None}
         for _ in range(slots)
     ]
 
@@ -3940,7 +3923,7 @@ def fetch_chapters(book_id, conn):
 def fetch_chapter_editors(chapter_id, conn):
     with conn.session as s:
         query = text("""
-            SELECT ce.author_id, ce.author_position, a.name, a.email, a.phone, a.city, a.state,
+            SELECT ce.author_id, ce.author_position, a.name, a.email, a.phone,
                    ce.corresponding_agent, ce.publishing_consultant
             FROM chapter_editors ce
             JOIN authors a ON ce.author_id = a.author_id
@@ -3949,7 +3932,7 @@ def fetch_chapter_editors(chapter_id, conn):
         """)
         result = s.execute(query, {"chapter_id": chapter_id}).fetchall()
         return pd.DataFrame(result, columns=[
-            'author_id', 'author_position', 'name', 'email', 'phone', 'city', 'state',
+            'author_id', 'author_position', 'name', 'email', 'phone',
             'corresponding_agent', 'publishing_consultant'
         ])
 
@@ -4411,16 +4394,6 @@ def edit_author_dialog(book_id, conn):
                             disabled=disabled
                         )
 
-                        col_city, col_state = st.columns(2)
-                        st.session_state.new_authors[i]["city"] = col_city.text_input(
-                            f"City {i+1}", st.session_state.new_authors[i]["city"], key=f"new_city_{i}",
-                            disabled=disabled
-                        )
-                        st.session_state.new_authors[i]["state"] = col_state.text_input(
-                            f"State {i+1}", st.session_state.new_authors[i]["state"], key=f"new_state_{i}",
-                            disabled=disabled
-                        )
-
                     col5, col6 = st.columns(2)
                     selected_agent = col5.selectbox(
                         f"Corresponding Agent {i+1}",
@@ -4481,7 +4454,7 @@ def edit_author_dialog(book_id, conn):
                                 if author["name"]:
                                     author_id_to_link = author["author_id"]
                                     if not author_id_to_link:  # New author
-                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"], author["city"], author["state"])
+                                        author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
                                         if not author_id_to_link:
                                             st.error(f"Failed to insert author {author['name']}")
                                             continue
@@ -4865,19 +4838,6 @@ def edit_author_dialog(book_id, conn):
                             
                                 # # New Fields for Author Table (collected separately as they belong to authors table)
                                 author_updates = {}
-                                col_city, col_state = st.columns(2)
-                                with col_city:
-                                    author_updates['city'] = st.text_input(
-                                        "City",
-                                        value=row['city'] if row['city'] is not None else "",
-                                        key=f"city_{row['id']}"
-                                    )
-                                with col_state:
-                                    author_updates['state'] = st.text_input(
-                                        "State",
-                                        value=row['state'] if row['state'] is not None else "",
-                                        key=f"state_{row['id']}"
-                                    )
 
                                 author_updates['about_author'] = st.text_area(
                                     "About The Author",
@@ -4951,25 +4911,66 @@ def edit_author_dialog(book_id, conn):
                                             help="Enter the name of the delivery vendor.",
                                             key=f"delivery_vendor_{row['id']}"
                                         )
-                            # Add Number of Books and Delivery Address inputs
-                                    col_del1, col_del2 = st.columns([1, 2])
-                                    with col_del1:
-                                        updates['number_of_books'] = st.number_input(
-                                            "Number of Books",
-                                            min_value=0,
-                                            step=1,
-                                            value=int(row['number_of_books'] or 0),
-                                            help="Enter the number of books to deliver.",
-                                            key=f"number_of_books_{row['id']}"
-                                        )
-                                    with col_del2:
-                                        updates['delivery_address'] = st.text_area(
-                                            "Delivery Address",
-                                            value=row['delivery_address'] or "",
-                                            height=68,
-                                            help="Enter the delivery address.",
-                                            key=f"delivery_address_{row['id']}"
-                                        )
+                                    # Add Number of Books and Delivery Address inputs
+                                    updates['number_of_books'] = st.number_input(
+                                        "Copies to Send",
+                                        min_value=0,
+                                        step=1,
+                                        value=int(row['number_of_books'] or 0),
+                                        help="Enter the number of books to deliver.",
+                                        key=f"number_of_books_{row['id']}"
+                                    )
+                                    
+                                    # Backward compatibility: show old address if new fields are empty
+                                    old_address = row['delivery_address'] or ""
+                                    if old_address and not (row.get('address_line1') or row.get('city_del')):
+                                        st.info(f"**Old Address:** {old_address}")
+
+                                    updates['address_line1'] = st.text_input(
+                                        "Address Line 1",
+                                        value=row.get('address_line1') or "",
+                                        key=f"addr1_{row['id']}"
+                                    )
+                                    updates['address_line2'] = st.text_input(
+                                        "Address Line 2",
+                                        value=row.get('address_line2') or "",
+                                        key=f"addr2_{row['id']}"
+                                    )
+                                    
+                                    col_a1, col_a2, col_a3 = st.columns(3)
+                                    updates['city_del'] = col_a1.text_input(
+                                        "City",
+                                        value=row.get('city_del') or "",
+                                        key=f"city_del_{row['id']}"
+                                    )
+                                    updates['state_del'] = col_a2.text_input(
+                                        "State",
+                                        value=row.get('state_del') or "",
+                                        key=f"state_del_{row['id']}"
+                                    )
+                                    updates['pincode'] = col_a3.text_input(
+                                        "PIN Code",
+                                        value=row.get('pincode') or "",
+                                        key=f"pincode_{row['id']}"
+                                    )
+                                    updates['country'] = st.text_input(
+                                        "Country",
+                                        value=row.get('country') or "India",
+                                        key=f"country_{row['id']}"
+                                    )
+                                    
+                                    # Keep old delivery_address field hidden or sync it?
+                                    # The user wants to save in separate columns.
+                                    # Let's also update the full delivery_address string for backward compatibility in reports/slips
+                                    full_addr = []
+                                    if updates['address_line1']: full_addr.append(updates['address_line1'])
+                                    if updates['address_line2']: full_addr.append(updates['address_line2'])
+                                    if updates['city_del']: full_addr.append(updates['city_del'])
+                                    if updates['state_del']: full_addr.append(updates['state_del'])
+                                    if updates['pincode']: full_addr.append(updates['pincode'])
+                                    if updates['country']: full_addr.append(updates['country'])
+                                    
+                                    updates['delivery_address'] = ", ".join(full_addr) if full_addr else old_address
 
                             # Submit and Remove buttons
                             col_submit, col_remove = st.columns([8, 1])
@@ -5016,12 +5017,6 @@ def edit_author_dialog(book_id, conn):
                                 
                                     if author_updates.get('about_author') != row['about_author']:
                                         author_changes.append("Updated About Author")
-
-                                    if author_updates.get('city') != row['city']:
-                                        author_changes.append("Updated City")
-                                    
-                                    if author_updates.get('state') != row['state']:
-                                        author_changes.append("Updated State")
                                         
                                     # Determine if auto-checkboxes need to be updated (separate from main changes)
                                     auto_check_author_details = False
@@ -5052,11 +5047,9 @@ def edit_author_dialog(book_id, conn):
                                             # Update authors table if needed
                                             if author_changes:
                                                 with conn.session as s:
-                                                    update_query = "UPDATE authors SET about_author = :about_author, city = :city, state = :state"
+                                                    update_query = "UPDATE authors SET about_author = :about_author"
                                                     params = {
                                                         "about_author": author_updates['about_author'], 
-                                                        "city": author_updates['city'],
-                                                        "state": author_updates['state'],
                                                         "author_id": author_id
                                                     }
                                                 
@@ -5422,8 +5415,6 @@ def edit_author_dialog(book_id, conn):
                             "name": editor['name'],
                             "email": editor['email'],
                             "phone": editor['phone'],
-                            "city": editor['city'],
-                            "state": editor['state'],
                             "corresponding_agent": editor['corresponding_agent'] or "",
                             "publishing_consultant": editor['publishing_consultant'] or ""
                         }
@@ -5437,8 +5428,6 @@ def edit_author_dialog(book_id, conn):
                             "name": "",
                             "email": "",
                             "phone": "",
-                            "city": "",
-                            "state": "",
                             "corresponding_agent": "",
                             "publishing_consultant": ""
                         })
@@ -5484,8 +5473,6 @@ def edit_author_dialog(book_id, conn):
                                                 "name": selected_editor_details.name,
                                                 "email": selected_editor_details.email,
                                                 "phone": selected_editor_details.phone,
-                                                "city": selected_editor_details.city,
-                                                "state": selected_editor_details.state,
                                                 "author_id": selected_editor_id
                                             })
                                             
@@ -5495,8 +5482,6 @@ def edit_author_dialog(book_id, conn):
                                                     <strong>👤 Name:</strong> {selected_editor_details.name}<br>
                                                     <strong>📧 Email:</strong> {selected_editor_details.email}<br>
                                                     <strong>📱 Phone:</strong> {selected_editor_details.phone}<br>
-                                                    <strong>🏙️ City:</strong> {selected_editor_details.city or 'N/A'}<br>
-                                                    <strong>🗺️ State:</strong> {selected_editor_details.state or 'N/A'}
                                                 </div>
                                             """, unsafe_allow_html=True)
                                             
@@ -5547,18 +5532,6 @@ def edit_author_dialog(book_id, conn):
                                             "Phone",
                                             value=editor["phone"],
                                             key=f"edit_chapter_{chapter_id}_editor_phone_{j}"
-                                        )
-
-                                        col_c1, col_c2 = st.columns(2)
-                                        editor["city"] = col_c1.text_input(
-                                            "City",
-                                            value=editor["city"],
-                                            key=f"edit_chapter_{chapter_id}_editor_city_{j}"
-                                        )
-                                        editor["state"] = col_c2.text_input(
-                                            "State",
-                                            value=editor["state"],
-                                            key=f"edit_chapter_{chapter_id}_editor_state_{j}"
                                         )
 
                                     col5, col6 = st.columns(2)
@@ -5657,15 +5630,13 @@ def edit_author_dialog(book_id, conn):
                                                             # Insert new author if needed
                                                             s.execute(
                                                                 text("""
-                                                                    INSERT INTO authors (name, email, phone, city, state)
-                                                                    VALUES (:name, :email, :phone, :city, :state)
+                                                                    INSERT INTO authors (name, email, phone)
+                                                                    VALUES (:name, :email, :phone)
                                                                 """),
                                                                 {
                                                                     "name": editor["name"],
                                                                     "email": editor["email"] or None,
-                                                                    "phone": editor["phone"] or None,
-                                                                    "city": editor["city"] or None,
-                                                                    "state": editor["state"] or None
+                                                                    "phone": editor["phone"] or None
                                                                 }
                                                             )
                                                             editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
@@ -5744,8 +5715,6 @@ def edit_author_dialog(book_id, conn):
                                     "name": "",
                                     "email": "",
                                     "phone": "",
-                                    "city": "",
-                                    "state": "",
                                     "corresponding_agent": "",
                                     "publishing_consultant": ""
                                 }
@@ -5757,7 +5726,7 @@ def edit_author_dialog(book_id, conn):
                 # Ensure new_chapters always has four editors
                 def ensure_editor_fields(editor):
                     default_editor = {
-                        "name": "", "email": "", "phone": "", "city": "", "state": "", "author_id": None, "author_position": None,
+                        "name": "", "email": "", "phone": "", "author_id": None, "author_position": None,
                         "corresponding_agent": "", "publishing_consultant": ""
                     }
                     for key, default_value in default_editor.items():
@@ -5818,8 +5787,6 @@ def edit_author_dialog(book_id, conn):
                                             "name": selected_editor_details.name,
                                             "email": selected_editor_details.email,
                                             "phone": selected_editor_details.phone,
-                                            "city": selected_editor_details.city,
-                                            "state": selected_editor_details.state,
                                             "author_id": selected_editor_id,
                                             "corresponding_agent": "",
                                             "publishing_consultant": ""
@@ -5831,8 +5798,6 @@ def edit_author_dialog(book_id, conn):
                                                 <strong>👤 Name:</strong> {selected_editor_details.name}<br>
                                                 <strong>📧 Email:</strong> {selected_editor_details.email}<br>
                                                 <strong>📱 Phone:</strong> {selected_editor_details.phone}<br>
-                                                <strong>🏙️ City:</strong> {selected_editor_details.city or 'N/A'}<br>
-                                                <strong>🗺️ State:</strong> {selected_editor_details.state or 'N/A'}
                                             </div>
                                         """, unsafe_allow_html=True)
                                     
@@ -5883,18 +5848,6 @@ def edit_author_dialog(book_id, conn):
                                     "Phone",
                                     editor["phone"],
                                     key=f"new_chapter_editor_phone_{j}"
-                                )
-
-                                col_nc1, col_nc2 = st.columns(2)
-                                editor["city"] = col_nc1.text_input(
-                                    "City",
-                                    editor["city"],
-                                    key=f"new_chapter_editor_city_{j}"
-                                )
-                                editor["state"] = col_nc2.text_input(
-                                    "State",
-                                    editor["state"],
-                                    key=f"new_chapter_editor_state_{j}"
                                 )
 
                             col5, col6 = st.columns(2)
@@ -6001,15 +5954,13 @@ def edit_author_dialog(book_id, conn):
                                             if not editor_id:
                                                 s.execute(
                                                     text("""
-                                                        INSERT INTO authors (name, email, phone, city, state)
-                                                        VALUES (:name, :email, :phone, :city, :state)
+                                                        INSERT INTO authors (name, email, phone)
+                                                        VALUES (:name, :email, :phone)
                                                     """),
                                                     {
                                                         "name": editor["name"],
                                                         "email": editor["email"] or None,
-                                                        "phone": editor["phone"] or None,
-                                                        "city": editor["city"] or None,
-                                                        "state": editor["state"] or None
+                                                        "phone": editor["phone"] or None
                                                     }
                                                 )
                                                 editor_id = s.execute(text("SELECT LAST_INSERT_ID();")).scalar()
@@ -6258,16 +6209,6 @@ def edit_author_dialog(book_id, conn):
                                     disabled=disabled
                                 )
 
-                                col_city, col_state = st.columns(2)
-                                st.session_state.new_authors[i]["city"] = col_city.text_input(
-                                    f"City {i+1}", st.session_state.new_authors[i]["city"], key=f"new_city_{i}",
-                                    disabled=disabled
-                                )
-                                st.session_state.new_authors[i]["state"] = col_state.text_input(
-                                    f"State {i+1}", st.session_state.new_authors[i]["state"], key=f"new_state_{i}",
-                                    disabled=disabled
-                                )
-
                             col5, col6 = st.columns(2)
                             selected_agent = col5.selectbox(
                                 f"Corresponding Agent {i+1}",
@@ -6329,7 +6270,7 @@ def edit_author_dialog(book_id, conn):
                                         if author["name"]:  # Only process non-empty authors
                                             author_id_to_link = author["author_id"]
                                             if not author_id_to_link:  # New author
-                                                author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"], author["city"], author["state"])
+                                                author_id_to_link = insert_author(conn, author["name"], author["email"], author["phone"])
                                                 if not author_id_to_link:
                                                     st.error(f"Failed to insert author {author['name']}")
                                                     continue
@@ -8618,6 +8559,7 @@ def filter_books(df, query):
     else:
         query = query.lower()
         return df[df['title'].str.lower().str.contains(query, na=False)]
+    return df[df['book_id'].isna()]
 
 # Function to filter books based on day, month, year, and date range
 def filter_books_by_date(df, day=None, month=None, year=None, start_date=None, end_date=None):

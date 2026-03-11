@@ -193,6 +193,80 @@ HOSTINGER_SMTP_SERVER = st.secrets["email_servers"]["HOSTINGER_SMTP_SERVER"]
 HOSTINGER_SMTP_PORT = st.secrets["email_servers"]["HOSTINGER_SMTP_PORT"]
 ADMIN_EMAIL = st.secrets["general"]["ADMIN_EMAIL"]
 
+@st.dialog("Add New Responsibility", width="medium")
+def add_responsibility_dialog(conn, target_user_id, username, manager_options, manager_dict, db_actions, default_manager_display):
+    with st.form("add_resp_form", clear_on_submit=True):
+        st.info(f"Assingning new responsibility to **{username}**")
+        col_t, col_p = st.columns([3, 1])
+        new_task = col_t.text_input("Task Name", placeholder="e.g., Check Amazon Orders")
+        new_priority = col_p.number_input("Priority", min_value=1, max_value=100, value=10, help="Lower number = Higher Priority")
+        
+        new_desc = st.text_area("Description / Guidelines", placeholder="e.g., Verify all pending orders by 10 AM", help="Instructions for the user")
+        
+        col_m, _ = st.columns([2, 2])
+        new_manager_key = col_m.selectbox("Manager", options=manager_options, index=manager_options.index(default_manager_display) if default_manager_display in manager_options else 0)
+        
+        new_actions = st.multiselect("Allowed Activity Logs", options=db_actions, help="Select which activities from activity log can mark this task as done automatically")
+
+        if st.form_submit_button("➕ Add Responsibility", type="primary", use_container_width=True):
+            if new_task.strip():
+                try:
+                    new_manager_id = manager_dict[new_manager_key].id if new_manager_key != "Default Manager" else None
+                    actions_str = ",".join(new_actions) if new_actions else None
+                    with conn.session as s:
+                        s.execute(text("INSERT INTO daily_responsibilities (user_id, task_name, description, manager_id, log_actions, priority) VALUES (:uid, :name, :desc, :mid, :actions, :priority)"),
+                                    {"uid": target_user_id, "name": new_task.strip(), "desc": new_desc.strip() if new_desc else None, "mid": new_manager_id, "actions": actions_str, "priority": new_priority})
+                        s.commit()
+                    log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added responsibility", f"Assigned '{new_task.strip()}' to {username} (Priority: {new_priority}, Report to: {new_manager_key})")
+                    st.toast("✅ Responsibility added!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error adding: {e}")
+            else:
+                st.warning("Please enter a task name.")
+
+@st.dialog("Edit Responsibility", width="medium")
+def edit_responsibility_dialog(conn, resp_id, task_name, description, manager_id, log_actions, priority, manager_options, manager_dict, db_actions):
+    with st.form(f"edit_resp_form_{resp_id}"):
+        col1, col2 = st.columns(2)
+        with col1:
+            updated_name = st.text_input("Task Name", value=task_name)
+            updated_desc = st.text_area("Description / Guidelines", value=description or "")
+        
+        with col2:
+            current_manager_display = "Default Manager"
+            if manager_id:
+                for display, u in manager_dict.items():
+                    if u.id == manager_id:
+                        current_manager_display = display
+                        break
+            
+            updated_manager_key = st.selectbox("Manager", options=manager_options, index=manager_options.index(current_manager_display) if current_manager_display in manager_options else 0)
+            updated_priority = st.number_input("Priority", min_value=1, max_value=100, value=int(priority) if pd.notna(priority) else 10)
+        
+        current_actions = log_actions.split(",") if log_actions else []
+        updated_actions = st.multiselect("Allowed Activity Logs", options=db_actions, default=[a for s in current_actions if (a := s.strip()) in db_actions])
+
+        if st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True):
+            if updated_name.strip():
+                try:
+                    updated_mid = manager_dict[updated_manager_key].id if updated_manager_key != "Default Manager" else None
+                    actions_str = ",".join(updated_actions) if updated_actions else None
+                    with conn.session as s:
+                        s.execute(text("""
+                            UPDATE daily_responsibilities 
+                            SET task_name = :name, description = :desc, manager_id = :mid, log_actions = :actions, priority = :priority 
+                            WHERE id = :id
+                        """), {"name": updated_name.strip(), "desc": updated_desc.strip() if updated_desc else None, 
+                               "mid": updated_mid, "actions": actions_str, "priority": updated_priority, "id": resp_id})
+                        s.commit()
+                    st.toast("✅ Responsibility updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error updating: {e}")
+            else:
+                st.warning("Please enter a task name.")
+
 
 # Initialize logged_click_ids if not present
 if "logged_click_ids" not in st.session_state:
@@ -1238,7 +1312,7 @@ if main_section == "Manage Users":
                                     st.error(f"❌ Database error: {str(e)}")
 
         elif selected_user_tab == "Responsibilities":
-            # Ensure description and log_actions columns exist
+            # Ensure description, log_actions and priority columns exist
             try:
                 with conn.session as s:
                     s.execute(text("SELECT description FROM daily_responsibilities LIMIT 1"))
@@ -1260,6 +1334,17 @@ if main_section == "Manage Users":
                         s.commit()
                 except Exception as e:
                     st.error(f"Error updating daily_responsibilities schema (log_actions): {e}")
+
+            try:
+                with conn.session as s:
+                    s.execute(text("SELECT priority FROM daily_responsibilities LIMIT 1"))
+            except Exception:
+                try:
+                    with conn.session as s:
+                        s.execute(text("ALTER TABLE daily_responsibilities ADD COLUMN priority INT DEFAULT 1"))
+                        s.commit()
+                except Exception as e:
+                    st.error(f"Error updating daily_responsibilities schema (priority): {e}")
 
             col1, col2 = st.columns([5,1])
             with col1:
@@ -1283,96 +1368,111 @@ if main_section == "Manage Users":
                         target_user = user_dict[selected_user_key]
                         target_user_id = target_user.id
 
+                        # Prepare common data for list and form
+                        manager_dict = {f"{u.username} (ID: {u.id})": u for u in users if u.role == 'admin' or (u.levels and ('reporting_manager' in u.levels or 'both' in u.levels))}
+                        manager_options = ["Default Manager"] + list(manager_dict.keys())
+                        
+                        try:
+                            with conn.session as s:
+                                actions_res = s.execute(text("SELECT DISTINCT action FROM activity_log WHERE action IS NOT NULL AND action != '' ORDER BY action")).fetchall()
+                                db_actions = [row[0] for row in actions_res]
+                        except Exception as e:
+                            st.error(f"Error fetching activity actions: {e}")
+                            db_actions = []
+
                         # Fetch current responsibilities
                         try:
                             resp_df = conn.query("""
-                                SELECT dr.id, dr.task_name, dr.description, dr.log_actions, dr.manager_id, u.username as manager_name 
+                                SELECT dr.id, dr.task_name, dr.description, dr.log_actions, dr.manager_id, dr.priority, u.username as manager_name 
                                 FROM daily_responsibilities dr 
                                 LEFT JOIN userss u ON dr.manager_id = u.id 
                                 WHERE dr.user_id = :uid AND dr.is_active = 1
+                                ORDER BY dr.priority ASC
                             """, params={"uid": target_user_id}, ttl=0)
                             
-                            st.write(f"Current Responsibilities for **{target_user.username}**:")
+                            header_col1, header_col2 = st.columns([4, 1])
+                            with header_col1:
+                                st.markdown(f"#### 📋 {target_user.username}'s Responsibilities")
+                                st.caption(f"Sequence of daily tasks assigned to {target_user.username}")
+                            
+                            with header_col2:
+                                # Determine current default manager from user_app_access
+                                default_manager_id = None
+                                try:
+                                    with conn.session as s:
+                                        uaa = s.execute(text("SELECT report_to FROM user_app_access WHERE user_id = :uid AND app = 'tasks'"), {"uid": target_user_id}).fetchone()
+                                        if uaa:
+                                            default_manager_id = uaa[0]
+                                except:
+                                    pass
+
+                                default_manager_display = "Default Manager"
+                                if default_manager_id:
+                                    for display, u in manager_dict.items():
+                                        if u.id == default_manager_id:
+                                            default_manager_display = display
+                                            break
+
+                                if st.button("➕ Add Responsibility", key="open_add_resp_dlg", type="primary", use_container_width=True):
+                                    add_responsibility_dialog(conn, target_user_id, target_user.username, manager_options, manager_dict, db_actions, default_manager_display)
+
+                            st.markdown("---")
+
                             if resp_df.empty:
-                                st.info("No responsibilities assigned yet.")
+                                st.info("No responsibilities assigned yet. Click 'Add Responsibility' to get started.")
                             else:
+                                # Table Headers
+                                col_sizess = [0.2, 1.5, 1,1.5,0.5]
+                                t_cols = st.columns(col_sizess)
+                                t_cols[0].markdown("**#**")
+                                t_cols[1].markdown("**Task & Description**")
+                                t_cols[2].markdown("**Reporting To**")
+                                t_cols[3].markdown("**Logs Required**")
+                                t_cols[4].markdown("**Actions**")
+                                st.markdown('<div style="margin-top:-10px; border-bottom:1px solid #ddd; margin-bottom:15px;"></div>', unsafe_allow_html=True)
+
                                 for _, r in resp_df.iterrows():
-                                    col_name, col_manager, col_del = st.columns([0.5, 0.35, 0.15])
-                                    col_name.write(f"**- {r['task_name']}**")
-                                    if r.get('description'):
-                                        col_name.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;*<small>{r['description']}</small>*", unsafe_allow_html=True)
-                                    
-                                    if r.get('log_actions'):
-                                        col_name.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;**Logs:** <small>{r['log_actions']}</small>", unsafe_allow_html=True)
+                                    with st.container():
+                                        c_idx, c_main, c_mgr, c_log, c_act = st.columns(col_sizess)
+                                        
+                                        # Index / Priority
+                                        c_idx.markdown(f"<div style='font-size:1.1rem; font-weight:700; color:#666; margin-top:5px;'>{r['priority']}</div>", unsafe_allow_html=True)
+                                        
+                                        # Task Name & Description
+                                        with c_main:
+                                            st.markdown(f"**{r['task_name']}**")
+                                            if r.get('description'):
+                                                st.markdown(f"<div style='font-size:0.8rem; color:#666; margin-top:-5px;'>{r['description']}</div>", unsafe_allow_html=True)
+                                        
+                                        # Manager
+                                        manager_display = r['manager_name'] if r['manager_name'] else "Default Manager"
+                                        c_mgr.markdown(f"<div style='font-size:0.9rem; margin-top:5px;'>👤 {manager_display}</div>", unsafe_allow_html=True)
+                                        
+                                        # Log Actions
+                                        if r.get('log_actions'):
+                                            actions_list = r['log_actions'].split(',')
+                                            actions_html = "".join([f'<span class="access-badge" style="font-size:9px; padding:1px 5px;">{a.strip()}</span>' for a in actions_list])
+                                            c_log.markdown(f"<div style='margin-top:2px;'>{actions_html}</div>", unsafe_allow_html=True)
+                                        else:
+                                            c_log.markdown("<div style='font-size:0.8rem; color:#999; margin-top:5px;'>None</div>", unsafe_allow_html=True)
 
-                                    manager_display = r['manager_name'] if r['manager_name'] else "Default Manager"
-                                    col_manager.write(f"Manager: **{manager_display}**")
-
-                                    if col_del.button("🗑️", key=f"del_resp_{r['id']}", help="Delete Responsibility"):
-                                        try:
-                                            with conn.session as s:
-                                                s.execute(text("UPDATE daily_responsibilities SET is_active = 0 WHERE id = :id"), {"id": r['id']})
-                                                s.commit()
-                                            st.toast(f"Responsibility '{r['task_name']}' removed.")
-                                            st.rerun()
-                                        except Exception as e:
-                                            st.error(f"Error deleting: {e}")
-                            
-                            st.write("---")
-                            # Prepare list of possible managers
-                            manager_dict = {f"{u.username} (ID: {u.id})": u for u in users if u.role == 'admin' or (u.levels and ('reporting_manager' in u.levels or 'both' in u.levels))}
-                            
-                            col_t, col_d, col_m = st.columns([1, 1, 1])
-                            new_task = col_t.text_input("Add New Responsibility", key="new_resp_input", placeholder="e.g., Check Amazon Orders")
-                            new_desc = col_d.text_input("Description / Guidelines", key="new_resp_desc", placeholder="e.g., Verify all pending orders by 10 AM")
-                            
-                            # Determine current default manager from user_app_access
-                            default_manager_id = None
-                            try:
-                                with conn.session as s:
-                                    uaa = s.execute(text("SELECT report_to FROM user_app_access WHERE user_id = :uid AND app = 'tasks'"), {"uid": target_user_id}).fetchone()
-                                    if uaa:
-                                        default_manager_id = uaa[0]
-                            except:
-                                pass
-
-                            manager_options = ["Default Manager"] + list(manager_dict.keys())
-                            default_manager_display = "Default Manager"
-                            if default_manager_id:
-                                for display, u in manager_dict.items():
-                                    if u.id == default_manager_id:
-                                        default_manager_display = display
-                                        break
-                            
-                            new_manager_key = col_m.selectbox("Manager", options=manager_options, index=manager_options.index(default_manager_display) if default_manager_display in manager_options else 0, key="new_resp_manager")
-                            new_manager_id = manager_dict[new_manager_key].id if new_manager_key != "Default Manager" else None
-
-                            # Fetch unique actions from activity_log table
-                            try:
-                                with conn.session as s:
-                                    actions_res = s.execute(text("SELECT DISTINCT action FROM activity_log WHERE action IS NOT NULL AND action != '' ORDER BY action")).fetchall()
-                                    db_actions = [row[0] for row in actions_res]
-                            except Exception as e:
-                                st.error(f"Error fetching activity actions: {e}")
-                                db_actions = []
-
-                            new_actions = st.multiselect("Allowed Activity Logs", options=db_actions, key="new_resp_actions")
-
-                            if st.button("➕ Add Responsibility", key="add_resp_btn", type="primary", use_container_width=True):
-                                if new_task.strip():
-                                    try:
-                                        actions_str = ",".join(new_actions) if new_actions else None
-                                        with conn.session as s:
-                                            s.execute(text("INSERT INTO daily_responsibilities (user_id, task_name, description, manager_id, log_actions) VALUES (:uid, :name, :desc, :mid, :actions)"),
-                                                        {"uid": target_user_id, "name": new_task.strip(), "desc": new_desc.strip() if new_desc else None, "mid": new_manager_id, "actions": actions_str})
-                                            s.commit()
-                                        log_activity(conn, st.session_state.user_id, st.session_state.username, st.session_state.session_id, "added responsibility", f"Assigned '{new_task.strip()}' to {target_user.username} (Report to: {new_manager_key})")
-                                        st.success("✅ Responsibility added!")
-                                        st.rerun()
-                                    except Exception as e:
-                                        st.error(f"Error adding: {e}")
-                                else:
-                                    st.warning("Please enter a task name.")
+                                        # Actions
+                                        with c_act:
+                                            btn_edit, btn_del = st.columns(2)
+                                            if btn_edit.button("✏️", key=f"edit_resp_{r['id']}", help="Edit Responsibility", type="tertiary"):
+                                                edit_responsibility_dialog(conn, r['id'], r['task_name'], r['description'], r['manager_id'], r['log_actions'], r['priority'], manager_options, manager_dict, db_actions)
+                                            
+                                            if btn_del.button("🗑️", key=f"del_resp_{r['id']}", help="Delete Responsibility", type="tertiary"):
+                                                try:
+                                                    with conn.session as s:
+                                                        s.execute(text("UPDATE daily_responsibilities SET is_active = 0 WHERE id = :id"), {"id": r['id']})
+                                                        s.commit()
+                                                    st.toast(f"Responsibility '{r['task_name']}' removed.")
+                                                    st.rerun()
+                                                except Exception as e:
+                                                    st.error(f"Error deleting: {e}")
+                                        
+                                        st.markdown('<div class="row-divider"></div>', unsafe_allow_html=True)
                         except Exception as e:
                             st.error(f"Error fetching responsibilities: {e}")
 
