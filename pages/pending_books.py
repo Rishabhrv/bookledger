@@ -4,7 +4,7 @@ from datetime import datetime, date, timedelta
 import plotly.express as px
 import io
 from auth import validate_token
-from constants import log_activity, initialize_click_and_session_id, connect_db, clean_url_params
+from constants import log_activity, initialize_click_and_session_id, connect_db, show_book_details, fetch_all_printeditions, fetch_all_book_authors
 import time
 from sqlalchemy.sql import text
 
@@ -398,45 +398,6 @@ if click_id and click_id != "None" and click_id not in st.session_state.logged_c
     except Exception as e:
         st.error(f"Error logging navigation: {str(e)}")
 
-# Function to fetch book_author details for multiple book_ids with author details
-def fetch_all_book_authors(book_ids, conn):
-    if not book_ids:
-        return pd.DataFrame(columns=['book_id', 'author_id', 'author_position', 'welcome_mail_sent', 
-                                   'cover_agreement_sent', 'author_details_sent', 'photo_recive', 
-                                   'id_proof_recive', 'agreement_received', 'digital_book_sent', 
-                                   'printing_confirmation', 'name', 'phone', 'publishing_consultant'])
-    query = """
-    SELECT ba.book_id, ba.author_id, ba.author_position, ba.welcome_mail_sent, 
-           ba.cover_agreement_sent, ba.author_details_sent, ba.photo_recive, 
-           ba.id_proof_recive, ba.agreement_received, ba.digital_book_sent, 
-           ba.printing_confirmation, a.name, a.phone, ba.publishing_consultant
-    FROM book_authors ba
-    JOIN authors a ON ba.author_id = a.author_id
-    WHERE ba.book_id IN :book_ids
-    """
-    return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-
-# Function to fetch print editions for multiple book_ids (restored original)
-def fetch_all_printeditions(book_ids, conn):
-    if not book_ids:
-        return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
-    query = """
-    SELECT book_id, print_id, status
-    FROM PrintEditions
-    WHERE book_id IN :book_ids
-    """
-    return conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-
-# New function to fetch detailed print information for a specific book_id
-def fetch_print_details(book_id, conn):
-    query = """
-    SELECT pe.book_id, pe.print_id, bd.batch_id, pe.copies_planned, pb.print_sent_date, pb.print_receive_date, pb.status
-    FROM PrintEditions pe
-    LEFT JOIN BatchDetails bd ON pe.print_id = bd.print_id
-    LEFT JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
-    WHERE pe.book_id = :book_id
-    """
-    return conn.query(query, params={'book_id': book_id}, show_spinner=False)
 
 # Function to determine stuck reason
 def get_stuck_reason(book_id, book_row, authors_df, printeditions_df):
@@ -773,198 +734,10 @@ def show_stuck_reason_summary(books_df, authors_df, printeditions_df, key_suffix
         else:
             st.info("No data available for pie chart.")
 
+@st.dialog("Book Details", width="large")
+def show_book_details_(book_id, book_row, authors_df, printeditions_df):
+    show_book_details(book_id, book_row, authors_df, printeditions_df)
 
-@st.dialog("Book Pending Work Details", width="large")
-def show_book_details(book_id, book_row, authors_df, printeditions_df):
-    # Calculate days since enrolled
-    enrolled_date = book_row['date'] if pd.notnull(book_row['date']) else None
-    days_since_enrolled = (datetime.now().date() - enrolled_date).days if enrolled_date else "N/A"
-    
-    # Count authors
-    author_count = len(authors_df[authors_df['book_id'] == book_id])
-
-    # Book Title and Archive Toggle
-    col_title, col_archive = st.columns([5.5, 1], gap = 'large')
-    with col_title:
-        st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
-    with col_archive:
-        is_archived = book_row['is_archived'] == 1
-        toggle_label = "Unarchive Book" if is_archived else "Archive Book"
-        new_archive_status = st.toggle(
-            toggle_label,
-            value=is_archived,
-            key=f"archive_toggle_{book_id}"
-        )
-        if new_archive_status != is_archived:
-            with st.spinner("Updating archive status..."):
-                import time
-                time.sleep(1)
-                try:
-                    conn = connect_db()
-                    with conn.session as s:
-                        # If unarchiving, set ignore_auto_archive to 1
-                        ignore_val = 1 if not new_archive_status else 0
-                        s.execute(
-                            text("UPDATE books SET is_archived = :is_archived, ignore_auto_archive = :ignore_auto_archive WHERE book_id = :book_id"),
-                            {
-                                "is_archived": 1 if new_archive_status else 0, 
-                                "book_id": book_id,
-                                "ignore_auto_archive": ignore_val if not new_archive_status else 0 # Reset if manually archived? Or keep?
-                            }
-                        )
-                        s.commit()
-                    # Log the change
-                    change_desc = f"Book archive status changed from {'Archived' if is_archived else 'Not Archived'} to {'Archived' if new_archive_status else 'Not Archived'}"
-                    log_activity(
-                        conn,
-                        st.session_state.user_id,
-                        st.session_state.username,
-                        st.session_state.session_id,
-                        "updated book archive status",
-                        f"Book ID: {book_id}, {change_desc}"
-                    )
-                    st.success("Book Archived successfully!", icon="✔️")
-                    st.toast("Archive status updated successfully!", icon="✔️")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to update archive status: {str(e)}")
-                    st.toast(f"Failed to update archive status: {str(e)}", icon="❌", duration="long")
-
-    # Book Info in Compact Grid Layout
-    st.markdown("<div class='info-grid'>", unsafe_allow_html=True)
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Publisher:</span>{book_row['publisher']}</div>", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Enrolled:</span>{enrolled_date.strftime('%d %b %Y') if enrolled_date else 'N/A'}</div>", unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Since:</span>{days_since_enrolled} days</div>", unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Authors:</span>{author_count}</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Author Checklists (Full Sequence)
-    st.markdown("<h4 class='section-title'>Author Checklist</h4>", unsafe_allow_html=True)
-    book_authors_df = authors_df[authors_df['book_id'] == book_id]
-    if not book_authors_df.empty:
-        checklist_columns = [
-            'welcome_mail_sent', 'author_details_sent', 'photo_recive',
-            'apply_isbn_not_applied', 'isbn_not_received',
-            'cover_agreement_sent', 'digital_book_sent', 'id_proof_recive',
-            'agreement_received', 'printing_confirmation'
-        ]
-        checklist_labels = [
-            'Welcome', 'Details', 'Photo', 'ISBN Apply', 'ISBN Recv',
-            'Cover/Agr', 'Digital', 'ID Proof', 'Agreement', 'Print Conf'
-        ]
-        
-        # Build HTML table for full checklist
-        table_html = """
-        <style>
-            .compact-table {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                font-size: 12px;
-                color: #1f2937;
-                border-collapse: collapse;
-                width: 100%;
-            }
-            .compact-table th, .compact-table td {
-                padding: 10px 12px;
-                text-align: center;
-                border-bottom: 1px solid #e2e8f0;
-            }
-            .compact-table th {
-                background: #f1f5f9;
-                font-weight: 600;
-            }
-            .compact-table td {
-                color: #4b5563;
-            }
-        </style>
-        <table class='compact-table'>
-            <tr><th>ID</th><th>Name</th><th>Contact</th><th>Consultant</th><th>Pos</th>
-        """
-        for label in checklist_labels:
-            table_html += f"<th>{label}</th>"
-        table_html += "</tr>"
-        
-        for _, author in book_authors_df.iterrows():
-            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['phone']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td>"
-            for col, label in zip(checklist_columns, checklist_labels):
-                if col in ['apply_isbn_not_applied', 'isbn_not_received']:
-                    # Handle book-level ISBN fields
-                    if col == 'apply_isbn_not_applied':
-                        status = '✅' if book_row.get('apply_isbn', 0) == 1 else '❌'
-                    else:  # isbn_not_received
-                        status = '✅' if pd.notnull(book_row.get('isbn')) and book_row.get('apply_isbn', 0) == 1 else '❌'
-                else:
-                    # Handle author-level fields
-                    status = '✅' if author[col] else '❌'
-                table_html += f"<td>{status}</td>"
-            table_html += "</tr>"
-        table_html += "</table>"
-        st.markdown(table_html, unsafe_allow_html=True)
-    else:
-        st.info("No authors found for this book.")
-
-    # Operations and Print Editions in two columns
-    col_ops, col_print = st.columns(2)
-
-    # Operations Status
-    with col_ops:
-        st.markdown("<h4 class='section-title'>Operations Status</h4>", unsafe_allow_html=True)
-        operations = [
-            ('Writing', 'writing_start', 'writing_end'),
-            ('Proofreading', 'proofreading_start', 'proofreading_end'),
-            ('Formatting', 'formatting_start', 'formatting_end'),
-            ('Cover Design', 'cover_start', 'cover_end')
-        ]
-        # Check if book is publish-only or thesis-to-book
-        is_publish_only = book_row.get('is_publish_only', 0) == 1
-        is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
-        
-        table_html = "<table class='compact-table'><tr><th>Operation</th><th>Status</th></tr>"
-        for op_name, start_field, end_field in operations:
-            if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
-                status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
-            else:
-                start = book_row[start_field]
-                end = book_row[end_field]
-                if pd.notnull(start) and pd.notnull(end):
-                    status = '✅ Done'
-                elif pd.notnull(start):
-                    status = '⏳ Active'
-                else:
-                    status = '❌ Pending'
-            table_html += f"<tr><td>{op_name}</td><td>{status}</td></tr>"
-        table_html += "</table>"
-        st.markdown(table_html, unsafe_allow_html=True)
-
-    # Print Editions
-    with col_print:
-        st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
-        conn = connect_db()
-        book_print_details_df = fetch_print_details(book_id, conn)
-        if not book_print_details_df.empty:
-            table_html = "<table class='compact-table'><tr><th>Batch ID</th><th>Copies</th><th>Sent Date</th><th>Receive Date</th><th>Status</th></tr>"
-            for _, row in book_print_details_df.iterrows():
-                sent_date = row['print_sent_date'].strftime('%d %b %Y') if pd.notnull(row['print_sent_date']) else 'N/A'
-                receive_date = row['print_receive_date'].strftime('%d %b %Y') if pd.notnull(row['print_receive_date']) else 'N/A'
-                batch_id = row['batch_id'] if pd.notnull(row['batch_id']) else 'N/A'
-                copies = row['copies_planned'] if pd.notnull(row['copies_planned']) else 'N/A'
-                table_html += f"<tr><td>{batch_id}</td><td>{copies}</td><td>{sent_date}</td><td>{receive_date}</td><td>{row['status']}</td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-        else:
-            book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
-            if not book_printeditions_df.empty:
-                table_html = "<table class='compact-table'><tr><th>Print ID</th><th>Status</th></tr>"
-                for _, row in book_printeditions_df.iterrows():
-                    table_html += f"<tr><td>{row['print_id']}</td><td>{row['status']}</td></tr>"
-                table_html += "</table>"
-                st.markdown(table_html, unsafe_allow_html=True)
-            else:
-                st.info("No print editions found.")
 
 # Connect to MySQL
 conn = connect_db()
@@ -1266,7 +1039,7 @@ with tab1:
                     cols[5].markdown(f'<div class="table-row"><span class="{stuck_reason_class}">{stuck_reason}</span></div>', unsafe_allow_html=True)
                     with cols[6]:
                         if st.button(":material/visibility:", key=f"action_pending_{book['book_id']}", help="View Details"):
-                            show_book_details(book_id, book, authors_data, printeditions_data)
+                            show_book_details_(book_id, book, authors_data, printeditions_data)
         else:
             st.info("No Pending Books Found")
 

@@ -13,7 +13,7 @@ from urllib.parse import urlencode, quote
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
-from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count, check_ready_to_print, fetch_tags
+from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count, check_ready_to_print, fetch_tags, show_book_details, fetch_all_book_authors, fetch_all_printeditions
 import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -269,6 +269,13 @@ BUTTON_CONFIG = {
         "permission": "print_management",
         "type": "new_tab",
     },
+    "delivery_management": {
+        "label": "Manage Delivery",
+        "icon": "🚚",
+        "page_path": "delivery",
+        "permission": "print_management",
+        "type": "new_tab",
+    },
     "inventory": {
         "label": "Inventory",
         "icon": "📦",
@@ -382,6 +389,19 @@ def update_button_counts(conn):
         if "print_management" in BUTTON_CONFIG and total_print > 0:
             BUTTON_CONFIG["print_management"]["label"] += f" 🔴 ({total_print})"
 
+        # 5.1 Delivery Management
+        delivery_pending_count_query = """
+            SELECT COUNT(DISTINCT b.book_id) AS count
+            FROM books b
+            JOIN PrintEditions pe ON b.book_id = pe.book_id
+            JOIN BatchDetails bd ON pe.print_id = bd.print_id
+            JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
+            WHERE pb.status = 'Received' AND b.deliver = 0 AND b.is_cancelled = 0
+        """
+        delivery_pending_count = conn.query(delivery_pending_count_query, ttl=0, show_spinner = False).iloc[0]["count"]
+        if "delivery_management" in BUTTON_CONFIG and delivery_pending_count > 0:
+            BUTTON_CONFIG["delivery_management"]["label"] += f" 🔴 ({delivery_pending_count})"
+
         # 6. Messages
         if "messages" in BUTTON_CONFIG and total_unread > 0:
             BUTTON_CONFIG["messages"]["label"] += f" 🔴 ({total_unread})"
@@ -426,7 +446,7 @@ def update_button_counts(conn):
         cover_pending_count = conn.query(cover_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
         ops_pending_count = conn.query(ops_pending_count_query, ttl=0, show_spinner=False).iloc[0]["count"]
         print_pending_count = len(first_print_books) + len(reprint_books)
-        total_pending_checklist = welcome_pending_count + cover_pending_count + ops_pending_count + print_pending_count
+        total_pending_checklist = welcome_pending_count + cover_pending_count + ops_pending_count + print_pending_count + delivery_pending_count
         
         if "pending_checklist" in BUTTON_CONFIG and total_pending_checklist > 0:
             BUTTON_CONFIG["pending_checklist"]["label"] += f" 🔴 ({total_pending_checklist})"
@@ -597,74 +617,6 @@ def has_open_author_position(conn, book_id):
     df = conn.query(query)
     return book_id in df['book_id'].values
 
-
-
-@st.cache_data
-def fetch_all_book_authors(book_ids, _conn):
-    if not book_ids:  # Handle empty book_ids
-        return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
-            'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
-            'photo_recive', 'id_proof_recive', 'author_details_sent',
-            'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
-            'printing_confirmation', 'delivery_address', 
-            'address_line1', 'address_line2', 'city_del', 'state_del', 'pincode', 'country',
-            'delivery_charge', 'number_of_books', 'total_amount', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'amount_paid', 'isbn_sent_at'
-        ])
-    query = """
-    SELECT ba.id, ba.book_id, ba.author_id, a.name, a.email, a.phone,
-           ba.author_position, ba.welcome_mail_sent, ba.corresponding_agent, 
-           ba.publishing_consultant, ba.photo_recive, ba.id_proof_recive, 
-           ba.author_details_sent, ba.cover_agreement_sent, ba.agreement_received, 
-           ba.digital_book_sent, ba.printing_confirmation, ba.delivery_address, 
-           ba.address_line1, ba.address_line2, ba.city_del, ba.state_del, ba.pincode, ba.country,
-           ba.delivery_charge, ba.number_of_books, ba.total_amount,
-           ba.delivery_date, ba.tracking_id, ba.delivery_vendor, ba.isbn_sent_at,
-           COALESCE((SELECT SUM(amount) FROM author_payments WHERE book_author_id = ba.id AND status = 'Approved'), 0) as amount_paid
-    FROM book_authors ba
-    JOIN authors a ON ba.author_id = a.author_id
-    WHERE ba.book_id IN :book_ids
-    """
-    try:
-        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-    except Exception as e:
-        st.error(f"Error fetching book authors: {e}")
-        return pd.DataFrame(columns=[
-            'id', 'book_id', 'author_id', 'name', 'email', 'phone', 'author_position',
-            'welcome_mail_sent', 'corresponding_agent', 'publishing_consultant',
-            'photo_recive', 'id_proof_recive', 'author_details_sent',
-            'cover_agreement_sent', 'agreement_received', 'digital_book_sent',
-            'printing_confirmation', 'delivery_address', 'delivery_charge',
-            'number_of_books', 'total_amount', 'delivery_date',
-            'tracking_id', 'delivery_vendor', 'amount_paid'
-        ])
-
-# New function to fetch detailed print information for a specific book_id
-def fetch_print_details(book_id, conn):
-    query = """
-    SELECT pe.book_id, pe.print_id, bd.batch_id, pe.copies_planned, pb.print_sent_date, pb.print_receive_date, pb.status
-    FROM PrintEditions pe
-    LEFT JOIN BatchDetails bd ON pe.print_id = bd.print_id
-    LEFT JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
-    WHERE pe.book_id = :book_id
-    """
-    return conn.query(query, params={'book_id': book_id}, show_spinner=False)
-
-@st.cache_data
-def fetch_all_printeditions(book_ids, _conn):
-    if not book_ids:  # Handle empty book_ids
-        return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
-    query = """
-    SELECT book_id, print_id, status
-    FROM PrintEditions
-    WHERE book_id IN :book_ids
-    """
-    try:
-        return _conn.query(query, params={'book_ids': tuple(book_ids)}, show_spinner=False)
-    except Exception as e:
-        st.error(f"Error fetching print editions: {e}")
-        return pd.DataFrame(columns=['book_id', 'print_id', 'status'])
 
 @st.cache_data
 def fetch_all_author_names(book_ids, _conn):
@@ -919,6 +871,11 @@ def get_status_pill(book_id, row, authors_grouped, printeditions_grouped, correc
     return pill(ops_status, ops_colour, ops_emoji)
 
 
+###################################################################################################################################
+##################################--------------- Pending Checklist ----------------------------##################################
+###################################################################################################################################
+
+
 
 @st.dialog("Pending Checklist", width="medium", on_dismiss="rerun")
 def pending_checklist_dialog(conn):
@@ -974,6 +931,23 @@ def pending_checklist_dialog(conn):
 
     # 4. Print pending (First Print + Reprint)
     print_pending_data = pd.concat([first_print_books, reprint_books], ignore_index=True) if not (first_print_books.empty and reprint_books.empty) else pd.DataFrame()
+
+    # 5. Delivery pending (Received from print but not delivered)
+    delivery_pending_query = """
+    SELECT b.book_id, b.title, lb.print_receive_date AS pending_since
+    FROM books b
+    JOIN (
+        SELECT pe.book_id, pb.print_receive_date,
+               ROW_NUMBER() OVER(PARTITION BY pe.book_id ORDER BY pb.print_receive_date DESC, pb.batch_id DESC) as rn
+        FROM PrintEditions pe
+        JOIN BatchDetails bd ON pe.print_id = bd.print_id
+        JOIN PrintBatches pb ON bd.batch_id = pb.batch_id
+        WHERE pb.status = 'Received'
+    ) lb ON b.book_id = lb.book_id AND lb.rn = 1
+    WHERE b.deliver = 0 AND b.is_cancelled = 0
+    ORDER BY pending_since ASC
+    """
+    delivery_pending_data = conn.query(delivery_pending_query, show_spinner=False, ttl=0)
 
     # --- Callback ---
     def update_status_silent(ba_id, field, book_id, author_id, label):
@@ -1096,6 +1070,11 @@ def pending_checklist_dialog(conn):
                 if type_context == "print":
                     st.markdown(f"""<div style='padding-left: 10px; margin-bottom: 8px; font-size: 0.85em; color: #64748b;'>Type: <span style='color: #3b82f6; font-weight: 600;'>{row.get('print_type', 'N/A')}</span> | Copies: <b>{row.get('num_copies', row.get('copies_planned', '-'))}</b> | Size: {row.get('book_size', '-')}</div>""", unsafe_allow_html=True)
                 
+                if type_context == "delivery":
+                    receive_date = pd.to_datetime(row.get('pending_since'))
+                    receive_date_str = receive_date.strftime('%d %b %Y') if pd.notnull(receive_date) else "N/A"
+                    st.markdown(f"""<div style='padding-left: 10px; margin-bottom: 8px; font-size: 0.8em; color: #64748b;'>📦 Received on: <span style='font-weight: 600;'>{receive_date_str}</span></div>""", unsafe_allow_html=True)
+                
                 st.markdown("<hr style='margin: 5px 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
 
     # --- Tabs Layout ---
@@ -1109,12 +1088,14 @@ def pending_checklist_dialog(conn):
     o_book_count = ops_complete_data['book_id'].nunique() if not ops_complete_data.empty else 0
 
     p_count = len(print_pending_data)
+    del_count = len(delivery_pending_data)
 
-    c_tab, d_tab, w_tab, p_tab, = st.tabs([
+    c_tab, d_tab, w_tab, p_tab, del_tab = st.tabs([
         f"🎨 Cover ({c_book_count})", 
         f"📚 Digital ({o_book_count})",
         f"📧 Welcome ({w_book_count})",
         f"🖨️ Print ({p_count})",
+        f"🚚 Delivery ({del_count})",
     ])
 
     with c_tab:
@@ -1129,6 +1110,9 @@ def pending_checklist_dialog(conn):
     with p_tab:
         desc = f"Books ready for first print or reprint ({p_count} entries)."
         render_book_only_list(print_pending_data, desc, "print")
+    with del_tab:
+        desc = f"Books that are printed and awaiting delivery ({del_count} books)."
+        render_book_only_list(delivery_pending_data, desc, "delivery")
 
 
 ###################################################################################################################################
@@ -4660,7 +4644,7 @@ def edit_author_dialog(book_id, conn):
                                 st.markdown(f"**📞 Phone:** {row['phone'] or 'N/A'}")                  
 
                         # Tabs for organizing fields
-                        tab_titles = ["Checklists", "Basic Info", "Corrections", "Delivery"]
+                        tab_titles = ["Checklists", "Basic Info","Address & Copies","Corrections"]
                         tab_objects = st.tabs(tab_titles)
                     
                         # Checklists tab (no form, no save button)
@@ -4861,116 +4845,66 @@ def edit_author_dialog(book_id, conn):
                                     else:
                                         st.caption("⚠️ File record exists but file missing.")
                             
-                            # Tab 3: Delivery
-                            with tab_objects[3]:
-                                # Check if print slip can be generated (based on saved data)
-                                has_delivery_info = bool(row['number_of_books'] and int(row['number_of_books']) > 0 and row['delivery_address'] and str(row['delivery_address']).strip())
+                            # Tab 3: Delivery (Now Address & Copies)
+                            with tab_objects[2]:
+                                # Add Number of Books and Delivery Address inputs
+                                updates['number_of_books'] = st.number_input(
+                                    "Copies to Send",
+                                    min_value=0,
+                                    step=1,
+                                    value=int(row['number_of_books'] or 0),
+                                    help="Enter the number of books to deliver.",
+                                    key=f"number_of_books_{row['id']}"
+                                )
                                 
-                                if print_status != 0:
-                                    if has_delivery_info:
-                                        with st.expander("🖨️ Print Delivery Slip", expanded=False):
-                                            render_delivery_slip(
-                                                book_title, 
-                                                row['number_of_books'], 
-                                                row['name'], 
-                                                row['delivery_address'], 
-                                                row['phone']
-                                            )
-                                    else:
-                                        st.info("💡 Print Slip will be available once **Number of Books** and **Delivery Address** are saved.")
+                                # Backward compatibility: show old address if new fields are empty
+                                old_address = row['delivery_address'] or ""
+                                if old_address and not (row.get('address_line1') or row.get('city_del')):
+                                    st.info(f"**Old Address:** {old_address}")
 
-                                if print_status == 0:
-                                    st.warning("⚠️ Delivery details are disabled because printing status is not confirmed.")
-                                else:
-                                    col7, col8 = st.columns(2)
-                                    with col7:
-                                        updates['delivery_date'] = st.date_input(
-                                            "Delivery Date",
-                                            value=row['delivery_date'],
-                                            help="Enter the delivery date.",
-                                            key=f"delivery_date_{row['id']}"
-                                        )
-                                        updates['tracking_id'] = st.text_input(
-                                            "Tracking ID",
-                                            value=row['tracking_id'] or "",
-                                            help="Enter the tracking ID for the delivery.",
-                                            key=f"tracking_id_{row['id']}"
-                                        )
-                                    with col8:
-                                        updates['delivery_charge'] = st.number_input(
-                                            "Delivery Charge (₹)",
-                                            min_value=0.0,
-                                            step=0.01,
-                                            value=float(row['delivery_charge'] or 0.0),
-                                            help="Enter the delivery charge in INR.",
-                                            key=f"delivery_charge_{row['id']}"
-                                        )
-                                        updates['delivery_vendor'] = st.text_input(
-                                            "Delivery Vendor",
-                                            value=row['delivery_vendor'] or "",
-                                            help="Enter the name of the delivery vendor.",
-                                            key=f"delivery_vendor_{row['id']}"
-                                        )
-                                    # Add Number of Books and Delivery Address inputs
-                                    updates['number_of_books'] = st.number_input(
-                                        "Copies to Send",
-                                        min_value=0,
-                                        step=1,
-                                        value=int(row['number_of_books'] or 0),
-                                        help="Enter the number of books to deliver.",
-                                        key=f"number_of_books_{row['id']}"
-                                    )
-                                    
-                                    # Backward compatibility: show old address if new fields are empty
-                                    old_address = row['delivery_address'] or ""
-                                    if old_address and not (row.get('address_line1') or row.get('city_del')):
-                                        st.info(f"**Old Address:** {old_address}")
-
-                                    updates['address_line1'] = st.text_input(
-                                        "Address Line 1",
-                                        value=row.get('address_line1') or "",
-                                        key=f"addr1_{row['id']}"
-                                    )
-                                    updates['address_line2'] = st.text_input(
-                                        "Address Line 2",
-                                        value=row.get('address_line2') or "",
-                                        key=f"addr2_{row['id']}"
-                                    )
-                                    
-                                    col_a1, col_a2, col_a3 = st.columns(3)
-                                    updates['city_del'] = col_a1.text_input(
-                                        "City",
-                                        value=row.get('city_del') or "",
-                                        key=f"city_del_{row['id']}"
-                                    )
-                                    updates['state_del'] = col_a2.text_input(
-                                        "State",
-                                        value=row.get('state_del') or "",
-                                        key=f"state_del_{row['id']}"
-                                    )
-                                    updates['pincode'] = col_a3.text_input(
-                                        "PIN Code",
-                                        value=row.get('pincode') or "",
-                                        key=f"pincode_{row['id']}"
-                                    )
-                                    updates['country'] = st.text_input(
-                                        "Country",
-                                        value=row.get('country') or "India",
-                                        key=f"country_{row['id']}"
-                                    )
-                                    
-                                    # Keep old delivery_address field hidden or sync it?
-                                    # The user wants to save in separate columns.
-                                    # Let's also update the full delivery_address string for backward compatibility in reports/slips
-                                    full_addr = []
-                                    if updates['address_line1']: full_addr.append(updates['address_line1'])
-                                    if updates['address_line2']: full_addr.append(updates['address_line2'])
-                                    if updates['city_del']: full_addr.append(updates['city_del'])
-                                    if updates['state_del']: full_addr.append(updates['state_del'])
-                                    if updates['pincode']: full_addr.append(updates['pincode'])
-                                    if updates['country']: full_addr.append(updates['country'])
-                                    
-                                    updates['delivery_address'] = ", ".join(full_addr) if full_addr else old_address
+                                updates['address_line1'] = st.text_input(
+                                    "Address Line 1",
+                                    value=row.get('address_line1') or "",
+                                    key=f"addr1_{row['id']}"
+                                )
+                                updates['address_line2'] = st.text_input(
+                                    "Address Line 2",
+                                    value=row.get('address_line2') or "",
+                                    key=f"addr2_{row['id']}"
+                                )
+                                
+                                col_a1, col_a2, col_a3 = st.columns(3)
+                                updates['city_del'] = col_a1.text_input(
+                                    "City",
+                                    value=row.get('city_del') or "",
+                                    key=f"city_del_{row['id']}"
+                                )
+                                updates['state_del'] = col_a2.text_input(
+                                    "State",
+                                    value=row.get('state_del') or "",
+                                    key=f"state_del_{row['id']}"
+                                )
+                                updates['pincode'] = col_a3.text_input(
+                                    "PIN Code",
+                                    value=row.get('pincode') or "",
+                                    key=f"pincode_{row['id']}"
+                                )
+                                updates['country'] = st.text_input(
+                                    "Country",
+                                    value=row.get('country') or "India",
+                                    key=f"country_{row['id']}"
+                                )
+                                
+                                # Let's also update the full delivery_address string for backward compatibility in reports/slips
+                                full_addr = []
+                                if updates['address_line1']: full_addr.append(updates['address_line1'])
+                                if updates['address_line2']: full_addr.append(updates['address_line2'])
+                                if updates['city_del']: full_addr.append(updates['city_del'])
+                                if updates['state_del']: full_addr.append(updates['state_del'])
+                                if updates['pincode']: full_addr.append(updates['pincode'])
+                                if updates['country']: full_addr.append(updates['country'])
+                                
+                                updates['delivery_address'] = ", ".join(full_addr) if full_addr else old_address
 
                             # Submit and Remove buttons
                             col_submit, col_remove = st.columns([8, 1])
@@ -5138,7 +5072,7 @@ def edit_author_dialog(book_id, conn):
                                         st.session_state[confirmation_key] = False
 
                         # Corrections Tab
-                        with tab_objects[2]:
+                        with tab_objects[3]:
                             st.markdown("#### 📝 Author Corrections")
 
                             # Fetch all team correction tasks for status mapping
@@ -8007,353 +7941,9 @@ def update_inventory_delivery_details(book_id, updates, conn):
 ##################################--------------- Book Details ----------------------------##################################
 ###################################################################################################################################
 
-
 @st.dialog("Book Details", width="large")
-def show_book_details(book_id, book_row, authors_df, printeditions_df):
-    conn = connect_db()
-    # Calculate days since enrolled
-    enrolled_date = book_row['date'] if pd.notnull(book_row['date']) else None
-    if enrolled_date:
-        # Convert both to date objects
-        today = datetime.now().date()
-        enrolled_date = enrolled_date.date() if hasattr(enrolled_date, 'date') else enrolled_date
-        days_since_enrolled = (today - enrolled_date).days
-    else:
-        days_since_enrolled = "N/A"
-    
-    # Count authors
-    author_count = len(authors_df[authors_df['book_id'] == book_id])
-
-    if book_row.get('deliver', 0) == 0:
-        deliver_status = "Undelivered"
-    else:
-        deliver_status = "Delivered"
-
-    # Book Title and Archive Toggle
-
-    st.markdown(f"<div class='book-title'>{book_row['title']} (ID: {book_id})</div>", unsafe_allow_html=True)
-    # Book Info in Compact Grid Layout
-    st.markdown("<div class='info-grid'>", unsafe_allow_html=True)
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Publisher:</span>{book_row['publisher']}</div>", unsafe_allow_html=True)
-    with col2:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Enrolled:</span>{enrolled_date.strftime('%d %b %Y') if enrolled_date else 'N/A'}</div>", unsafe_allow_html=True)
-    with col3:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Since:</span>{days_since_enrolled} days</div>", unsafe_allow_html=True)
-    with col4:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Authors:</span>{author_count}</div>", unsafe_allow_html=True)
-    with col5:
-        st.markdown(f"<div class='info-box'><span class='info-label'>Status:</span>{deliver_status}</div>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ISBN Status Table
-    st.markdown("<h4 class='section-title'>ISBN Status</h4>", unsafe_allow_html=True)
-    
-    # Determine ISBN Status
-    apply_isbn = book_row.get('apply_isbn', 0) == 1
-    isbn_val = book_row.get('isbn')
-    isbn_received = pd.notnull(isbn_val) and str(isbn_val).strip() != ''
-    isbn_date_raw = book_row.get('isbn_receive_date')
-    
-    if isbn_date_raw and pd.notnull(isbn_date_raw):
-        try:
-            isbn_date = pd.to_datetime(isbn_date_raw).strftime('%d %b %Y')
-        except:
-            isbn_date = str(isbn_date_raw)
-    else:
-        isbn_date = "-"
-
-    isbn_table_html = f"""
-    <table class='compact-table'>
-        <tr><th>Applied</th><th>Received</th><th>Received Date</th><th>ISBN</th></tr>
-        <tr>
-            <td>{'✅' if apply_isbn else '❌'}</td>
-            <td>{'✅' if isbn_received else '❌'}</td>
-            <td>{isbn_date}</td>
-            <td>{isbn_val if isbn_received else '-'}</td>
-        </tr>
-    </table>
-    """
-    st.markdown(isbn_table_html, unsafe_allow_html=True)
-
-    # Author Checklists (Full Sequence)
-    st.markdown("<h4 class='section-title'>Author Checklist</h4>", unsafe_allow_html=True)
-    book_authors_df = authors_df[authors_df['book_id'] == book_id]
-    if not book_authors_df.empty:
-        checklist_columns = [
-            'welcome_mail_sent', 'author_details_sent', 'photo_recive',
-            'cover_agreement_sent', 'digital_book_sent', 'id_proof_recive',
-            'agreement_received', 'printing_confirmation'
-        ]
-        checklist_labels = [
-            'Welcome', 'Details', 'Photo',
-            'Cover/Agr', 'Digital', 'ID Proof', 'Agreement', 'Print Conf'
-        ]
-        
-        # Build HTML table for full checklist
-        table_html = """
-        <style>
-            .compact-table {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                font-size: 12px;
-                color: #1f2937;
-                border-collapse: collapse;
-                width: 100%;
-            }
-            .compact-table th, .compact-table td {
-                padding: 8px 10px;
-                text-align: center;
-                border-bottom: 1px solid #e2e8f0;
-            }
-            .compact-table th {
-                background: #f1f5f9;
-                font-weight: 600;
-            }
-            .compact-table td {
-                color: #4b5563;
-            }
-        </style>
-        <table class='compact-table'>
-            <tr><th>ID</th><th>Name</th><th>Consultant</th><th>Pos</th><th>Payment</th>
-        """
-        for label in checklist_labels:
-            table_html += f"<th>{label}</th>"
-        table_html += "</tr>"
-        
-        for _, author in book_authors_df.iterrows():
-            # Payment status logic
-            total = float(author.get('total_amount', 0) or 0)
-            paid = float(author.get('amount_paid', 0) or 0)
-            if total <= 0:
-                p_status = '<span style="color:#666; font-size:10px;">⚪ Pending</span>'
-            elif paid >= total:
-                p_status = '<span style="color:#166534; font-size:10px;">✅ Paid</span>'
-            elif paid > 0:
-                p_status = '<span style="color:#854d0e; font-size:10px;">🟠 Partial</span>'
-            else:
-                p_status = '<span style="color:#b91c1c; font-size:10px;">🔴 Unpaid</span>'
-
-            table_html += f"<tr><td>{author['author_id']}</td><td>{author['name']}</td><td>{author['publishing_consultant']}</td><td>{author['author_position']}</td><td>{p_status}</td>"
-            for col, label in zip(checklist_columns, checklist_labels):
-                status = '✅' if author[col] else '❌'
-                table_html += f"<td>{status}</td>"
-            table_html += "</tr>"
-        table_html += "</table>"
-        st.markdown(table_html, unsafe_allow_html=True)
-    else:
-        st.info("No authors found for this book.")
-
-
-    # Operations Status
-    st.markdown("<h4 class='section-title'>Operations Status</h4>", unsafe_allow_html=True)
-    operations = [
-        ('Writing', 'writing_start', 'writing_end', 'writing_by'),
-        ('Proofreading', 'proofreading_start', 'proofreading_end', 'proofreading_by'),
-        ('Formatting', 'formatting_start', 'formatting_end', 'formatting_by'),
-        ('Cover Design', 'cover_start', 'cover_end', 'cover_by')
-    ]
-    # Check if book is publish-only or thesis-to-book
-    is_publish_only = book_row.get('is_publish_only', 0) == 1
-    is_thesis_to_book = book_row.get('is_thesis_to_book', 0) == 1
-    
-    table_html = "<table class='compact-table'><tr><th>Operation</th><th>Start</th><th>End</th><th>By</th><th>Status</th></tr>"
-    for op_name, start_field, end_field, by_field in operations:
-        by_who = book_row.get(by_field)
-        by_who = by_who if pd.notnull(by_who) and str(by_who).strip() != '' else '-'
-        
-        start_val = book_row.get(start_field)
-        end_val = book_row.get(end_field)
-        
-        start_str = start_val.strftime('%d %b %Y') if pd.notnull(start_val) else '-'
-        end_str = end_val.strftime('%d %b %Y') if pd.notnull(end_val) else '-'
-        
-        if op_name == 'Writing' and (is_publish_only or is_thesis_to_book):
-            status = '📖 Publish Only' if is_publish_only else '📚 Thesis to Book'
-            by_who = '-'
-            start_str = '-'
-            end_str = '-'
-        else:
-            if pd.notnull(start_val) and pd.notnull(end_val):
-                status = '✅ Done'
-            elif pd.notnull(start_val):
-                status = '⏳ Active'
-            else:
-                status = '❌ Pending'
-        table_html += f"<tr><td>{op_name}</td><td>{start_str}</td><td>{end_str}</td><td>{by_who}</td><td>{status}</td></tr>"
-    table_html += "</table>"
-    st.markdown(table_html, unsafe_allow_html=True)
-
-    # Correction History
-    requests_query = """
-    SELECT ac.*, COALESCE(a.name, 'Internal Team') AS author_name 
-    FROM author_corrections ac
-    LEFT JOIN authors a ON ac.author_id = a.author_id
-    WHERE ac.book_id = :book_id 
-    ORDER BY ac.created_at DESC
-    """
-    corrections_query = """
-    SELECT * FROM corrections 
-    WHERE book_id = :book_id 
-    ORDER BY correction_start DESC
-    """
-    
-    requests_df = conn.query(requests_query, params={"book_id": str(book_id)}, show_spinner=False)
-    corrections_df = conn.query(corrections_query, params={"book_id": str(book_id)}, show_spinner=False)
-
-    if not requests_df.empty or not corrections_df.empty:
-        with st.expander("📝 Correction History", expanded=False):
-            if not requests_df.empty:
-                st.markdown("**Correction Requests**")
-                req_table = "<table class='compact-table'><tr><th>Source</th><th>Round</th><th>Date</th><th>Correction</th></tr>"
-                for _, req in requests_df.iterrows():
-                    date_str = req['created_at'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(req['created_at']) else '-'
-                    text_val = req['correction_text'] if pd.notnull(req['correction_text']) and str(req['correction_text']).strip() != '' else "File uploaded"
-                    
-                    is_internal = pd.isnull(req['author_id'])
-                    if is_internal:
-                        source_badge = '<span style="background-color:#F3E5F5; color:#8E24AA; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">Internal Team</span>'
-                    else:
-                        source_badge = f'<span style="background-color:#E3F2FD; color:#1976D2; padding:2px 6px; border-radius:8px; font-size:10px; font-weight:bold;">{req["author_name"]}</span>'
-                    
-                    req_table += f"<tr><td>{source_badge}</td><td>{req['round_number']}</td><td>{date_str}</td><td>{text_val}</td></tr>"
-                req_table += "</table>"
-                st.markdown(req_table, unsafe_allow_html=True)
-            
-            if not corrections_df.empty:
-                st.markdown("<br>**Team Correction Actions**", unsafe_allow_html=True)
-                corr_table = "<table class='compact-table'><tr><th>Section</th><th>Round</th><th>Worker</th><th>Start</th><th>End</th></tr>"
-                for _, corr in corrections_df.iterrows():
-                    start_str = corr['correction_start'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_start']) else '-'
-                    end_str = corr['correction_end'].strftime('%d %b %Y, %I:%M %p') if pd.notnull(corr['correction_end']) else '⏳ Active'
-                    
-                    section_display = corr['section'].capitalize()
-                    if corr.get('is_internal') == 1:
-                        section_display += ' <span style="background-color:#F3E5F5; color:#8E24AA; padding:1px 4px; border-radius:4px; font-size:9px; font-weight:bold;">Internal Team</span>'
-                        
-                    corr_table += f"<tr><td>{section_display}</td><td>{corr['round_number']}</td><td>{corr['worker']}</td><td>{start_str}</td><td>{end_str}</td></tr>"
-                corr_table += "</table>"
-                st.markdown(corr_table, unsafe_allow_html=True)
-
-
-    st.markdown("<h4 class='section-title'>Print Editions</h4>", unsafe_allow_html=True)
-    book_print_details_df = fetch_print_details(book_id, conn)
-    
-    # Check for basic print editions if detailed ones are missing
-    book_printeditions_df = printeditions_df[printeditions_df['book_id'] == book_id]
-    
-    has_prints = not book_print_details_df.empty or not book_printeditions_df.empty
-    
-    if has_prints:
-        # Show Print Editions Table
-        if not book_print_details_df.empty:
-            table_html = "<table class='compact-table'><tr><th>Batch ID</th><th>Copies</th><th>Sent Date</th><th>Receive Date</th><th>Status</th></tr>"
-            for _, row in book_print_details_df.iterrows():
-                sent_date = row['print_sent_date'].strftime('%d %b %Y') if pd.notnull(row['print_sent_date']) else 'N/A'
-                receive_date = row['print_receive_date'].strftime('%d %b %Y') if pd.notnull(row['print_receive_date']) else 'N/A'
-                batch_id = row['batch_id'] if pd.notnull(row['batch_id']) else 'N/A'
-                copies = row['copies_planned'] if pd.notnull(row['copies_planned']) else 'N/A'
-                table_html += f"<tr><td>{batch_id}</td><td>{copies}</td><td>{sent_date}</td><td>{receive_date}</td><td>{row['status']}</td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-        elif not book_printeditions_df.empty:
-            table_html = "<table class='compact-table'><tr><th>Print ID</th><th>Status</th></tr>"
-            for _, row in book_printeditions_df.iterrows():
-                table_html += f"<tr><td>{row['print_id']}</td><td>{row['status']}</td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-
-        # Author Delivery Table (Only if printed)
-        st.markdown("<h4 class='section-title'>Author Delivery</h4>", unsafe_allow_html=True)
-        if not book_authors_df.empty:
-            table_html = "<table class='compact-table'><tr><th>Author</th><th>Status</th><th>Copies</th><th>Date</th></tr>"
-            for _, author in book_authors_df.iterrows():
-                delivery_date = author.get('delivery_date')
-                if pd.notnull(delivery_date):
-                    try:
-                        d_date = pd.to_datetime(delivery_date).strftime('%d %b %Y')
-                    except:
-                        d_date = str(delivery_date)
-                    status = "✅ Delivered"
-                else:
-                    d_date = "-"
-                    status = "❌ Pending"
-                table_html += f"<tr><td>{author['name']}</td><td>{status}</td><td>{author.get('number_of_books', '❌ Pending')}</td><td>{d_date}</td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-        else:
-            st.info("No authors found.")
-
-    else:
-        st.info("Book not printed yet.")
-
-    # Additional Details: Links & Inventory (Only if printed)
-    if has_prints:
-        st.markdown("---")
-        col_links, col_inv = st.columns(2)
-
-        with col_links:
-            st.markdown("<h4 class='section-title'>Store Links</h4>", unsafe_allow_html=True)
-            links_data = [
-                ("Amazon", book_row.get('amazon_link'), "https://img.icons8.com/color/48/000000/amazon.png"),
-                ("Flipkart", book_row.get('flipkart_link'), "https://img.icons8.com/?size=100&id=UU2im0hihoyi&format=png&color=000000"),
-                ("Google Books", book_row.get('google_link'), "https://img.icons8.com/color/48/000000/google-logo.png"),
-                ("AGPH Store", book_row.get('agph_link'), "https://img.icons8.com/fluency/48/shopping-bag.png")
-            ]
-            
-            table_html = "<table class='compact-table'><tr><th>Store</th><th>Link</th></tr>"
-            for name, link, icon in links_data:
-                if link and str(link).strip() and str(link) != 'None':
-                    status = f'<a href="{link}" target="_blank"><img src="{icon}" width="24" height="24" title="{name}"></a>'
-                else:
-                    status = "❌"
-                table_html += f"<tr><td>{name}</td><td>{status}</td></tr>"
-            table_html += "</table>"
-            st.markdown(table_html, unsafe_allow_html=True)
-
-        with col_inv:
-            st.markdown("<h4 class='section-title'>Inventory</h4>", unsafe_allow_html=True)
-            try:
-                # Total Printed
-                total_printed = book_print_details_df[book_print_details_df['status'] == 'Received']['copies_planned'].sum() if not book_print_details_df.empty else 0
-
-                # Fetch inventory sales
-                inv_res = conn.query(f"SELECT amazon_sales, flipkart_sales, website_sales, direct_sales FROM inventory WHERE book_id = '{book_id}'", show_spinner=False)
-                
-                if not inv_res.empty:
-                    inv_data = inv_res.iloc[0]
-                    amazon = int(inv_data['amazon_sales']) if pd.notnull(inv_data['amazon_sales']) else 0
-                    flipkart = int(inv_data['flipkart_sales']) if pd.notnull(inv_data['flipkart_sales']) else 0
-                    website = int(inv_data['website_sales']) if pd.notnull(inv_data['website_sales']) else 0
-                    direct = int(inv_data['direct_sales']) if pd.notnull(inv_data['direct_sales']) else 0
-                else:
-                    amazon = flipkart = website = direct = 0
-                
-                total_sales = amazon + flipkart + website + direct
-
-                # Author Copies
-                author_copies = book_authors_df['number_of_books'].fillna(0).astype(int).sum() if not book_authors_df.empty else 0
-                
-                current_inv = int(total_printed - total_sales - author_copies)
-                
-                # Inventory Table
-                inv_table_html = f"""
-                <table class='compact-table'>
-                    <tr><th>Category</th><th>Count</th></tr>
-                    <tr><td>Total Printed</td><td>{total_printed}</td></tr>
-                    <tr><td>Amazon Sales</td><td>{amazon}</td></tr>
-                    <tr><td>Flipkart Sales</td><td>{flipkart}</td></tr>
-                    <tr><td>Website Sales</td><td>{website}</td></tr>
-                    <tr><td>Direct Sales</td><td>{direct}</td></tr>
-                    <tr><td>Author Copies</td><td>{author_copies}</td></tr>
-                    <tr style='font-weight:bold; background-color:#f8f9fa;'><td>Current Stock</td><td>{current_inv}</td></tr>
-                </table>
-                """
-                st.markdown(inv_table_html, unsafe_allow_html=True)
-            
-            except Exception as e:
-                st.error(f"Error: {str(e)}")
-
+def show_book_details_(book_id, book_row, authors_df, printeditions_df):
+    show_book_details(book_id, book_row, authors_df, printeditions_df)
 
 
 ###################################################################################################################################
@@ -9316,8 +8906,6 @@ start_idx = (st.session_state.current_page - 1) * page_size
 end_idx = min(start_idx + page_size, total_books)
 paginated_books = filtered_books.iloc[start_idx:end_idx]
 book_idss = paginated_books['book_id'].tolist()
-authors_data = fetch_all_book_authors(book_idss, conn)
-printeditions_data = fetch_all_printeditions(book_idss, conn)
 
 # Display the table
 column_size = [0.5, 3.8, 1, 1, 1.3, 2.2]
@@ -9445,7 +9033,7 @@ with st.container(border=False):
                     with btn_col6:
                          if is_button_allowed("details"):
                             if st.button(details_icon, key=f"details_{row['book_id']}", help="View Details"):
-                                show_book_details(row['book_id'], row, authors_data, printeditions_data)
+                                show_book_details_(row['book_id'], row, authors_df, printeditions_df)
                          else:
                             st.button(details_icon, key=f"details_{row['book_id']}", help="Not Authorised", disabled=True)
 
