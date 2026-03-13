@@ -675,7 +675,8 @@ def delivery_management_page():
                         else:
                             cols[2].markdown(f'<div class="table-row"><span class="ready-badge">✅ Ready</span></div>', unsafe_allow_html=True)
                             
-                        cols[3].markdown(f'<div class="table-row">{f"{row["batch_name"]} ({row["batch_id"]})" if row["batch_id"] else "-"}</div>', unsafe_allow_html=True)
+                        batch_info = f"{row['batch_name']} ({row['batch_id']})" if row["batch_id"] else "-"
+                        cols[3].markdown(f'<div class="table-row">{batch_info}</div>', unsafe_allow_html=True)
                         cols[4].markdown(f'<div class="table-row">{row["print_receive_date"].strftime("%d %b %Y") if row["print_receive_date"] else "-"}</div>', unsafe_allow_html=True)                        
                         with cols[5]:
                             st.markdown('<div style="padding-top: 10px;">', unsafe_allow_html=True)
@@ -815,7 +816,8 @@ def delivery_management_page():
                         enroll_date_str = row["date"].strftime("%d %b %Y") if pd.notnull(row["date"]) else "-"
                         cols[2].markdown(f'<div class="table-row">{enroll_date_str}</div>', unsafe_allow_html=True)
                         
-                        cols[3].markdown(f'<div class="table-row">{f"{row["batch_name"]} ({int(row["batch_id"])})" if row["batch_id"] else "-"}</div>', unsafe_allow_html=True)
+                        batch_info = f"{row['batch_name']} ({int(row['batch_id'])})" if row["batch_id"] else "-"
+                        cols[3].markdown(f'<div class="table-row">{batch_info}</div>', unsafe_allow_html=True)
                         
                         print_date_str = row["print_receive_date"].strftime("%d %b %Y") if pd.notnull(row["print_receive_date"]) else "-"
                         cols[4].markdown(f'<div class="table-row">{print_date_str}</div>', unsafe_allow_html=True)
