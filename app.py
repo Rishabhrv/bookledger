@@ -1429,18 +1429,18 @@ def activity_summary_dialog(conn):
 
     summary = {}
     metrics_config = [
-        ("📚 New Books", df['action'].str.contains('added book', case=False, na=False)),
-        ("👥 New Authors", df['action'].str.contains('added author', case=False, na=False)),
-        ("💰 Payments", df['action'].isin(['registered payment', 'approved payment'])),
-        ("🛠️ Corrections", df['action'].str.contains('correction', case=False, na=False)),
-        ("📧 Welcome Mail", (df['action'] == 'sent welcome email') | (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))),
-        ("📥 Author Details", df['details'].str.contains("Author Details Received changed to 'True'", na=False)),
-        ("📷 Author Photo", df['details'].str.contains("Photo Received changed to 'True'", na=False)),
-        ("🆔 ID Proof", df['details'].str.contains("ID Proof Received changed to 'True'", na=False)),
-        ("📜 Cover & Agreement", df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)),
-        ("✍🏻 Agreement Recvd", df['details'].str.contains("Agreement Received changed to 'True'", na=False)),
-        ("📤 Digital Proof", df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)),
-        ("🖨️ Print Confirm", df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False))
+        ("📚 New Books Added", df['action'].str.contains('added book', case=False, na=False)),
+        ("👥 New Authors Added", df['action'].str.contains('added author', case=False, na=False)),
+        ("💰 Payments Registered", df['action'].isin(['registered payment', 'approved payment'])),
+        ("🛠️ Corrections Registered", df['action'].str.contains('correction', case=False, na=False)),
+        ("📧 Welcome Mail Sent", (df['action'] == 'sent welcome email') | (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))),
+        ("📥 Author Details Received", df['details'].str.contains("Author Details Received changed to 'True'", na=False)),
+        ("📷 Author Photo Received", df['details'].str.contains("Photo Received changed to 'True'", na=False)),
+        ("🆔 ID Proof Received", df['details'].str.contains("ID Proof Received changed to 'True'", na=False)),
+        ("📜 Cover & Agreement Sent", df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)),
+        ("✍🏻 Agreement Received", df['details'].str.contains("Agreement Received changed to 'True'", na=False)),
+        ("📤 Digital Proof Sent", df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)),
+        ("🖨️ Print Confirmation Received", df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False))
     ]
 
     for label, condition in metrics_config:
