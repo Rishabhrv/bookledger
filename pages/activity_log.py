@@ -201,21 +201,25 @@ if click_id and click_id not in st.session_state.logged_click_ids:
 
 
 # Fetch activity log data for a specific date, user, and action
-def get_activity_log(selected_date, selected_user=None, selected_action=None):
+def get_activity_log(selected_date, selected_user=None, selected_action=None, search_term=None):
     conn = connect_db()
-    query = """
-        SELECT timestamp, user_id, username, session_id, action, details 
-        FROM activity_log 
-        WHERE DATE(timestamp) = :selected_date
-    """
-    params = {"selected_date": selected_date}
+    query = "SELECT timestamp, user_id, username, session_id, action, details FROM activity_log WHERE 1=1"
+    params = {}
+    
+    if search_term:
+        query += " AND (details LIKE :search OR action LIKE :search)"
+        params["search"] = f"%{search_term}%"
+    else:
+        query += " AND DATE(timestamp) = :selected_date"
+        params["selected_date"] = selected_date
+        
     if selected_user:
         query += " AND username = :selected_user"
         params["selected_user"] = selected_user
     if selected_action:
         query += " AND action = :selected_action"
         params["selected_action"] = selected_action
-    query += " ORDER BY timestamp DESC"
+    query += " ORDER BY timestamp DESC LIMIT 1000"
     
     with conn.session as s:
         result = s.execute(text(query), params=params)
@@ -223,8 +227,10 @@ def get_activity_log(selected_date, selected_user=None, selected_action=None):
         s.commit()
     return df
 
+import re
+
 # Fetch daily summary metrics
-def get_daily_summary(selected_date):
+def get_daily_summary(selected_date, id_preference="Book"):
     conn = connect_db()
     query = """
         SELECT action, details 
@@ -238,29 +244,97 @@ def get_daily_summary(selected_date):
     if df.empty:
         return None
 
-    summary = {
-        "💰 Payments": len(df[df['action'] == 'registered payment']),
-        "🛠️ Corrections": len(df[df['action'] == 'added correction']),
-        "📧 ISBN Emails": len(df[df['action'] == 'sent isbn email']),
-        "📧 Welcome Mail": len(df[(df['action'] == 'sent welcome email') | 
-                                (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))]),
-        "📥 Author Details": len(df[df['details'].str.contains("Author Details Received changed to 'True'", na=False)]),
-        "📷 Author Photo": len(df[df['details'].str.contains("Photo Received changed to 'True'", na=False)]),
-        "🆔 ID Proof": len(df[df['details'].str.contains("ID Proof Received changed to 'True'", na=False)]),
-        "📜 Cover & Agreement": len(df[df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)]),
-        "✍🏻 Agreement Recvd": len(df[df['details'].str.contains("Agreement Received changed to 'True'", na=False)]),
-        "📤 Digital Proof": len(df[df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)]),
-        "🖨️ Print Confirm": len(df[df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False)])
-    }
+    def extract_info(details_series, pref):
+        ids = []
+        effective_type = "B"
+        for d in details_series.dropna():
+            b_match = re.search(r"Book ID: (\d+)", d)
+            a_match = re.search(r"Author ID: (\d+)", d)
+            
+            b_id = b_match.group(1) if b_match else None
+            a_id = a_match.group(1) if a_match else None
+            
+            if pref == "Author" and a_id:
+                ids.append(a_id)
+                effective_type = "A"
+            elif b_id:
+                ids.append(b_id)
+                # Keep effective_type as B unless we found Author IDs earlier
+            elif a_id:
+                ids.append(a_id)
+                effective_type = "A"
+        return sorted(list(set(ids)), key=int), effective_type
+
+    summary = {}
+    
+    # Define metrics: (Label, Filter Condition)
+    metrics_config = [
+        ("📚 New Books", df['action'].str.contains('added book', case=False, na=False)),
+        ("👥 New Authors", df['action'].str.contains('added author', case=False, na=False)),
+        ("💰 Payments", df['action'].isin(['registered payment', 'approved payment'])),
+        ("🛠️ Corrections", df['action'].str.contains('correction', case=False, na=False)),
+        ("📧 Welcome Mail", (df['action'] == 'sent welcome email') | (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))),
+        ("📥 Author Details", df['details'].str.contains("Author Details Received changed to 'True'", na=False)),
+        ("📷 Author Photo", df['details'].str.contains("Photo Received changed to 'True'", na=False)),
+        ("🆔 ID Proof", df['details'].str.contains("ID Proof Received changed to 'True'", na=False)),
+        ("📜 Cover & Agreement", df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)),
+        ("✍🏻 Agreement Recvd", df['details'].str.contains("Agreement Received changed to 'True'", na=False)),
+        ("📤 Digital Proof", df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)),
+        ("🖨️ Print Confirm", df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False))
+    ]
+
+    for label, condition in metrics_config:
+        filtered = df[condition]
+        if not filtered.empty:
+            ids, id_type = extract_info(filtered['details'], id_preference)
+            summary[label] = {"count": len(filtered), "ids": ids, "id_type": id_type}
+        else:
+            summary[label] = {"count": 0, "ids": [], "id_type": "B"}
+            
     return summary
+
+# Add this new function for the compact summary
+def display_whatsapp_summary(selected_date, summary_data):
+    if not summary_data:
+        return
+    
+    # Filter only positive values
+    active_metrics = {k: v for k, v in summary_data.items() if v['count'] > 0}
+    
+    if not active_metrics:
+        st.info("No major updates today.")
+        return
+
+    def format_ids(ids, id_type):
+        if not ids: return ""
+        # Join all IDs without truncation, but keep it clean
+        return f"{id_type}: {', '.join(ids)}"
+
+    # Create a compact string for copying
+    summary_text = f"*Daily Update Summary - {selected_date.strftime('%d/%m/%Y')}*\n\n"
+    for label, data in active_metrics.items():
+        id_str = format_ids(data['ids'], data['id_type'])
+        summary_text += f"{label}: {data['count']} ({id_str})\n"
+    
+    # Display in a nice, compact card for screenshotting
+    rows_html = ""
+    for k, v in active_metrics.items():
+        id_display = format_ids(v['ids'], v['id_type'])
+        rows_html += f"""<div style="margin-bottom: 12px; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px;"><div style="display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 14px; font-weight: 600; color: #1e293b;">{k}</span><span style="background: #f1f5f9; color: #1f77b4; padding: 2px 12px; border-radius: 6px; font-size: 14px; font-weight: 700; border: 1px solid #e2e8f0;">{v['count']}</span></div><div style="font-size: 12px; color: #475569; font-family: 'JetBrains Mono', 'Courier New', monospace; line-height: 1.5; margin-top: 4px; word-break: break-all; letter-spacing: -0.2px; font-weight: 600;">{id_display}</div></div>"""
+
+    # Use a simpler container with NO indentation to avoid rendering issues
+    card_html = f"""<div style="background-color: #ffffff; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 520px; margin: 10px auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);"><div style="text-align: center; color: #0f172a; font-size: 20px; font-weight: 800; border-bottom: 3px solid #1f77b4; padding-bottom: 12px; margin-bottom: 20px; letter-spacing: -0.5px;">📊 DAILY UPDATE: {selected_date.strftime('%d %b %Y')}</div>{rows_html}<div style="text-align: center; font-size: 11px; color: #94a3b8; margin-top: 16px; border-top: 1px solid #f1f5f9; padding-top: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">BookLedger System • {datetime.now().strftime('%I:%M %p')}</div></div>"""
+    
+    st.markdown(card_html, unsafe_allow_html=True)
 
 # Fetch detailed records for a specific metric
 def get_metric_details(label, selected_date):
     conn = connect_db()
     conditions = {
-        "💰 Payments": "action = 'registered payment'",
-        "🛠️ Corrections": "action = 'added correction'",
-        "📧 ISBN Emails": "action = 'sent isbn email'",
+        "📚 New Books": "action LIKE '%added book%'",
+        "👥 New Authors": "action LIKE '%added author%'",
+        "💰 Payments": "action IN ('registered payment', 'approved payment')",
+        "🛠️ Corrections": "action LIKE '%correction%'",
         "📧 Welcome Mail": "(action = 'sent welcome email' OR (action = 'updated checklist' AND details LIKE '%Welcome Mail Sent changed to ''True''%'))",
         "📥 Author Details": "details LIKE '%Author Details Received changed to ''True''%'",
         "📷 Author Photo": "details LIKE '%Photo Received changed to ''True''%'",
@@ -299,7 +373,7 @@ def show_metric_details(label, selected_date):
         st.info("No detailed records found.")
 
 # Fetch checklist updates with book and author details
-def get_checklist_updates(selected_date):
+def get_checklist_updates(selected_date, search_term=None):
     conn = connect_db()
     query = """
         SELECT al.timestamp, al.details, b.book_id, b.title, a.author_id, a.name,
@@ -311,11 +385,17 @@ def get_checklist_updates(selected_date):
                                al.details LIKE CONCAT('%Author ID: ', ba.author_id, '%')
         JOIN books b ON ba.book_id = b.book_id
         JOIN authors a ON ba.author_id = a.author_id
-        WHERE DATE(al.timestamp) = :selected_date
-        AND al.action = 'updated checklist'
-        ORDER BY al.timestamp DESC
+        WHERE al.action = 'updated checklist'
     """
-    params = {"selected_date": selected_date}
+    params = {}
+    if search_term:
+        query += " AND (al.details LIKE :search OR b.title LIKE :search OR a.name LIKE :search)"
+        params["search"] = f"%{search_term}%"
+    else:
+        query += " AND DATE(al.timestamp) = :selected_date"
+        params["selected_date"] = selected_date
+        
+    query += " ORDER BY al.timestamp DESC LIMIT 500"
     
     with conn.session as s:
         result = s.execute(text(query), params=params)
@@ -334,15 +414,18 @@ def get_email_history(selected_date, search_term=None):
     query = """
         SELECT timestamp, recipient, sender_email, status, book_id, book_title, triggered_by, details 
         FROM email_history 
-        WHERE DATE(timestamp) = :selected_date
+        WHERE 1=1
     """
-    params = {"selected_date": selected_date}
+    params = {}
     
     if search_term:
-        query += " AND (recipient LIKE :search OR sender_email LIKE :search OR details LIKE :search)"
+        query += " AND (recipient LIKE :search OR sender_email LIKE :search OR details LIKE :search OR book_title LIKE :search OR book_id LIKE :search)"
         params["search"] = f"%{search_term}%"
+    else:
+        query += " AND DATE(timestamp) = :selected_date"
+        params["selected_date"] = selected_date
         
-    query += " ORDER BY timestamp DESC"
+    query += " ORDER BY timestamp DESC LIMIT 500"
     
     with conn.session as s:
         result = s.execute(text(query), params=params)
@@ -353,7 +436,7 @@ def get_email_history(selected_date, search_term=None):
 def format_timestamp(ts):
     if isinstance(ts, pd.Timestamp):
         ts = ts.strftime('%Y-%m-%d %H:%M:%S')
-    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%I:%M %p')
+    return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%d %b, %I:%M %p')
 
 # Calculate session duration
 def calculate_session_duration(session_group):
@@ -428,7 +511,7 @@ user_options = ['All'] + sorted(users_df['username'].tolist())
 action_options = sorted(actions_df['action'].tolist())
 
 # Improved filters layout
-col1, col2, col3 = st.columns([1, 6, 2], gap="small")
+col1, col2, col3, col4 = st.columns([1, 4, 2, 2], gap="small")
 
 with col1:
     default_date = date.today()
@@ -446,48 +529,63 @@ with col3:
                                    index=None, label_visibility="collapsed", 
                                    placeholder="Filter by Action")
 
-selected_user = st.segmented_control("👥 Filter by User", options=user_options, 
-                                     default=user_options[0], 
-                                     label_visibility="collapsed")
+with col4:
+    selected_user = st.selectbox("👥 User", options=user_options, 
+                                 index=0, label_visibility="collapsed", 
+                                 placeholder="Filter by User")
 
-# Display Daily Summary
-summary_data = get_daily_summary(selected_date.strftime('%Y-%m-%d'))
-if summary_data:
-    st.markdown("#### 📈 Daily Update Summary")
-    # Display as a nice grid
-    summary_items = list(summary_data.items())
-    rows = [summary_items[i:i+5] for i in range(0, len(summary_items), 5)]
-    for row in rows:
-        cols = st.columns(5)
-        for idx, (label, value) in enumerate(row):
-            if value > 0:
-                with cols[idx]:
-                    st.markdown(
-                        f"""
-                        <div style="background-color: #f8f9fa; padding: 10px; border-radius: 8px; border-left: 3px solid #1f77b4; height: 100px; display: flex; flex-direction: column; justify-content: space-between;">
-                            <div>
-                                <div style="font-size: 11px; color: #6c757d; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
-                                <div style="font-size: 22px; font-weight: 700; color: #1f77b4; margin-top: 4px;">{value}</div>
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                    if st.button("View Details", key=f"details_{label}_{idx}", type="tertiary", use_container_width=True):
-                        show_metric_details(label, selected_date.strftime('%Y-%m-%d'))
-            else:
-                with cols[idx]:
-                    st.markdown(
-                        f"""
-                        <div style="background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #f1f3f4; height: 100px; opacity: 0.6;">
-                            <div style="font-size: 11px; color: #adb5bd; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
-                            <div style="font-size: 22px; font-weight: 700; color: #ced4da; margin-top: 4px;">0</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+st.write("")
 
-st.divider()
+# Display Daily Summary in Expander (Only if not searching globally)
+if not search_term:
+    with st.expander("📈 Daily Update Summary", expanded=False):
+        col_sum_h, col_sum_t = st.columns([8, 2], vertical_alignment="bottom")
+        with col_sum_t:
+            id_pref_toggle = st.toggle("Show Author IDs", value=True, key="id_pref_toggle")
+            id_pref = "Author" if id_pref_toggle else "Book"
+
+        summary_data = get_daily_summary(selected_date.strftime('%Y-%m-%d'), id_preference=id_pref)
+        if summary_data:
+            # Display as a nice grid (6x2)
+            summary_items = list(summary_data.items())
+            rows = [summary_items[i:i+6] for i in range(0, len(summary_items), 6)]
+            for row in rows:
+                cols = st.columns(6)
+                for idx, (label, data) in enumerate(row):
+                    value = data['count']
+                    if value > 0:
+                        with cols[idx]:
+                            st.markdown(
+                                f"""
+                                <div style="background-color: #f8f9fa; padding: 10px; border-radius: 8px; border-left: 3px solid #1f77b4; height: 100px; display: flex; flex-direction: column; justify-content: space-between;">
+                                    <div>
+                                        <div style="font-size: 11px; color: #6c757d; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
+                                        <div style="font-size: 22px; font-weight: 700; color: #1f77b4; margin-top: 4px;">{value}</div>
+                                    </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+                            if st.button("View Details", key=f"details_{label}_{idx}", type="tertiary", use_container_width=True):
+                                show_metric_details(label, selected_date.strftime('%Y-%m-%d'))
+                    else:
+                        with cols[idx]:
+                            st.markdown(
+                                f"""
+                                <div style="background-color: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #f1f3f4; height: 100px; opacity: 0.6;">
+                                    <div style="font-size: 11px; color: #adb5bd; font-weight: 600; text-transform: uppercase; line-height: 1.2;">{label}</div>
+                                    <div style="font-size: 22px; font-weight: 700; color: #ced4da; margin-top: 4px;">0</div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True
+                            )
+
+            # Call the compact summary display
+            display_whatsapp_summary(selected_date, summary_data)
+else:
+    st.info(f"🔎 Showing search results for '**{search_term}**' across all dates.")
+
+st.write("")
 
 tab1, tab2 = st.tabs(["📝 Activity Log", "📧 Email History"])
 
@@ -502,11 +600,7 @@ with tab1:
         # Fetch data for main activity log
         selected_user_param = selected_user if selected_user != 'All' else None
         selected_action_param = selected_action if selected_action and selected_action != 'All' else None
-        df = get_activity_log(selected_date.strftime('%Y-%m-%d'), selected_user_param, selected_action_param)
-
-        # Apply search filter
-        if search_term:
-            df = df[df['details'].str.contains(search_term, case=False, na=False)]
+        df = get_activity_log(selected_date.strftime('%Y-%m-%d'), selected_user_param, selected_action_param, search_term=search_term)
 
         # Display activities in tree view
         if not df.empty:
@@ -560,7 +654,7 @@ with tab1:
         st.markdown("#### ✅ Author Checklist Updates")
         
         # Fetch checklist updates with book and author details
-        checklist_df = get_checklist_updates(selected_date.strftime('%Y-%m-%d'))
+        checklist_df = get_checklist_updates(selected_date.strftime('%Y-%m-%d'), search_term=search_term)
         
         if not checklist_df.empty:
             # Show update count

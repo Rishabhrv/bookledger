@@ -29,6 +29,7 @@ ACCESS_TO_BUTTON = {
     "Attendance": "attendance",
     "Extra Books": "extra_books",
     "Sales Tracking": "sales_track",
+    "Activity Summary": "activity_summary_dialog",
     # Non-loop buttons
     "Add Book": "add_book_dialog",
     "Pending Checklist": "pending_checklist_dialog",

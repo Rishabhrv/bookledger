@@ -13,7 +13,6 @@ from urllib.parse import urlencode, quote
 import logging
 from logging.handlers import RotatingFileHandler
 from auth import validate_token
-from constants import ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,get_total_unread_count, check_ready_to_print, fetch_tags, show_book_details, fetch_all_book_authors, fetch_all_printeditions
 import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -21,6 +20,9 @@ from email.mime.text import MIMEText
 import ollama
 import difflib
 from decimal import Decimal
+from constants import (ACCESS_TO_BUTTON,log_activity, connect_db, connect_ijisem_db, connect_ict_db, 
+                       clean_old_logs, get_page_url, VALID_SUBJECTS, get_ready_to_print_books, get_reprint_eligible_books,
+                       get_total_unread_count, check_ready_to_print, fetch_tags, show_book_details, fetch_all_book_authors, fetch_all_printeditions)
 
 ####################################################################################################################
 ##################################--------------- Logs ----------------------------#################################
@@ -182,6 +184,13 @@ if not st.session_state.cleanup_done:
 
 # Button configuration
 BUTTON_CONFIG = {
+    "activity_summary": {
+        "label": "Activity Summary",
+        "icon": "⏳",
+        "permission": "activity_summary_dialog",
+        "type": "call_function",
+        "function": lambda conn: activity_summary_dialog(conn),
+    },
     "advance_search": {
         "label": "Advance Search",
         "icon": "🔍",
@@ -1372,6 +1381,90 @@ def edit_author_detail(conn):
                         except Exception as e:
                             st.error(f"Failed to delete author: {str(e)}")
                             st.toast(f"Failed to delete author: {str(e)}", icon="❌", duration="long")
+
+
+###################################################################################################################################
+##################################--------------- Activity Summary ----------------------------##################################
+###################################################################################################################################
+
+@st.dialog("Daily Activity Summary", width="medium")
+def activity_summary_dialog(conn):
+    col1, col2 = st.columns([2, 5], vertical_alignment="center")
+    with col1:
+        selected_date = st.date_input("Select Date", value=datetime.now(ist).date(), label_visibility="collapsed")
+    with col2:
+        id_pref_toggle = st.toggle("Show Author IDs", value=True, key="dlg_id_pref_toggle")
+        id_pref = "Author" if id_pref_toggle else "Book"
+
+    def extract_info(details_series, pref):
+        ids = []
+        effective_type = "B"
+        for d in details_series.dropna():
+            b_match = re.search(r"Book ID: (\d+)", d)
+            a_match = re.search(r"Author ID: (\d+)", d)
+            b_id = b_match.group(1) if b_match else None
+            a_id = a_match.group(1) if a_match else None
+            if pref == "Author" and a_id:
+                ids.append(a_id)
+                effective_type = "A"
+            elif b_id:
+                ids.append(b_id)
+            elif a_id:
+                ids.append(a_id)
+                effective_type = "A"
+        return sorted(list(set(ids)), key=int), effective_type
+
+    query = """
+        SELECT action, details 
+        FROM activity_log 
+        WHERE DATE(timestamp) = :selected_date
+    """
+    with conn.session as s:
+        result = s.execute(text(query), {"selected_date": selected_date})
+        df = pd.DataFrame(result.fetchall(), columns=["action", "details"])
+
+    if df.empty:
+        st.info(f"No activities found for {selected_date.strftime('%d %b %Y')}.")
+        return
+
+    summary = {}
+    metrics_config = [
+        ("📚 New Books", df['action'].str.contains('added book', case=False, na=False)),
+        ("👥 New Authors", df['action'].str.contains('added author', case=False, na=False)),
+        ("💰 Payments", df['action'].isin(['registered payment', 'approved payment'])),
+        ("🛠️ Corrections", df['action'].str.contains('correction', case=False, na=False)),
+        ("📧 Welcome Mail", (df['action'] == 'sent welcome email') | (df['details'].str.contains("Welcome Mail Sent changed to 'True'", na=False))),
+        ("📥 Author Details", df['details'].str.contains("Author Details Received changed to 'True'", na=False)),
+        ("📷 Author Photo", df['details'].str.contains("Photo Received changed to 'True'", na=False)),
+        ("🆔 ID Proof", df['details'].str.contains("ID Proof Received changed to 'True'", na=False)),
+        ("📜 Cover & Agreement", df['details'].str.contains("Cover Agreement Sent changed to 'True'", na=False)),
+        ("✍🏻 Agreement Recvd", df['details'].str.contains("Agreement Received changed to 'True'", na=False)),
+        ("📤 Digital Proof", df['details'].str.contains("Digital Book Sent changed to 'True'", na=False)),
+        ("🖨️ Print Confirm", df['details'].str.contains("Printing Confirmation Received changed to 'True'", na=False))
+    ]
+
+    for label, condition in metrics_config:
+        filtered = df[condition]
+        if not filtered.empty:
+            ids, id_type = extract_info(filtered['details'], id_pref)
+            summary[label] = {"count": len(filtered), "ids": ids, "id_type": id_type}
+
+    active_metrics = {k: v for k, v in summary.items() if v['count'] > 0}
+    if not active_metrics:
+        st.info("No major updates for this day.")
+        return
+
+    def format_ids(ids, id_type):
+        return f"{id_type}: {', '.join(ids)}" if ids else ""
+
+    rows_html = ""
+    for k, v in active_metrics.items():
+        id_display = format_ids(v['ids'], v['id_type'])
+        rows_html += f"""<div style="margin-bottom: 12px; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px;"><div style="display: flex; justify-content: space-between; align-items: center;"><span style="font-size: 14px; font-weight: 600; color: #1e293b;">{k}</span><span style="background: #f1f5f9; color: #1f77b4; padding: 2px 12px; border-radius: 6px; font-size: 14px; font-weight: 700; border: 1px solid #e2e8f0;">{v['count']}</span></div><div style="font-size: 12px; color: #475569; font-family: 'JetBrains Mono', 'Courier New', monospace; line-height: 1.5; margin-top: 4px; word-break: break-all; letter-spacing: -0.2px; font-weight: 600;">{id_display}</div></div>"""
+
+    card_html = f"""<div style="background-color: #ffffff; padding: 28px; border: 1px solid #e2e8f0; border-radius: 12px; width: 520px; margin: 5px auto; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);"><div style="text-align: center; color: #0f172a; font-size: 20px; font-weight: 800; border-bottom: 3px solid #1f77b4; padding-bottom: 12px; margin-bottom: 20px; letter-spacing: -0.5px;">🔥 DAILY UPDATE: {selected_date.strftime('%d %b %Y')}</div>{rows_html}<div style="text-align: center; font-size: 11px; color: #94a3b8; margin-top: 16px; border-top: 1px solid #f1f5f9; padding-top: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;"> AGPH Management Information System • {datetime.now(ist).strftime('%I:%M %p')}</div></div>"""
+    
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 ###################################################################################################################################
